@@ -8,6 +8,19 @@ Built by **Tyler Clay** — [tylerthedeveloper.com](https://tylerthedeveloper.co
 
 ---
 
+## Disclaimer
+I am a 9+ year software engineer with experience building apps that store peoples ssn, dob, and other valuable information. 
+Effort has been put into ensuring that this app isn't leaking personal information, but its engineered with
+agentic tooling. For this reason I recommend ***NEVER*** storing your full account and/or credit/debit card numbers in
+either this repo or your database. I cannot accept liability if things go left. You can tell by the apps heavy emphasis 
+on debt snowballing that suing me won't net you any money so use at your own risk.
+
+## Support Me
+If you want to fork and customize go ahead! If you want a senior software engineer who can architect things like this in a weekend 
+or two lets have a conversation. My development experience goes way back before AI but I'm not the type to stick with the shovel 
+when the new crew comes in with these shiny excavator things. This would have taken me a few months in the pre-ai era. Enjoy the fruits
+of my (and claudes) labor for free. Consider a small donation if this app helped you.
+
 ## Why this exists
 
 I've always managed my finances by hand, in a system I maintained myself. First it was a
