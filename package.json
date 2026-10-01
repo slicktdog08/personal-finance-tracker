@@ -32,7 +32,7 @@
     "aws-jwt-verify": "^5.2.1",
     "drizzle-orm": "^0.45.2",
     "mcp-handler": "^2.1.1",
-    "mysql2": "^3.22.5",
+    "mysql2": "^3.24.5",
     "next": "16.2.9",
     "papaparse": "^5.5.4",
     "react": "19.2.4",
