@@ -1,0 +1,113 @@
+pipeline {
+    agent any
+
+    parameters {
+        string(name: 'DOMAIN', defaultValue: 'finance.example.com', description: 'Domain to deploy and issue a TLS cert for')
+        string(name: 'CERTBOT_EMAIL', defaultValue: 'you@example.com', description: 'Contact address Let\'s Encrypt registers for renewal notices')
+        booleanParam(name: 'RUN_MIGRATIONS', defaultValue: false, description: 'Run `drizzle-kit migrate` against the production DB before swapping containers (journaled migrations 0000-0004 only)')
+        booleanParam(name: 'APPLY_SQL', defaultValue: true, description: 'Apply every hand-written migration in drizzle/ not yet recorded in the sql_migrations table (scripts/apply-sql.ts --pending) before swapping containers. Already-applied files are skipped, so leaving this on is safe.')
+    }
+
+    stages {
+        stage("Cleanup Workspace") {
+            steps {
+                // Wipe untracked files so the Docker context is clean. This also
+                // removes .env.production, which the next stage restores.
+                sh "git clean -fdx"
+            }
+        }
+
+        stage("Prepare Environment Files") {
+            steps {
+                // .env.production is NOT committed — it holds the MySQL password.
+                // Store it as a Jenkins "Secret file" credential with this ID.
+                // Docker reads it via env_file; docker compose reads PORT from .env.
+                withCredentials([file(credentialsId: 'personal-billing-env-production', variable: 'ENV_FILE')]) {
+                    sh '''
+                        cp "$ENV_FILE" .env.production
+                        chmod 600 .env.production
+                        cp .env.production .env
+
+                        grep -qE '^PORT=' .env || { echo "PORT missing from .env.production"; exit 1; }
+                        grep -qE '^DATABASE_URL=' .env || { echo "DATABASE_URL missing from .env.production"; exit 1; }
+                    '''
+                }
+            }
+        }
+
+        stage("Deploy Nginx Config & TLS") {
+            steps {
+                script {
+                    def domain = params.DOMAIN
+                    def email = params.CERTBOT_EMAIL
+                    def host = '172.17.0.1' // Docker bridge gateway — reaches the VPS host from inside Jenkins container
+                    sshagent(credentials: ['vps-deploy-key']) {
+                        sh """
+                            generate_conf() {
+                                sh scripts/render-nginx-conf.sh ${domain}
+                            }
+
+                            # Deploy HTTP-only config and ensure site is enabled
+                            generate_conf | ssh -o StrictHostKeyChecking=no deployer@${host} "tee /etc/nginx/sites-available/${domain} > /dev/null"
+                            ssh deployer@${host} "[ -L /etc/nginx/sites-enabled/${domain} ] || ln -s /etc/nginx/sites-available/${domain} /etc/nginx/sites-enabled/${domain}"
+                            ssh deployer@${host} "sudo nginx -t && sudo systemctl reload nginx"
+
+                            # Get cert if needed, otherwise reinstall into nginx config
+                            CERT_EXISTS=\$(ssh deployer@${host} '[ -f /etc/letsencrypt/live/${domain}/fullchain.pem ] && echo yes || echo no')
+                            if [ "\$CERT_EXISTS" = "no" ]; then
+                                ssh deployer@${host} "sudo certbot-deploy --nginx -d ${domain} --non-interactive --agree-tos -m ${email}"
+                            else
+                                ssh deployer@${host} "sudo certbot-deploy install --nginx --cert-name ${domain} --non-interactive"
+                            fi
+                        """
+                    }
+                }
+            }
+        }
+
+        stage("Docker Build") {
+            steps {
+                script {
+                    // --no-cache avoids the stale-code issues seen on the other sites;
+                    // --pull keeps the Node base image current.
+                    sh "docker compose build --no-cache --pull"
+                }
+            }
+        }
+
+        stage("Run DB Migrations") {
+            when { expression { return params.RUN_MIGRATIONS } }
+            steps {
+                // One-off container off the image just built: no ports published,
+                // credentials come from env_file, config + drizzle/ ship in the image.
+                sh "docker compose run --rm --no-deps --entrypoint '' personal-billing node_modules/.bin/drizzle-kit migrate"
+            }
+        }
+
+        stage("Apply SQL Migrations") {
+            // `!= false` rather than a plain truthy check: on the first build after a parameter
+            // is added, Jenkins may not have registered it yet (null) — that still means "on".
+            when { expression { return params.APPLY_SQL != false } }
+            steps {
+                // Same one-off container as above, running scripts/apply-sql.ts (the script used
+                // to apply migrations by hand) in --pending mode: every drizzle/*.sql not yet
+                // recorded in the sql_migrations table, oldest first. Files applied by hand with
+                // the script are recorded too, so they're skipped here. A failed statement exits
+                // non-zero and stops the deploy before the new code goes live.
+                sh "docker compose run --rm --no-deps --entrypoint '' personal-billing node_modules/.bin/tsx scripts/apply-sql.ts --pending"
+            }
+        }
+
+        stage("Deploy") {
+            steps {
+                sh "docker compose up -d --force-recreate"
+            }
+        }
+
+        stage("Cleanup Old Images") {
+            steps {
+                sh "docker image prune -f"
+            }
+        }
+    }
+}

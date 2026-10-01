@@ -1,0 +1,36 @@
+# Throwaway MySQL for the test suite. Never holds real data, never reachable off the
+# loopback. Brought up by `npm run db:test:up`.
+#
+# Why linux/amd64: MySQL 5.7 publishes no arm64 image, and the server this app runs
+# against is 5.7.32. Emulation is slower to boot than a native mariadb/mysql:8 would be,
+# but it keeps the quirks this codebase already works around reproducible locally — the
+# hyphenated database name, the '@' in the password, and 5.7's sql_mode.
+services:
+  mysql-test:
+    image: mysql:5.7
+    platform: linux/amd64
+    container_name: personal-billing-test-db
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: personal-billing
+      MYSQL_USER: billing
+      # Deliberately contains '@' so tests exercise src/server/lib/db-url.ts the same way
+      # the real credentials do. Not a secret: this database is empty and loopback-only.
+      MYSQL_PASSWORD: "test@pass@word"
+    command:
+      - --sql-mode=IGNORE_SPACE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION
+      - --default-authentication-plugin=mysql_native_password
+    ports:
+      # 3307, not 3306, so it can never be confused with a local production-ish MySQL.
+      - "127.0.0.1:3307:3306"
+    volumes:
+      # Loaded once on first boot of an empty data directory. Because the data directory
+      # is a tmpfs, that is every boot — `down` then `up` always gives a pristine schema.
+      - ./tests/db/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    tmpfs:
+      - /var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-proot"]
+      interval: 3s
+      timeout: 5s
+      retries: 40

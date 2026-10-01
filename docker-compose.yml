@@ -1,0 +1,16 @@
+# PORT is read from ./.env, which the Jenkins pipeline materializes from
+# .env.production. Published on the loopback only — nginx is the sole way in.
+services:
+  personal-billing:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: personal-billing
+    restart: always
+    env_file:
+      - .env.production
+    ports:
+      - "127.0.0.1:${PORT}:${PORT}"
+    # Optional: keep your advisor profile on the host instead of baking it into the image.
+    # volumes:
+    #   - /srv/personal-billing/advisor-profile.json:/app/config/advisor-profile.json:ro

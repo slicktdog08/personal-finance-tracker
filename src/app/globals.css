@@ -1,0 +1,135 @@
+@import "tailwindcss";
+
+:root {
+  --background: #ffffff;
+  --foreground: #171717;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0a0a0a;
+    --foreground: #ededed;
+  }
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  /* Geist is loaded by the root layout; the old Arial rule here silently overrode it. */
+  font-family: var(--font-geist-sans), ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-feature-settings: "cv11", "ss01";
+  /* Seatbelt against any single overflowing child dragging the whole page into
+     horizontal scroll. `clip` rather than `hidden` so no scroll container is created. */
+  overflow-x: clip;
+}
+
+/* Enter animations for the Sheet bottom sheet, dialogs, and the nav drawer,
+   referenced via Tailwind arbitrary values (e.g. animate-[sheet-up_.3s_...]).
+   Applied with motion-safe: so reduced-motion users get instant open. */
+@keyframes sheet-up {
+  from { transform: translateY(100%); }
+  to { transform: translateY(0); }
+}
+@keyframes drawer-in {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(0); }
+}
+@keyframes overlay-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes dialog-in {
+  from { opacity: 0; transform: translate(-50%, -50%) scale(0.97); }
+  to { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+}
+@keyframes sheet-down {
+  from { transform: translateY(0); }
+  to { transform: translateY(100%); }
+}
+@keyframes drawer-out {
+  from { transform: translateX(0); }
+  to { transform: translateX(-100%); }
+}
+@keyframes overlay-fade-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+@keyframes dialog-out {
+  from { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  to { opacity: 0; transform: translate(-50%, -50%) scale(0.97); }
+}
+
+/* Below md: 16px form controls prevent iOS Safari's zoom-on-focus. Unlayered on
+   purpose — it must override the text-sm/text-xs utilities on every input. */
+@media (max-width: 47.99rem) {
+  input:not([type="checkbox"]):not([type="radio"]),
+  select,
+  textarea {
+    font-size: 16px;
+  }
+}
+
+/* Soft rise for envelope cards when they become editable. */
+@keyframes rise {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+/* Native range inputs: a slim track and a round thumb that match the card's accent. */
+input[type="range"].envelope-range {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 28px;
+  background: transparent;
+}
+input[type="range"].envelope-range::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 999px;
+  background: linear-gradient(to right, var(--range-color, #6366f1) 0 var(--range-pct, 0%), rgb(0 0 0 / 0.1) var(--range-pct, 0%) 100%);
+}
+input[type="range"].envelope-range::-moz-range-track {
+  height: 4px;
+  border-radius: 999px;
+  background: rgb(0 0 0 / 0.1);
+}
+input[type="range"].envelope-range::-moz-range-progress {
+  height: 4px;
+  border-radius: 999px;
+  background: var(--range-color, #6366f1);
+}
+input[type="range"].envelope-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  margin-top: -7px;
+  border-radius: 999px;
+  background: #fff;
+  border: 2px solid var(--range-color, #6366f1);
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.2);
+  transition: transform 0.12s ease;
+}
+input[type="range"].envelope-range::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: #fff;
+  border: 2px solid var(--range-color, #6366f1);
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.2);
+}
+input[type="range"].envelope-range:active::-webkit-slider-thumb { transform: scale(1.15); }
+input[type="range"].envelope-range:disabled { opacity: 0.4; }
+@media (prefers-color-scheme: dark) {
+  input[type="range"].envelope-range::-webkit-slider-runnable-track {
+    background: linear-gradient(to right, var(--range-color, #818cf8) 0 var(--range-pct, 0%), rgb(255 255 255 / 0.14) var(--range-pct, 0%) 100%);
+  }
+  input[type="range"].envelope-range::-moz-range-track { background: rgb(255 255 255 / 0.14); }
+  input[type="range"].envelope-range::-webkit-slider-thumb,
+  input[type="range"].envelope-range::-moz-range-thumb { background: #171717; }
+}
