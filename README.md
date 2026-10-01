@@ -4,6 +4,7 @@
 
 Built by **Tyler Clay** — [tylerthedeveloper.com](https://tylerthedeveloper.com) ·
 [Candy Creative](https://candycreative.digital)
+[Drop me a small donation if this helped you](paypal.me/tylerclay2019)
 
 ---
 
