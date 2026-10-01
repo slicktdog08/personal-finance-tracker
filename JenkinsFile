@@ -32,6 +32,18 @@ pipeline {
                         grep -qE '^DATABASE_URL=' .env || { echo "DATABASE_URL missing from .env.production"; exit 1; }
                     '''
                 }
+                // Optional: the MCP advisor profile (config/advisor-profile.json) is git-ignored
+                // personal data, so it comes from a Secret file credential too. Without one the
+                // image ships no profile and the advisor asks for context instead.
+                script {
+                    try {
+                        withCredentials([file(credentialsId: 'personal-billing-advisor-profile', variable: 'PROFILE_FILE')]) {
+                            sh 'cp "$PROFILE_FILE" config/advisor-profile.json && chmod 644 config/advisor-profile.json'
+                        }
+                    } catch (err) {
+                        echo "No personal-billing-advisor-profile credential; building without an advisor profile."
+                    }
+                }
             }
         }
 
