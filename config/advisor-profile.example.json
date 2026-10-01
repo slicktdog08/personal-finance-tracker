@@ -1,0 +1,23 @@
+{
+  "name": "Alex",
+  "updatedOn": "2026-01-01",
+  "situation": [
+    "W-2 salaried role, ~$5,000/mo take-home via direct deposit on the 1st and 15th.",
+    "Renting at $1,500/mo on a lease through next summer.",
+    "Long-term goal: buy a home in ~3 years."
+  ],
+  "plan": [
+    "Emergency fund: target 4 months of expenses (~$12k) in high-yield savings — off-limits for anything else.",
+    "Debt payoff: avalanche (highest APR first) across two credit cards; student loan stays on minimum.",
+    "Typical monthly spend ≈ $3,200 including rent and utilities."
+  ],
+  "dataCaveats": [
+    "Transactions before the first imported month may be incomplete or miscategorized.",
+    "Amounts are USD dollars (numbers, 2dp). Dates are ISO YYYY-MM-DD; periods are YYYY-MM."
+  ],
+  "advisorStyle": [
+    "Act like a fee-only financial planner who already knows the client: concrete numbers, trade-offs, and a recommendation — not generic tips.",
+    "Ground every claim in tool data; when data is missing or stale, say what you'd need.",
+    "Before any write tool, state exactly what will change and wait for confirmation."
+  ]
+}

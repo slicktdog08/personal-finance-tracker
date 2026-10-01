@@ -1,0 +1,55 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# dependencies
+/node_modules
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# testing
+/coverage
+
+# next.js
+/.next/
+/out/
+
+# production
+/build
+
+# misc
+.DS_Store
+*.pem
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# env files (can opt-in for committing if needed)
+.env*
+!.env.example
+# The test database is a throwaway container on the loopback, so its template carries no
+# secret and every clone needs it to run the suite. .env.test itself stays ignored.
+!.env.test.example
+
+# local source export (large Notion dump; kept locally, not versioned)
+/notion_data/
+
+# vercel
+.vercel
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+
+# local-only: MCP query log (contains real query results) and scratch import files
+/.setting/
+/temp/
+
+# personal advisor profile (salary, debts, goals) — see config/advisor-profile.example.json
+/config/advisor-profile.json

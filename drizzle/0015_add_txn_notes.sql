@@ -1,0 +1,11 @@
+-- Long-form notes on a transaction: the bank's `description` is whatever the
+-- merchant handed the card network ("SQ *ABC 8842"), which often doesn't say
+-- what the charge actually WAS. `notes` is the user's own explanation, free of
+-- the 512-char/one-line shape of `description` and never used for dedup,
+-- merchant matching or bill suggestions — it's commentary, not identity.
+--
+-- Numbered 0015 (skipping 0014) so it can't collide with a migration another
+-- session is writing in parallel. Hand-written like 0005+ (the drizzle journal
+-- stops at 0004). Apply with:
+--   npx tsx scripts/apply-sql.ts drizzle/0015_add_txn_notes.sql
+ALTER TABLE `transactions` ADD COLUMN `notes` text NULL;
