@@ -1,62 +1,158 @@
 # Personal Finance Tracker
 
-A self-hosted, single-user app for running your own money: monthly bills, every bank
-transaction, budgets, debt payoff and savings goals in one place. It also ships an MCP
-server, so you can connect Claude as a financial advisor that reads your real numbers.
-
-Built with Next.js 16, TypeScript, Tailwind v4, Drizzle ORM and MySQL. Sign-in uses AWS Cognito.
+**The app I built to run my own money, and still use to do it.**
 
 Built by **Tyler Clay** — [tylerthedeveloper.com](https://tylerthedeveloper.com) ·
 [Candy Creative](https://candycreative.digital)
 
 ---
 
-## Features
+## Why this exists
 
-**Bills**
-- Monthly bill sheets. Start a new month by cloning the last one forward, then edit inline:
-  status, amount, due day, payment type.
-- Custom statuses and payment types with your own colors and emoji, plus bulk status changes.
-- Suggests recurring bills from your transactions, links payments to bills, and merges or renames bills.
-- A pay schedule (weekly, biweekly, semimonthly or monthly) with a payday countdown on the dashboard.
+I've always managed my finances by hand, in a system I maintained myself. First it was a
+Monday.com board. Then it was Notion: one database
+per month, cloned from the month before, with a row for every bill (amount, due date, how it
+gets paid, and whether it's paid yet). Under that sat a transactions layer I filled by
+downloading CSVs from each bank and mapping every line to my own categories.
 
-**Transactions**
-- **CSV import** from any bank: map the columns once and it remembers that layout. Duplicates
-  are rejected by a content hash, so re-importing overlapping exports does nothing.
-- **PDF statement import** for banks without a usable CSV export. Statement balances
-  are recorded too. One parser ships today (Robinhood Spending), and adding more is a single file.
-- Categorization rules that apply on import, a mass-categorize screen, and inline edits.
-- Split one transaction across categories, attach notes, and track pending transactions
-  until they settle.
-- Matches transfers between your own accounts so money you moved isn't counted as spending.
-- **Cash offsets**: link an ATM withdrawal to the cash purchases it paid for, so cash spending isn't counted twice.
+It worked, but it was slow and fragile:
+- **Cloning months by hand** meant re-typing structure and fixing due dates that had drifted.
+- **Overlapping CSV exports** quietly double-counted transactions.
+- **Every month was its own island.** Nothing answered "how am I actually doing?" across months.
+- **The bookkeeping crowded out the thinking.** Most of my time went to maintaining the system,
+  not using it to make decisions.
 
-**Accounts and planning**
-- One ledger for every account: checking, savings, cash, credit cards and loans, with dated
-  balance snapshots and trends.
-- **Debts**: APR, minimum payments, credit limits, utilization and monthly interest cost,
-  plus avalanche or snowball payoff projections.
-- **Budgets**: planned vs. actual per category. Includes a debt-payoff plan generator,
-  a savings line, locked lines, auto-rebalancing and a day-by-day projection of your cash to month-end.
-- **Savings goals** with contributions and progress.
-- **Dashboard**, one month at a time: cash on hand, what you owe, bills, income vs. spending,
-  where the money went, and goals.
+In June 2026 I started replacing it with my own app. The first goal was strict parity: keep
+the workflow I already trusted, minus the tedium. I imported my full Notion history so nothing
+was lost. Then I kept building on top of it as I lived in it:
 
-**Claude as your financial advisor (MCP)**
-- A remote MCP server at `/api/mcp`, secured with OAuth through your Cognito user pool.
-- 15 read tools: snapshot, month summary, spending and balance trends, debts,
-  cash projection, budget, goals, transaction search and more.
-- 8 write tools that only add or edit, never delete: categorize, split, bill status, goal
-  contribution, budget line, debt target, manual transaction, balance snapshot. There's also
-  a `run_bank_sync` tool for when a sync provider is connected.
-- Built-in prompts: `monthly_review`, `can_i_afford`, `debt_payoff_plan`, `budget_check_in`.
-- A private **advisor profile** (`config/advisor-profile.json`, git-ignored) gives Claude
-  your situation and plan. It's prepended to every advisory conversation.
+| When | What got added |
+|------|----------------|
+| Jun 2026 | Monthly bill sheets, CSV import with duplicate rejection, dashboard, accounts, debts, transfers, PDF statement import, categorization rules |
+| Jul 2026 | Running balances from CSV imports, a pay schedule with a payday countdown |
+| Aug 2026 | Cash offsets (so ATM cash isn't counted twice), transaction notes |
+| Sep 2026 | Budgets with a debt-payoff generator, a cash projection, an MCP server so Claude can act as my financial advisor, bank sync (built, then its provider shut down), pending transactions, split transactions |
 
-**Bank sync** (engine only): scheduler, webhooks, reconciliation, encrypted token storage
-and a settings page are built and tested, but **no bank provider is connected yet**. The first
-provider (Teller) shut down its API. A new one plugs in behind
-`src/server/lib/sync/provider.ts`; see `planning/features/bank-sync.md`.
+Every feature exists because I hit the problem while managing my own money. It's built for one
+person and it's opinionated. I'm open-sourcing it as a working example of a personal tool built
+with Claude Code as a pair programmer, and as a starting point if you'd rather own your
+financial data than rent a budgeting app. Every number in the docs, tests and fixtures is
+illustrative; my real data never leaves my own database.
+
+## What it does
+
+### Bills: the monthly sheet, without the busywork
+- **One sheet per month.** Each month opens with your recurring bills carried forward from the
+  last, ready to edit inline: status, amount, due day and payment type.
+- **Statuses that match how bills really work.** Sixteen of them out of the box (Unpaid,
+  Autopay, Autopay Pending, Partial Payment, Past Due, Skipped, Paid & Cancelled and more),
+  all customizable with your own colors and emoji. Bulk-update a whole month at once.
+- **Bills linked to the payments that cleared them**, so you can see exactly which transaction
+  paid which bill.
+- **Recurring-bill suggestions.** It spots repeating charges in your transactions and offers to
+  turn them into bills. You can also merge or rename bills whose names drifted over time.
+
+### Transactions: getting real bank data in, cleanly
+- **CSV import from any bank.** Map the columns once and the app remembers that layout and
+  guesses the rest: dates, debit/credit vs. signed amounts, and which account it belongs to.
+  Duplicates are rejected using the transaction's actual facts (account, date, amount,
+  description), not the bank's IDs, which change between exports. Re-importing an overlapping
+  date range is harmless.
+- **Running balances.** If the CSV has a balance column, it's recorded as a dated balance snapshot.
+- **PDF statement import** for accounts that only give you PDFs. It records the opening and
+  closing balances and de-duplicates across statements. Parsers are per-issuer; one ships
+  today (Robinhood Spending).
+- **A review step before anything is saved.** Every import shows a preview where you can
+  categorize, write notes and settle pending charges. It works on a phone too.
+- **Categorization in three layers:**
+  1. Saved rules run automatically on import.
+  2. A mass-categorize screen clears the backlog.
+  3. A one-click inline rule also catches the N similar transactions it finds.
+- **Pending transactions.** Bank exports don't include pending charges, so enter them by hand.
+  When the posted version arrives in a later import, it settles into the pending entry even
+  if the name, date or amount (say, a tip) changed. Your category, notes and links carry over.
+- **Split transactions.** A $100 store run can be $60 groceries and $40 household. The parts
+  always add up to the full amount, and cash back is treated as cash.
+- **Transfers between your own accounts** are paired and excluded, so moving money from
+  checking to a credit card doesn't count as spending one way and income the other.
+- **Cash offsets.** An ATM withdrawal is spending until you say what it bought. Log cash
+  purchases and they move money out of "unaccounted cash" into real categories. Count what's
+  left in your wallet and that portion counts as cash on hand, not spent.
+
+### Accounts, debts and the big picture
+- **One ledger for everything you own and owe.** Checking, savings, cash, credit cards and
+  loans each have dated balance history. Past months show what balances actually were then,
+  not what they are today.
+- **Debts.** Each debt shows APR, minimum payment, credit limit, utilization and what it costs
+  you in interest this month, plus avalanche or snowball payoff projections with a debt-free
+  date and total interest.
+- **Dashboard.** For any month: cash on hand, total owed, bill status, income vs. spending,
+  spending by category, goal progress and trends. Switching months re-renders the whole page
+  from that month's data.
+
+### Planning: looking forward instead of back
+- **Budgets measured against what actually happened.** Plan a month as envelopes, and each
+  envelope's "actual" comes straight from that month's transactions. You never type in spending.
+  Lines can be locked, the rest rebalance automatically, and a savings line keeps saving visible.
+- **Debt-payoff budget generator.** It drafts the month from your live data: income from your
+  pay schedule, bills, minimum payments and recent spending. Whatever's left goes to the debt
+  you're targeting, and it warns you when the plan doesn't fit.
+- **Cash projection.** A day-by-day forecast of your cash through the end of the month and the
+  next: upcoming bills, paydays and remaining budget. It shows the low point before it happens.
+  Paydays are checked against the deposits that have actually landed, so a paycheck split
+  across two deposits isn't counted twice.
+- **Savings goals.** Goals are built from a running list of contributions. For goals tied to
+  a real account, progress is checked against that account's balance, so a goal shows a
+  shortfall if the money has actually been spent.
+- **Pay schedule and payday countdown**: weekly, biweekly, semimonthly or monthly. It's
+  deliberately just a countdown ("4 days to go") with no nagging math.
+
+### Claude as a financial advisor (MCP)
+The app runs its own [MCP](https://modelcontextprotocol.io) server. You can connect it to
+claude.ai or Claude Code and have a real conversation about your actual numbers: "Can I afford
+this?", "How did this month go?", "What's my fastest path out of debt?"
+
+- **15 read tools:** snapshot, month summaries, spending and balance trends, debts and payoff
+  projections, cash projection, budget, goals and transaction search.
+- **8 write tools that only add or edit, never delete:** categorize, split, update bill
+  status, add a goal contribution, adjust a budget line, set a debt target, add a transaction,
+  record a balance. Claude has to tell you exactly what will change and wait for your OK.
+- **Built-in prompts:** `monthly_review`, `can_i_afford`, `debt_payoff_plan` and
+  `budget_check_in`.
+- **A private advisor profile** (`config/advisor-profile.json`, never committed). It gives
+  Claude standing context, such as your situation, your plan, and what money is off-limits,
+  so every conversation starts from where you are.
+- **Secure sign-in.** Claude signs in through your own Cognito user pool using OAuth, so your
+  data never sits with a third-party aggregator.
+
+## Limitations and honest downsides
+
+This is a tool I built for myself, so these are the trade-offs I live with:
+
+- **Imports are manual. This is the big one.** No bank connection is wired up, so keeping the
+  app current means logging into each bank, downloading a CSV or PDF statement, and importing
+  it. Pending charges have to be typed in by hand until they post. The more accounts you
+  have, the more of this there is.
+- **Bank sync is built but has no provider.** The scheduler, webhooks, reconciliation, encrypted
+  token storage, settings page and tests all exist. They were built against Teller, which then
+  shut down its API. The likely replacement is Plaid's free trial tier for hobby use. Paid
+  aggregators (around $100/mo) and daily-only feeds were ruled out. Adding a provider means
+  one adapter behind `src/server/lib/sync/provider.ts`; see `planning/features/bank-sync.md`.
+- **One PDF parser.** Only Robinhood Spending statements are supported out of the box. Other
+  banks need a CSV export or a new parser in `src/server/lib/pdf/parsers/`. Scanned (image)
+  PDFs aren't supported because there's no OCR.
+- **Single user, single currency.** No households, shared access or roles, and everything is
+  in USD.
+- **Cash takes discipline.** Cash spending is only as accurate as the purchases you log and
+  the wallet counts you record.
+- **Setup is heavier than a hosted app.** You need MySQL, an AWS Cognito user pool even for
+  local development, and somewhere to host it. There's no one-click deploy.
+- **Opinionated by design.** Categories, statuses and workflows reflect how I manage money.
+  They're customizable, but the app assumes a monthly bill sheet plus transactions.
+- **Web only.** It works on a phone browser, but there's no native app or offline mode.
+- **Not audited.** Auth is solid (JWT verification on every request, `httpOnly` cookies,
+  nothing public by default), but there's no Content-Security-Policy yet and it hasn't had a
+  third-party security review. Treat it as a personal tool.
 
 ## What you need
 
