@@ -33,7 +33,7 @@
     "drizzle-orm": "^0.45.2",
     "mcp-handler": "^2.1.1",
     "mysql2": "^3.22.5",
-    "next": "16.2.9",
+    "next": "16.3.8",
     "papaparse": "^5.5.4",
     "react": "19.2.4",
     "react-dom": "19.2.4",
