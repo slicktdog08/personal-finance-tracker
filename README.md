@@ -1,337 +1,345 @@
-# Personal Billing Tracker
+# Personal Finance Tracker
 
-A single-user Next.js app that replaces a Notion/Monday monthly bill tracker.
-Tracks bills per month (clone-forward, inline edit) and bank transactions
-(CSV import with automatic duplicate rejection). Backed by MySQL via Drizzle ORM.
+A self-hosted, single-user app for running your own money: monthly bills, every bank
+transaction, budgets, debt payoff and savings goals in one place. It also ships an MCP
+server, so you can connect Claude as a financial advisor that reads your real numbers.
 
-See [`planning/`](planning/) for the full design (data model, import pipeline, roadmap).
+Built with Next.js 16, TypeScript, Tailwind v4, Drizzle ORM and MySQL. Sign-in uses AWS Cognito.
 
-## Stack
-Next.js (App Router) · TypeScript · Tailwind v4 · Drizzle ORM (`mysql2`) · papaparse · zod.
+Built by **Tyler Clay** — [tylerthedeveloper.com](https://tylerthedeveloper.com) ·
+[Candy Creative](https://candycreative.digital)
 
-## Quick start with Claude Code
+---
 
-This repo ships a Claude Code skill that walks you through setup interactively — env
-file, database, Cognito, seed data, and your personal advisor profile:
+## Features
 
-```
+**Bills**
+- Monthly bill sheets. Start a new month by cloning the last one forward, then edit inline:
+  status, amount, due day, payment type.
+- Custom statuses and payment types with your own colors and emoji, plus bulk status changes.
+- Suggests recurring bills from your transactions, links payments to bills, and merges or renames bills.
+- A pay schedule (weekly, biweekly, semimonthly or monthly) with a payday countdown on the dashboard.
+
+**Transactions**
+- **CSV import** from any bank: map the columns once and it remembers that layout. Duplicates
+  are rejected by a content hash, so re-importing overlapping exports does nothing.
+- **PDF statement import** for banks without a usable CSV export. Statement balances
+  are recorded too. One parser ships today (Robinhood Spending), and adding more is a single file.
+- Categorization rules that apply on import, a mass-categorize screen, and inline edits.
+- Split one transaction across categories, attach notes, and track pending transactions
+  until they settle.
+- Matches transfers between your own accounts so money you moved isn't counted as spending.
+- **Cash offsets**: link an ATM withdrawal to the cash purchases it paid for, so cash spending isn't counted twice.
+
+**Accounts and planning**
+- One ledger for every account: checking, savings, cash, credit cards and loans, with dated
+  balance snapshots and trends.
+- **Debts**: APR, minimum payments, credit limits, utilization and monthly interest cost,
+  plus avalanche or snowball payoff projections.
+- **Budgets**: planned vs. actual per category. Includes a debt-payoff plan generator,
+  a savings line, locked lines, auto-rebalancing and a day-by-day projection of your cash to month-end.
+- **Savings goals** with contributions and progress.
+- **Dashboard**, one month at a time: cash on hand, what you owe, bills, income vs. spending,
+  where the money went, and goals.
+
+**Claude as your financial advisor (MCP)**
+- A remote MCP server at `/api/mcp`, secured with OAuth through your Cognito user pool.
+- 15 read tools: snapshot, month summary, spending and balance trends, debts,
+  cash projection, budget, goals, transaction search and more.
+- 8 write tools that only add or edit, never delete: categorize, split, bill status, goal
+  contribution, budget line, debt target, manual transaction, balance snapshot. There's also
+  a `run_bank_sync` tool for when a sync provider is connected.
+- Built-in prompts: `monthly_review`, `can_i_afford`, `debt_payoff_plan`, `budget_check_in`.
+- A private **advisor profile** (`config/advisor-profile.json`, git-ignored) gives Claude
+  your situation and plan. It's prepended to every advisory conversation.
+
+**Bank sync** (engine only): scheduler, webhooks, reconciliation, encrypted token storage
+and a settings page are built and tested, but **no bank provider is connected yet**. The first
+provider (Teller) shut down its API. A new one plugs in behind
+`src/server/lib/sync/provider.ts`; see `planning/features/bank-sync.md`.
+
+## What you need
+
+| | Required | Notes |
+|---|---|---|
+| **Node.js 22+** | ✅ | The Docker image uses `node:22-alpine` |
+| **MySQL 5.7+** | ✅ | Tested on 5.7. MariaDB works for local development. Any managed MySQL is fine |
+| **AWS account + Cognito user pool** | ✅ | Handles sign-in. Free at personal scale. No self-signup: you create your own user |
+| **A server that stays running, with HTTPS** | to host | See [Hosting](#hosting) |
+| **Docker** | optional | For the end-to-end test database and the included deployment |
+| **Claude (claude.ai or Claude Code)** | optional | For the MCP advisor and the guided `/setup` |
+
+## Quick start
+
+### The easy way: Claude Code
+
+```bash
+git clone https://github.com/slicktdog08/personal-finance-tracker
+cd personal-finance-tracker
+npm ci
 claude
 > /setup
 ```
 
-It never commits anything personal: `.env*`, `config/advisor-profile.json` and
-`notion_data/` are all git-ignored. Prefer to do it by hand? Follow the steps below.
+The `/setup` skill walks you through each step:
+- Writes `.env.local`.
+- Checks the database and creates the schema.
+- Sets up Cognito.
+- Interviews you to write your advisor profile.
 
-## Setup
+It never commits anything personal.
 
-1. **Configure the database connection** — edit `.env.local`:
-   ```
-   DATABASE_URL="mysql://USER:PASSWORD@DB_HOST:3306/personal-billing"
-   # optional, for migrations if your runtime user lacks DDL:
-   DATABASE_MIGRATION_URL="mysql://ADMIN:PASSWORD@DB_HOST:3306/personal-billing"
-   ```
-   The `personal-billing` database must already exist. The migration user
-   needs `CREATE/ALTER`; the runtime user needs `SELECT/INSERT/UPDATE/DELETE`.
+### By hand
 
-2. **Create the schema**:
+1. **Install:** `npm ci`
+2. **Configure:** `cp .env.example .env.local`, then fill in at least `DATABASE_URL` and
+   the three `NEXT_PUBLIC_*` Cognito values ([Configuration](#configuration)).
+3. **Create an empty database** and a user that can create tables in it:
+   ```sql
+   CREATE DATABASE `personal-billing`;
+   CREATE USER 'billing'@'%' IDENTIFIED BY 'choose-a-password';
+   GRANT ALL ON `personal-billing`.* TO 'billing'@'%';
    ```
-   npm run db:migrate      # applies drizzle/0000_init.sql (+ future migrations)
-   # or, for a quick push without migration files:  npm run db:push
-   ```
+4. **Create the schema:** `npm run db:init`. It loads the full schema and default categories,
+   statuses and payment types, then applies any newer migrations. It refuses to run on a
+   database that already has tables.
+5. **Set up Cognito** ([below](#cognito-sign-in)), then create your user.
+6. **Run:** `npm run dev`, open http://localhost:3000, and sign in.
+7. *(Optional)* **Advisor profile:**
+   `cp config/advisor-profile.example.json config/advisor-profile.json` and describe your
+   situation, goals and plan.
 
-3. **Seed the lookup tables** (statuses, payment types, categories):
-   ```
-   npx tsx scripts/seed-config.ts
-   ```
-   *Optional:* if you're migrating from a Notion bill tracker, put the export in
-   `notion_data/` (git-ignored) and run `npm run seed` — see
-   [`planning/design/01-data-inventory.md`](planning/design/01-data-inventory.md) for the
-   expected format. Otherwise start fresh and import bank CSVs from the **Import** page.
+Then go to **Import** and load a bank CSV, or add accounts under **Accounts**.
 
-4. **Run it**:
-   ```
-   npm run dev        # http://localhost:3000
-   ```
+### Cognito sign-in
 
-5. **Write your advisor profile** (optional, used by the Claude MCP connector):
-   ```
-   cp config/advisor-profile.example.json config/advisor-profile.json
-   ```
-   Fill in your situation, plan and data caveats. The file is git-ignored; without it
-   the advisor simply asks you for context.
-
-## Authentication
-
-Every page, Server Action and API route requires a signed-in AWS Cognito user. There
-is no self-signup — users are created in the Cognito console.
-
-### One-time Cognito setup
-
-1. **Enable the password auth flow** on the app client (the pool ships with only
-   `ALLOW_USER_SRP_AUTH`, which a server-side login can't drive):
-   ```
+1. Create a user pool and a **public app client** (no client secret).
+2. Enable password auth on the client. This app signs in from the server, so it can't use
+   the default SRP-only flow:
+   ```bash
    aws cognito-idp update-user-pool-client \
      --user-pool-id "$NEXT_PUBLIC_COGNITO_USER_POOL_ID" \
      --client-id "$NEXT_PUBLIC_COGNITO_USER_POOL_CLIENT_ID" \
      --explicit-auth-flows ALLOW_USER_PASSWORD_AUTH ALLOW_REFRESH_TOKEN_AUTH
    ```
-   Console equivalent: **User pools → App clients → Login pages → Authentication
-   flows → "Sign in with username and password: ALLOW_USER_PASSWORD_AUTH"**.
-
-   > `--explicit-auth-flows` **replaces** the list, so keep `ALLOW_REFRESH_TOKEN_AUTH`
-   > in it or sessions will stop renewing after an hour.
-
-2. **Create your user**:
-   ```
+   `--explicit-auth-flows` *replaces* the whole list. Keep `ALLOW_REFRESH_TOKEN_AUTH` in it,
+   or sessions stop renewing after an hour.
+3. Create your user:
+   ```bash
    aws cognito-idp admin-create-user \
      --user-pool-id "$NEXT_PUBLIC_COGNITO_USER_POOL_ID" \
      --username you@example.com \
      --user-attributes Name=email,Value=you@example.com Name=email_verified,Value=true \
      --temporary-password 'SomeTempPass1!'
    ```
-   Signing in with the temporary password lands on the "choose a new password"
-   screen, which completes Cognito's `NEW_PASSWORD_REQUIRED` challenge.
+   Your first sign-in asks you to choose a new password.
 
-### How the gate works
+Every page, server action and API route requires a valid session. `src/proxy.ts` gates
+requests, and `requireSession()` checks again in the data layer. Tokens are kept in
+`httpOnly` cookies, and the JWT signature is verified on every request.
 
-Two independent layers — the second is what actually protects the data:
+## Configuration
 
-| Layer | File | Covers |
-|-------|------|--------|
-| Proxy (Next 16's renamed middleware) | `src/proxy.ts` | Pages and API routes, before rendering. Allowlist: anything not listed as public is protected, so new pages are gated by default. Also transparently refreshes an expired access token from the refresh-token cookie. |
-| Data Access Layer | `requireSession()` in `src/server/auth/session.ts` | Called at the top of every Server Action and every function in `src/server/queries.ts`. Server Actions are POSTs to the page route they're used on, so a matcher change could silently drop proxy coverage — per the Next.js docs this layer must not be skipped. |
+All settings are environment variables: `.env.local` for development, `.env.production`
+for deployment. `.env.example` documents each one.
 
-API route handlers additionally call `requireApiAuth()` (`src/server/auth/api.ts`),
-which accepts `Authorization: Bearer <accessToken>` or the session cookie. See
-`src/app/api/auth/session/route.ts` for the reference implementation.
+| Variable | Required | Purpose |
+|---|---|---|
+| `DATABASE_URL` | ✅ | `mysql://user:password@host:3306/db`. The password may contain `@` and should not be percent-encoded |
+| `DATABASE_MIGRATION_URL` | | A separate user with CREATE/ALTER rights, if the runtime user doesn't have them |
+| `NEXT_PUBLIC_AWS_REGION` | ✅ | Cognito region |
+| `NEXT_PUBLIC_COGNITO_USER_POOL_ID` | ✅ | User pool ID |
+| `NEXT_PUBLIC_COGNITO_USER_POOL_CLIENT_ID` | ✅ | Web app client ID |
+| `COGNITO_CLIENT_SECRET` | | Only if your web client was created with a secret |
+| `COGNITO_MCP_CLIENT_ID` | | The second app client, for the Claude connector |
+| `APP_URL` | prod | Your public origin (`https://finance.example.com`), used in the OAuth discovery documents |
+| `PORT` | prod | Port the container listens on (default setup: `9010`) |
+| `ADVISOR_PROFILE_PATH` | | Location of the advisor profile. Default: `config/advisor-profile.json` |
+| `SYNC_TOKEN_ENCRYPTION_KEY` | sync | `openssl rand -hex 32`. Encrypts stored bank tokens |
+| `SYNC_SCHEDULER` | sync | `1` starts the in-process sync scheduler. Leave unset in development |
+| `SYNC_CRON_SECRET` | | Bearer token for `POST /api/sync/run` if you'd rather trigger syncs from cron |
 
-Tokens live in three `httpOnly`, `SameSite=Lax` cookies (`pb_at`, `pb_it`, `pb_rt`),
-`Secure` in production — no token is ever readable by browser JavaScript. Every
-request re-verifies the JWT signature against the pool's JWKS; a cookie's mere
-presence never grants access.
+## Hosting
 
-## Claude MCP connector
+The app needs three things in production:
 
-The app exposes an [MCP](https://modelcontextprotocol.io) server at `/api/mcp` so
-claude.ai can act as a financial advisor over the real data: read-only tools for
-snapshots, month summaries, trends, debts/payoff projections, cash projections, goals
-and budgets, plus a small set of additive writes (categorize, bill status, goal
-contribution, budget line, manual transaction, balance snapshot). No deletes, imports
-or rule edits — those stay in the UI. Code lives in `src/server/mcp/`.
+- **A long-running Node process.** The sync scheduler runs in-process, statement uploads can
+  reach 25 MB, and PDF parsing can take a while.
+- **MySQL.**
+- **HTTPS on a domain.** Cognito cookies are `Secure` in production, and claude.ai only connects over HTTPS.
 
-### How auth works
+Serverless platforms like Vercel can render the pages, but they cut off the scheduler and
+reject large uploads, so a VPS or container host is the better fit.
 
-claude.ai authenticates with OAuth 2.0 + PKCE against **Cognito itself** — the app
-never issues tokens. The handshake:
+### Option A: VPS with Docker and nginx (what this repo ships)
 
-1. Claude POSTs to `/api/mcp` with no token → `401` with
-   `WWW-Authenticate: Bearer resource_metadata="…/.well-known/oauth-protected-resource"`.
-2. It reads that document (`src/app/.well-known/oauth-protected-resource/route.ts`),
-   which names the Cognito issuer as the authorization server, then reads Cognito's
-   `/.well-known/openid-configuration` to find the hosted-UI authorize/token endpoints.
-3. You sign in on Cognito's hosted page; Claude exchanges the code for tokens and sends
-   the access token as `Authorization: Bearer` on every call.
-4. `withMcpAuth` in `src/app/api/mcp/route.ts` verifies it with the same
-   `aws-jwt-verify` verifier as the web app, and `getSession()` reads the bearer header
-   when there is no cookie — so every query and Server Action runs through the usual
-   `requireSession()` guard unchanged.
+Everything is in the repo. The app runs in a container bound to `127.0.0.1:${PORT}`, and
+nginx proxies to it with TLS from Let's Encrypt.
 
-### One-time Cognito setup
+```bash
+# on the server
+git clone https://github.com/slicktdog08/personal-finance-tracker && cd personal-finance-tracker
+cp .env.example .env.production        # fill in real values (PORT, DATABASE_URL, Cognito, APP_URL)
+cp .env.production .env                # docker compose reads PORT from .env
+cp config/advisor-profile.example.json config/advisor-profile.json   # optional, then edit
 
-1. **Assign a domain to the pool** (User pools → Domain → Cognito prefix domain is
-   fine). Without one the OAuth endpoints don't exist, and Cognito's discovery document
-   advertises placeholder `/authorize` `/token` URLs that return 400. After assigning it,
-   confirm `curl https://cognito-idp.<region>.amazonaws.com/<poolId>/.well-known/openid-configuration`
-   shows `authorization_endpoint` on your `*.amazoncognito.com` domain.
-2. **Create a second app client** for Claude (User pools → App clients → Create):
-   - Type: confidential client **with a client secret** (Cognito's token endpoint only
-     advertises `client_secret_basic`/`client_secret_post`; claude.ai accepts a secret).
-   - Managed login / hosted UI enabled; identity provider: Cognito user pool.
-   - Allowed callback URL: `https://claude.ai/api/mcp/auth_callback`
-   - OAuth grant: **Authorization code**; PKCE is on by default.
-   - OpenID scopes: `openid` (add `email` if you like).
-   - Auth flows: `ALLOW_REFRESH_TOKEN_AUTH` only — this client never does password auth.
-3. Put the new client id in `.env.production` (and `.env.local` for dev) as
-   `COGNITO_MCP_CLIENT_ID`, set `APP_URL=https://finance.example.com`, and
-   redeploy. The verifier accepts tokens from either client from then on.
+docker compose build
+docker compose run --rm --no-deps --entrypoint '' personal-billing \
+  node_modules/.bin/tsx scripts/apply-sql.ts --pending      # on later deploys
+docker compose up -d
 
-### Connecting claude.ai
+sh scripts/render-nginx-conf.sh finance.example.com | sudo tee /etc/nginx/sites-available/finance.example.com
+sudo ln -s /etc/nginx/sites-available/finance.example.com /etc/nginx/sites-enabled/
+sudo nginx -t && sudo systemctl reload nginx
+sudo certbot --nginx -d finance.example.com
+```
 
-Settings → Connectors → **Add custom connector**:
+For the first install, run `npm run db:init` once against the production database, from
+any machine that can reach it. `.env.production` is only copied into the build stage, never
+into the final image. `NEXT_PUBLIC_*` values are inlined at build time, so rebuild the image after changing them.
 
-| Field | Value |
-|-------|-------|
-| Name | Personal Billing |
-| Remote MCP server URL | `https://finance.example.com/api/mcp` |
-| Advanced → OAuth Client ID | the MCP app client id |
-| Advanced → OAuth Client Secret | its secret |
+| File | Role |
+|---|---|
+| `Dockerfile` | Two-stage build. The runtime image runs as a non-root user |
+| `docker-compose.yml` | One service, `restart: always`, listening on loopback only |
+| `nginx/template` + `scripts/render-nginx-conf.sh` | Site config with long timeouts and large-body limits for imports |
+| `JenkinsFile` | Optional CI/CD (Option B) |
 
-Click Connect, sign in on the Cognito page, and the tools appear in any chat. Try the
-built-in prompts (`monthly_review`, `can_i_afford`, `debt_payoff_plan`,
-`budget_check_in`) — they encode the "advisor" workflow: which tools to call, in what
-order, and how to frame the answer.
+### Option B: Jenkins pipeline (push to deploy)
 
-Claude Code can use the same server (`claude mcp add --transport http billing
-https://…/api/mcp`); it runs its own OAuth flow, so add
-`http://localhost/callback` and `http://127.0.0.1/callback` as extra callback URLs on
-the app client if you want that.
+`JenkinsFile` automates Option A on every build. It runs: clean workspace → restore secrets
+→ nginx + certbot over SSH → `docker compose build` → apply pending SQL migrations →
+swap the container → prune old images.
 
-### Testing without claude.ai
+One-time setup in Jenkins:
+1. Create a **Secret file** credential `personal-billing-env-production` containing `.env.production`.
+2. *(Optional)* Create a **Secret file** credential `personal-billing-advisor-profile`
+   containing your `advisor-profile.json`. The workspace is wiped on each run, so the
+   pipeline restores it from this credential.
+3. Create an **SSH credential** `vps-deploy-key` that can log in to the host as `deployer`.
+4. Point a Pipeline job at this repo (script path `JenkinsFile`) and set the `DOMAIN` and
+   `CERTBOT_EMAIL` parameters.
+5. Create the DNS A record **before** the first run, because certbot validates over HTTP.
 
-- Discovery: `curl -i https://…/.well-known/oauth-protected-resource`
-- Challenge: `curl -i -X POST https://…/api/mcp` → `401` with the `resource_metadata` header.
-- Authenticated: copy the `pb_at` cookie value from DevTools after signing in to the
-  web app and call the endpoint directly:
-  ```
+`APPLY_SQL` (on by default) applies each new `drizzle/*.sql` exactly once and stops the
+deploy if one fails. `RUN_MIGRATIONS` runs `drizzle-kit migrate` for the early journaled
+migrations, which a fresh install doesn't need.
+
+### Option C: A container platform (Railway, Render, Fly.io…)
+
+Deploy the `Dockerfile` with a managed MySQL. Set the environment variables in the
+platform's dashboard. Because `NEXT_PUBLIC_*` values are inlined at build time, they must be
+available as **build** variables too. Run `npm run db:init` once against the new database.
+Mount or bake in `config/advisor-profile.json` if you use the advisor.
+
+### Updating
+
+Pull, rebuild and redeploy. Before switching to the new container, apply schema changes
+with `npx tsx scripts/apply-sql.ts --pending`. It records what it has applied and is safe to re-run.
+
+## Connecting Claude (MCP)
+
+Claude signs in with OAuth 2.0 + PKCE against **your Cognito pool**; the app never issues
+tokens itself. When an unauthenticated request hits `/api/mcp`, the app returns `401` with
+a pointer to `/.well-known/oauth-protected-resource`. That document names Cognito as the
+authorization server. After you sign in on Cognito's hosted page, every call carries a bearer
+token that's verified like a web session.
+
+**One-time Cognito setup**
+1. **Give the pool a domain** (User pools → Domain; a Cognito prefix domain is fine). Without one,
+   the OAuth endpoints don't exist.
+2. **Create a second app client** for Claude:
+   - Confidential, *with* a client secret.
+   - Managed login enabled.
+   - Callback URL `https://claude.ai/api/mcp/auth_callback`.
+   - Grant type: Authorization code. Scope: `openid`. Auth flows: `ALLOW_REFRESH_TOKEN_AUTH` only.
+3. Set `COGNITO_MCP_CLIENT_ID` and `APP_URL`, then redeploy.
+
+**In claude.ai**, go to Settings → Connectors → *Add custom connector* and enter:
+- URL: `https://finance.example.com/api/mcp`
+- Advanced: the MCP client's ID and secret
+
+For **Claude Code**: `claude mcp add --transport http finance https://finance.example.com/api/mcp`.
+Add `http://localhost/callback` and `http://127.0.0.1/callback` to the client's callback URLs.
+
+**Checking it works**
+- `curl -i https://…/.well-known/oauth-protected-resource` should return the metadata document.
+- `curl -i -X POST https://…/api/mcp` should return `401` with a `resource_metadata` header.
+- With the `pb_at` cookie value (copied from your browser's dev tools after signing in) as
+  `$TOKEN`, run:
+  ```bash
   curl -s -X POST https://…/api/mcp -H "Authorization: Bearer $TOKEN" \
     -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" \
     -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
   ```
-- Tool logic against the live DB without any session: see the `tsx` loader harness
-  pattern in `planning/` / memory (stub `server-only`, `next/cache`, `next/headers`,
-  `@/server/auth/session`, then call `createMcpHandler` directly with JSON-RPC
-  `Request`s).
 
-## Scripts
+## Development
+
 | Command | Purpose |
-|---------|---------|
-| `npm run dev` / `build` / `start` | Next.js dev / build / serve |
-| `npm run db:generate` | Generate a migration from `src/server/db/schema.ts` |
-| `npm run db:migrate` | Apply migrations |
-| `npm run db:push` | Push schema directly (no migration file) |
-| `npm run db:studio` | Drizzle Studio (DB browser) |
-| `npm run seed` | Load `notion_data/` history |
-| `npm test` | Unit tests (pure modules) — `node:test` via tsx |
-| `npm run test:e2e` | End-to-end tests against the local test database with an in-memory bank provider (see [Testing](#testing)) |
-| `npm run db:test:up` / `:down` / `:reset` | Start / discard / recreate the throwaway test database |
-| `npm run db:test:schema` | Regenerate `tests/db/schema.sql` from the live schema (run after a migration) |
-| `npm run purge:e2e` | Report e2e leftovers in the DB from `.env.local`; `-- --apply` to delete them |
-| `npm run sync -- <cmd>` | Bank-sync CLI: `status`, `enrollments`, `sync [--dry-run]`, `runs`, `settings`, `ignored`, `check` (see `scripts/bank-sync.ts`) |
+|---|---|
+| `npm run dev` / `build` / `start` | Next.js dev server / production build / serve |
+| `npm run db:init` | Create the schema in an empty database |
+| `npx tsx scripts/apply-sql.ts --pending` | Apply new hand-written migrations |
+| `npx tsx scripts/seed-config.ts` | Re-seed the default statuses, payment types and categories (never overwrites your edits) |
+| `npm run seed` | Optional: import a Notion bill-tracker export from `notion_data/` ([format](planning/design/01-data-inventory.md)) |
+| `npm test` | Unit tests (`node:test`, no database) |
+| `npm run db:test:up` · `npm run test:e2e` | End-to-end tests against a throwaway MySQL in Docker |
+| `npm run sync -- <cmd>` | Bank-sync CLI: `status`, `sync --dry-run`, `runs`, `settings`… |
+| `npm run check:private` | Scan staged changes for personal data (also runs as a pre-commit hook) |
 
-## Testing
-
-Unit tests are pure. The e2e suite is not: it inserts accounts, commits imports, triggers
-whole-ledger sync runs, prunes `sync_runs` and rewrites `sync_settings`. It gets its own
-database.
+**Tests.** Unit tests are pure. End-to-end tests insert and delete real rows, so they get their own database:
 
 ```bash
-cp .env.test.example .env.test   # once
-npm run db:test:up               # MySQL 5.7 on 127.0.0.1:3307, schema from tests/db/schema.sql
+cp .env.test.example .env.test
+npm run db:test:up        # MySQL 5.7 on 127.0.0.1:3307, fresh schema every time
 npm run test:all
 ```
 
-`docker-compose.test.yml` runs `mysql:5.7` under `linux/amd64` emulation — there is no arm64
-5.7 image, and matching the server's 5.7.32 keeps the quirks this codebase works around
-(hyphenated database name, `@` in the password, 5.7's `sql_mode`) reproducible. Its data
-directory is a tmpfs, so `db:test:reset` always yields a pristine schema. First boot is slow;
-`db:test:up` polls the healthcheck rather than sleeping.
+The test runner refuses to start unless `DATABASE_URL` points at the local machine. It also
+refuses outright if it resolves to the same host as `.env.local`. If an e2e run ever leaves
+rows behind, `npm run purge:e2e` finds them.
 
-**How the suite is kept off the real database.** `.env.test` is loaded by
-`tests/env-test.cjs`, preloaded *before* `tests/stubs.cjs`. The order is the mechanism:
-`dotenv` never overwrites an already-set variable, so the file loaded first wins, and
-`stubs.cjs` loads `.env.local`. For a long time `.env.test` was loaded *after* `.env.local`
-inside `stubs.cjs`, where it could never override `DATABASE_URL` — so the e2e suite ran
-against production, and left 48 orphaned `import_batches` and 25 fake `sync_runs` there
-before anyone noticed. `stubs.cjs` deliberately still knows nothing about `.env.test`,
-because `npm run sync` shares it and must keep talking to the real database.
+**Layout**
 
-On top of that, `tests/env-test.cjs` refuses to start a test process unless `DATABASE_URL`
-is on the loopback:
-
-- A non-local host is refused. To override you must name it — `E2E_ALLOW_REMOTE_DB=<host>`,
-  not a bare `1`, because typing the host out is the moment you check which one it is.
-- If `.env.test` resolves to the **same host as `.env.local`**, it is refused outright with
-  no override. That is the live database by definition.
-
-`tests/e2e/helpers.ts` repeats the check in `setupFixtures()` as a backstop, and its teardown
-removes everything the fixtures create — `[e2e] …` accounts and their rows, the `e2efake`
-provider's data, the category rule, the import batches, sync runs created after setup, and
-the `sync_settings` bookkeeping (including `last_run_id`, which otherwise dangles).
-
-If something ever does leak, `npm run purge:e2e` reports it and `npm run purge:e2e -- --apply`
-removes it. The import-batch sweep only deletes batches with no transactions left, so a real
-import that happens to share a fixture filename survives.
-
-## Deployment
-
-One way to self-host: a VPS where Jenkins → Docker → nginx serves it at your domain
-(`finance.example.com` below — substitute your own). The app listens on **port 9010**, published on the loopback only;
-nginx is the only route in.
-
-| File | Role |
-|------|------|
-| `Dockerfile` | Two-stage build (`npm ci` + `next build`, then a slim runner as `nodeuser`) |
-| `docker-compose.yml` | One service, `restart: always`, binds `127.0.0.1:${PORT}` |
-| `nginx/template` | Site config with `__DOMAIN__` / `__PORT__` placeholders |
-| `scripts/render-nginx-conf.sh` | Renders that template using `PORT` from `.env` |
-| `JenkinsFile` | Clean → env → nginx+TLS → build → (migrate) → (apply SQL) → up → prune |
-
-### One-time Jenkins setup
-1. Create a **Secret file** credential with ID `personal-billing-env-production`,
-   containing the production `.env.production` (see below). `git clean -fdx` wipes
-   the workspace on every run, so the pipeline restores this file from the credential
-   rather than from the repo — the MySQL password is never committed.
-2. Create a `vps-deploy-key` SSH credential that can log in to the VPS as `deployer`.
-3. Point a Pipeline job at this repo with script path `JenkinsFile`.
-4. Add a DNS A record for `finance.example.com` **before** the first run —
-   certbot validates over HTTP and will fail without it.
-
-### `.env.production` contents
 ```
-DATABASE_URL="mysql://USER:PASSWORD@DB_HOST:3306/personal-billing"
-DATABASE_MIGRATION_URL="mysql://ADMIN:PASSWORD@DB_HOST:3306/personal-billing"
-NEXT_PUBLIC_AWS_REGION=...
-NEXT_PUBLIC_COGNITO_USER_POOL_ID=...
-NEXT_PUBLIC_COGNITO_USER_POOL_CLIENT_ID=...
-COGNITO_MCP_CLIENT_ID=...
-APP_URL=https://finance.example.com
-PORT=9010
-# Bank sync (see planning/features/bank-sync.md and .env.example) — no provider wired yet
-SYNC_TOKEN_ENCRYPTION_KEY=...      # openssl rand -hex 32
-SYNC_SCHEDULER=1
-```
-This file is deliberately **not** in `.dockerignore`: pages are DB-backed and
-`NEXT_PUBLIC_*` values are inlined into the bundle, so `next build` needs it at
-build time. It is only copied into the builder stage, never into the final image.
-
-### Pipeline parameters
-| Parameter | Default | Notes |
-|-----------|---------|-------|
-| `DOMAIN` | `finance.example.com` | Also the nginx site filename and certbot cert name |
-| `CERTBOT_EMAIL` | `you@example.com` | Renewal notices |
-| `RUN_MIGRATIONS` | `false` | Runs `drizzle-kit migrate` in a one-off container off the freshly built image, before the running container is swapped. Opt-in — check the pending migrations in `drizzle/` first. Only covers the journaled migrations (0000–0004); use `APPLY_SQL` for the hand-written ones. |
-| `APPLY_SQL` | `true` | Runs `scripts/apply-sql.ts --pending` in a one-off container off the new image, before the running container is swapped: every hand-written `drizzle/*.sql` not yet recorded in the `sql_migrations` table, oldest first. Files applied by hand with the script are recorded too, so they're skipped. A failed statement fails the build so the new code doesn't go live. When the table is first created, everything through `0021` is recorded as already applied (the baseline) without being run. |
-
-### Running it locally the way production does
-```
-cp .env.production .env      # compose reads PORT from .env
-docker compose build
-docker compose up -d         # http://127.0.0.1:9010
-docker compose logs -f
-docker compose down
+src/app/           pages: dashboard, months/[period], transactions, import, accounts, debts,
+                   budget, goals, cash, transfers, settings/*; api/mcp, api/sync
+src/components/    UI, grouped by feature
+src/server/
+  actions/         server actions (every one calls requireSession())
+  queries.ts       read queries
+  db/schema.ts     Drizzle schema
+  lib/             money, dedup, categorize, budget, cash projection, pdf/, sync/
+  mcp/             MCP server, tools, prompts, advisor profile loader
+  auth/            Cognito sign-in, JWT verification, session
+drizzle/           SQL migrations
+scripts/           db init, migration runner, seeding, bank-sync CLI, test-db helpers
+tests/             unit/, e2e/, db/schema.sql (fresh-install + test schema)
+planning/          design docs and per-feature docs (start at planning/README.md)
+config/            advisor-profile.example.json (your real profile sits beside it, ignored)
 ```
 
-## Structure
-```
-src/
-  app/                      dashboard · months · months/[period] · transactions · import
-  components/               Nav, BillSheet, CategoryCell, NewMonthButton, ...
-  server/
-    db/schema.ts            Drizzle schema (periods, bills, bill_instances, accounts,
-                            transactions, import_batches, category_mappings)
-    db/index.ts             runtime db client
-    actions/                server actions (bills, periods, transactions, import)
-    lib/                    money, dedup, categorize, period helpers
-    queries.ts              read queries
-  constants/enums.ts        statuses, payment types, categories
-scripts/seed-history.ts     one-time historical loader
-drizzle/                    generated migrations
-notion_data/                source export (gitignored)
-planning/                   design docs, progress logs (see planning/README.md)
-```
+**Keeping personal data out of the repo.** This code is public, but the database holds your
+real finances, so everything personal lives in git-ignored files:
 
-## Notes
-- The MCP MySQL connection used during development cannot run DDL — schema is created via
-  Drizzle migrations with a privileged connection. See `planning/design/04-migration-and-seed.md`.
-- Transaction dedup uses a `sha256(account|date|amount|description|direction)` hash with a
-  `UNIQUE` constraint, so re-importing overlapping CSVs is a no-op.
+| Ignored | Holds |
+|---|---|
+| `.env*` (except the two `.example` files) | Credentials |
+| `config/advisor-profile.json` | The advisor's profile of you |
+| `planning/progress/`, `planning/projects/` | Dev logs and side projects that quote real numbers |
+| `private/`, `notion_data/`, `temp/`, `.setting/` | Statements, exports, scratch files |
+
+`npm ci` installs a pre-commit hook (`.githooks/pre-commit` → `scripts/check-private.sh`).
+It blocks those files if they're ever force-added. It also blocks any added line that matches
+patterns you list in `.private-patterns`, a git-ignored file with one regex per line (account
+last-4s, card names, employer and so on). `CLAUDE.md` tells Claude Code to use illustrative
+values in code, tests and docs.
+
+## Documentation
+
+`planning/` is the project's long-form memory:
+- `design/`: data model, architecture and locked decisions.
+- `features/`: one doc per feature explaining how it works today.
+
+Read the relevant feature doc before changing a feature. This project runs a newer Next.js
+than most tutorials cover, so check `node_modules/next/dist/docs/` before relying on older patterns.

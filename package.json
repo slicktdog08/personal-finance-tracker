@@ -12,6 +12,7 @@
     "db:migrate": "drizzle-kit migrate",
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio",
+    "db:init": "tsx scripts/init-db.ts && tsx scripts/apply-sql.ts --pending",
     "seed": "tsx scripts/seed-history.ts",
     "sync": "tsx --require ./tests/stubs.cjs scripts/bank-sync.ts",
     "test": "node --require ./tests/env-test.cjs --require ./tests/stubs.cjs --import tsx --test \"tests/unit/**/*.test.ts\"",
@@ -21,7 +22,9 @@
     "db:test:down": "./scripts/test-db.sh down",
     "db:test:reset": "./scripts/test-db.sh reset",
     "db:test:schema": "./scripts/dump-test-schema.sh",
-    "purge:e2e": "tsx scripts/purge-e2e-residue.ts"
+    "purge:e2e": "tsx scripts/purge-e2e-residue.ts",
+    "check:private": "./scripts/check-private.sh",
+    "prepare": "git config core.hooksPath .githooks 2>/dev/null || true"
   },
   "dependencies": {
     "@aws-sdk/client-cognito-identity-provider": "^3.1117.0",
