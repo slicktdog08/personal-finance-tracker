@@ -47,3 +47,18 @@ Per-feature docs (including the former `05-csv-import`) now live in
 3. **Keep the schema doc honest.** A migration under `drizzle/` should be reflected in
    `design/02-data-model.md`.
 4. **Dates are absolute.** Write `2026-07-17`, never "today" — these docs outlive the session.
+
+## Local-only folders (git-ignored)
+
+This repo is public, but its owner's working notes are written against live data. Those live in
+folders that git ignores, so they can sit next to the docs without ever being pushed:
+
+| Folder | What goes there |
+|--------|-----------------|
+| `planning/progress/` | Dated dev logs (`YYYY-MM-DD-<slug>.md`): what changed, how it was verified against real data, follow-ups |
+| `planning/projects/` | Side efforts that use the data (e.g. "how much rent can I afford") |
+| `private/` (repo root) | Anything else personal: real statements, exports, scratch fixtures |
+
+Keep anything that should be shared — how a feature works, why a decision was made — in
+`design/` or `features/` with **illustrative** numbers. Note that git-ignored files exist only on
+the machine that wrote them; a fresh clone or a cloud session won't have them.

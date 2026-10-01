@@ -52,9 +52,10 @@ If `.env.local` is missing, copy it from `.env.example`. Then ask for, and fill 
    `mysql2/promise`'s `createConnection` and runs `SELECT 1`. If it doesn't exist, show the `CREATE DATABASE \`personal-billing\`` statement
    and the two GRANTs (runtime: SELECT/INSERT/UPDATE/DELETE; migration: + CREATE/ALTER/INDEX/
    REFERENCES) — let the user run them.
-2. Apply the schema: `npm run db:migrate` (journaled 0000–0004), then
-   `npx tsx scripts/apply-sql.ts --pending` for the hand-written migrations.
-3. Seed lookups: `npx tsx scripts/seed-config.ts`.
+2. **Empty database** → `npm run db:init`. It loads the current schema plus default lookups
+   from `tests/db/schema.sql`, then runs any newer migrations. (Don't use `npm run db:migrate`
+   on a fresh database — the drizzle journal stops at 0004 and can't build the full schema.)
+   **Existing install** → `npx tsx scripts/apply-sql.ts --pending` applies only what's new.
 
 ## Step 4 — Existing data (optional)
 
@@ -115,6 +116,14 @@ Optional next step: the claude.ai connector — README → "Claude MCP connector
 `npm test` runs unit tests with no database. For e2e: `cp .env.test.example .env.test`,
 `npm run db:test:up` (Docker), `npm run test:e2e`. The test DB is throwaway and on port
 3307; never point `.env.test` at a real database.
+
+## Step 9 — Personal-data guard (if they'll commit to a public fork)
+
+`npm ci` points git at `.githooks/`, whose pre-commit runs `scripts/check-private.sh`. Offer
+to create `.private-patterns` (git-ignored): one case-insensitive regex per line for terms
+that would identify them — account last-4s, card names, employer, street, exact paycheck.
+Build it from what they told you in Step 7, show it, and save on confirmation. Test with
+`npm run check:private`.
 
 ## Finish
 
