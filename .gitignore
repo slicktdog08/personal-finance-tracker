@@ -51,5 +51,15 @@ next-env.d.ts
 /.setting/
 /temp/
 
-# personal advisor profile (salary, debts, goals) — see config/advisor-profile.example.json
+# ---------------------------------------------------------------------------
+# Personal data — never committed. This repo is public; your finances stay local.
+# ---------------------------------------------------------------------------
+# Advisor profile (income, debts, goals) — template: config/advisor-profile.example.json
 /config/advisor-profile.json
+# Dev logs and side projects written against live data (planning/README.md explains)
+/planning/progress/
+/planning/projects/
+# Catch-all for anything else personal: real statements, exports, notes, fixtures
+/private/
+# Your own terms for scripts/check-private.sh (account last-4s, card names, employer...)
+/.private-patterns
