@@ -28,7 +28,7 @@
   },
   "dependencies": {
     "@aws-sdk/client-cognito-identity-provider": "^3.1117.0",
-    "@modelcontextprotocol/server": "^2.0.0",
+    "@modelcontextprotocol/server": "^2.3.1",
     "aws-jwt-verify": "^5.2.1",
     "drizzle-orm": "^0.45.2",
     "mcp-handler": "^2.1.1",
