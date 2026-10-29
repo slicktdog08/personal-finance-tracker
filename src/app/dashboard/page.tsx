@@ -208,13 +208,13 @@ export default async function DashboardPage({
   );
   const outstanding = billed - paid;
 
-  const selFlow = cashflow.filter((c) => c.label === selected.label);
-  const income = selFlow
-    .filter((c) => c.direction === "Credit")
-    .reduce((s, c) => s + (toNum(c.total) ?? 0), 0);
-  const outgoing = selFlow
-    .filter((c) => c.direction === "Debit")
-    .reduce((s, c) => s + (toNum(c.total) ?? 0), 0);
+  // Outgoing = spending + net debt paydown. A card payment that only clears this month's card
+  // purchases isn't counted again — the purchases already are (see getCashflowByPeriod).
+  const selFlow = cashflow.find((c) => c.label === selected.label);
+  const income = selFlow?.income ?? 0;
+  const spending = selFlow?.spending ?? 0;
+  const debtPaydown = selFlow?.debtPaydown ?? 0;
+  const outgoing = selFlow?.outgoing ?? 0;
 
   // ---- Status donut (selected month) ----
   const statusCounts = new Map<string, number>();
@@ -240,18 +240,11 @@ export default async function DashboardPage({
   const monthsHi = months.findIndex((m) => m.label === selected.label);
 
   // ---- Income vs outgoing per month ----
-  const flowMap = new Map<string, { label: string; income: number; outgoing: number }>();
-  for (const c of cashflow) {
-    const f = flowMap.get(c.label) ?? { label: c.label, income: 0, outgoing: 0 };
-    if (c.direction === "Credit") f.income += toNum(c.total) ?? 0;
-    else f.outgoing += toNum(c.total) ?? 0;
-    flowMap.set(c.label, f);
-  }
-  const flows = [...flowMap.values()].sort((a, b) => (a.label < b.label ? -1 : 1));
+  const flows = cashflow; // already oldest → newest
   const flowsHi = flows.findIndex((f) => f.label === selected.label);
 
   // ---- Income vs outgoing (selected month) ----
-  const maxFlow = Math.max(income, outgoing, 1);
+  const maxFlow = Math.max(income, spending, Math.abs(debtPaydown), 1);
 
   // ---- Category spend (selected month) ----
   // Spent and budgeted are both dollars, so they share one ruler: every row is drawn on a single
@@ -617,21 +610,31 @@ export default async function DashboardPage({
             <div className="space-y-3">
               {[
                 { label: "Income", value: income, color: "#22c55e" },
-                { label: "Outgoing", value: outgoing, color: "#ef4444" },
+                { label: "Spending", value: spending, color: "#ef4444" },
+                {
+                  label: debtPaydown >= 0 ? "Debt paid down" : "Debt grew",
+                  value: debtPaydown,
+                  color: debtPaydown >= 0 ? "#f97316" : "#a3a3a3",
+                },
               ].map((r) => (
                 <div key={r.label} className="flex items-center gap-3">
-                  <div className="w-20 text-sm">{r.label}</div>
+                  <div className="w-28 text-sm">{r.label}</div>
                   <div className="flex-1 bg-neutral-200 dark:bg-neutral-800 rounded h-6 overflow-hidden">
                     <div
                       className="h-full"
-                      style={{ width: `${Math.max(2, (r.value / maxFlow) * 100)}%`, backgroundColor: r.color }}
+                      style={{ width: `${Math.max(2, (Math.abs(r.value) / maxFlow) * 100)}%`, backgroundColor: r.color }}
                     />
                   </div>
-                  <div className="w-24 text-right text-sm tabular-nums">{formatMoney(r.value)}</div>
+                  <div className="w-24 text-right text-sm tabular-nums">{formatMoney(Math.abs(r.value))}</div>
                 </div>
               ))}
+              <p className="text-xs text-neutral-500">
+                Debt paydown is payments minus new charges on each card or loan — paying off this
+                month&apos;s card purchases isn&apos;t counted twice. Kept (income − spending):{" "}
+                <span className="tabular-nums">{formatMoney(income - spending)}</span>
+              </p>
               <div className="flex items-center justify-between border-t border-neutral-200 dark:border-neutral-800 pt-2">
-                <span className="text-sm text-neutral-500">Net</span>
+                <span className="text-sm text-neutral-500">Net cash (income − spending − paydown)</span>
                 <span
                   className={`text-lg font-bold tabular-nums ${
                     income - outgoing >= 0 ? "text-green-600" : "text-red-600"

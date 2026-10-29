@@ -109,8 +109,9 @@ the `goal_contributions.transaction_id` seam, not a budget column.
 - **Cash projection — the double-counting rules.** A bill and a budget line can describe the same
   money, so: (1) every *unpaid* bill leaves in full on its due day (overdue → the first projected
   day); if its majority category has a budget line, that line's remaining is reduced by the bill so
-  it isn't also spread. (2) A **debt line schedules ONE payment** of `planned − max(linked payments,
-  sheet-paid instance amount)` — on the unpaid instance's due day, else at month end (the extra). The
+  it isn't also spread. (2) A **debt line schedules ONE payment** of `planned − (max(linked payments,
+  sheet-paid instance amount) − new charges)` — so card purchases not yet paid off are still owed on
+  top of the planned paydown (their envelopes counted them; the cash leaves when the card is paid) — on the unpaid instance's due day, else at month end (the extra). The
   liability's bill instance is never its own event. (3) Category lines spread `planned − actual`
   (after bill deductions) evenly over the remaining days. (4) Savings lines are not outflows.
   (5) Paydays: dates from the pay schedule, each worth `plannedIncome ÷ paydays in month`, then
@@ -191,9 +192,15 @@ the `goal_contributions.transaction_id` seam, not a budget column.
 - **Category actuals reuse `getCategorySpend(label)`** — so cash offsets, the pocket count and
   transfer exclusion are already applied. A budget can never disagree with the dashboard about
   what a category cost. Don't re-implement the sum.
-- **Debt actuals = Debit transactions in the month with `bill_id` = the account's `bill_id`,
-  excluding rows on the liability account itself** (a card's own linked rows are purchases and
-  interest, not payments). A liability with no linked bill shows "payments can't be matched".
+- **Debt actuals are PAYDOWN = payments − new charges** (`computeDebtFlows`,
+  `src/server/lib/debt-flows.ts`). Payments = Debits in the month NOT on the liability that are
+  linked to its bill (`bill_id`) or are a linked transfer to it. New charges = every Debit on the
+  liability (purchases, interest, fees) minus refund Credits. Why: the user often charges a purchase
+  to a card and pays it off from checking days later. The purchase already counts in its category
+  envelope, so the payment that clears it is a rebalance — counting it as debt repayment would
+  claim progress the balance never made and double the month's outflow. Paydown is the balance
+  trend; negative means the balance grew. `paid` and `charged` ride on the line for display. A
+  liability with no linked bill shows "payments can't be matched".
   Debits categorized `Debt Repayment` with no `bill_id` are totaled as **unassigned** with a link to
   go fix them — the nudge, not a guess.
 - **`Debt Repayment`, `Deposit`, `Transfer`, `Interest`, `Interest/Rewards`, `Investing` never

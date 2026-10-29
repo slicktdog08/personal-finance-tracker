@@ -318,3 +318,39 @@ describe("projectCash — focus month and lead-in", () => {
     assert.equal(p.days.find((d) => d.date === "2026-08-31")!.balance, 1000);
   });
 });
+
+describe("projectCash — debt lines plan paydown, not payments", () => {
+  const debtLine = (o: Partial<ProjectionLine>): ProjectionLine => ({
+    id: 900,
+    kind: "debt",
+    label: "Card A",
+    planned: 200,
+    actual: 0,
+    accountId: 10,
+    ...o,
+  });
+  const debtEvents = (line: ProjectionLine) =>
+    projectCash({
+      asOf: "2026-09-20",
+      cashNow: 2000,
+      segments: [september({ paydays: [], lines: [line] })],
+      debts: [],
+    }).events.filter((e) => e.kind === "debt");
+
+  test("card purchases not paid off yet are still owed on top of the planned paydown", () => {
+    // $150 of groceries went on the card (already counted as spent by its envelope), nothing paid
+    // yet: the cash that will leave is $150 to clear them + the $200 paydown.
+    const ev = debtEvents(debtLine({ actual: -150, paid: 0, charged: 150 }));
+    assert.equal(ev.length, 1);
+    assert.equal(ev[0].amount, -350);
+  });
+
+  test("a payment that only cleared the new charges leaves the whole paydown owed", () => {
+    const ev = debtEvents(debtLine({ actual: 0, paid: 150, charged: 150 }));
+    assert.equal(ev[0].amount, -200);
+  });
+
+  test("paydown met: nothing more goes out", () => {
+    assert.equal(debtEvents(debtLine({ actual: 200, paid: 350, charged: 150 })).length, 0);
+  });
+});

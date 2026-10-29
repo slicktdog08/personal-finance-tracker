@@ -72,6 +72,9 @@ export interface ProjectionLine {
   planned: number;
   actual: number;
   accountId: number | null;
+  /** Debt lines: paid to the debt / new charges on it this month (actual = paid − charged). */
+  paid?: number;
+  charged?: number;
 }
 
 export interface ProjectionDebt {
@@ -272,11 +275,15 @@ export function projectCash(input: CashProjectionInput): CashProjection {
     }
 
     // Debt lines: one payment of what the plan still owes, honoring linked payments and paid marks.
+    // The plan is PAYDOWN, so charges already on the card this month are owed on top of it: their
+    // envelopes counted them as spent, but the cash only leaves when the card is paid.
     let debtPayments = 0;
     for (const l of seg.lines) {
       if (l.kind !== "debt" || l.accountId == null) continue;
       const bill = debtBillByAccount.get(l.accountId);
-      const covered = Math.max(l.actual, bill && bill.paid ? bill.amount : 0);
+      const charged = l.charged ?? 0;
+      const paid = l.paid ?? l.actual + charged;
+      const covered = Math.max(paid, bill && bill.paid ? bill.amount : 0) - charged;
       const owed = Math.max(0, round2(l.planned - covered));
       if (owed <= 0) continue;
       const due = bill && !bill.paid ? dueDate(bill.dueDay) : null;

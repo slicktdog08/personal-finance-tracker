@@ -28,7 +28,12 @@ URL-driven** so month switching re-renders every widget with no client state; (2
 - **Bill stats** (this month) — from `getInstances(selected.id)`: billed = Σ instance amount, paid =
   Σ where status is settled (from `statusConfig`), outstanding = billed − paid.
 - **Income vs outgoing** — `getCashflowByPeriod()` groups `transactions` by period + direction,
-  `SUM(amount)`, **excluding Transfer**; Net = income − outgoing.
+  `SUM(amount)`, **excluding Transfer**, then splits outgoing into **spending** (debt payments
+  backed out) + **debt paydown** (payments − new charges per liability, from `getDebtFlows` /
+  `computeDebtFlows`). A card payment that only clears the month's card purchases is not counted
+  again; card-side payment credits filed as Debt Repayment are not income. Net = income − spending
+  − paydown ≈ change in cash; income − spending = what the month kept. The category chart's `Debt
+  Repayment` slice is the same net paydown.
 - **Status donut** — instance counts per status, colored from config; center = % settled.
 - **Spend by category** — `getCategorySpend(label)`, top 10; rows link into filtered
   `/transactions`.
