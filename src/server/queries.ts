@@ -58,6 +58,7 @@ import {
   SAVINGS_CATEGORY,
 } from "@/constants/enums";
 import { effectiveHeld } from "@/server/lib/cash";
+import { computeDebtFlows, emptyDebtFlow, DEBT_REPAYMENT_CATEGORY, type PeriodDebtFlow } from "@/server/lib/debt-flows";
 import { monthBounds, parsePeriodLabel } from "@/server/lib/period";
 import { clampToMonth, todayIso, resolvePaydays, isoToUtc, utcToIso } from "@/server/lib/pay-schedule";
 import { toNum } from "@/server/lib/money";
@@ -1843,11 +1844,72 @@ export async function getImportBatches() {
   return db.select().from(importBatches).orderBy(desc(importBatches.id)).limit(50);
 }
 
-// Income (Credit) vs outgoing (Debit) per period, from transactions. Cash withdrawals count
-// only for their unaccounted remainder — the purchases they funded are counted as themselves,
-// in the month they happened. That's why moving a withdrawal's cash into the next month's
-// purchases lowers the withdrawal's month here and raises the next one.
-export async function getCashflowByPeriod() {
+/**
+ * Payments to, new charges on, and net paydown of every liability, per period — the rows behind
+ * "a card payment that only covers this month's card purchases isn't outgoing money". All
+ * periods by default (the dashboard's trend needs them); pass a label for one month. The math
+ * lives in the pure computeDebtFlows (src/server/lib/debt-flows.ts). Split pieces aren't
+ * consulted: a payment or a card charge counts at its face amount.
+ */
+export async function getDebtFlows(periodLabel?: string): Promise<Map<string, PeriodDebtFlow>> {
+  await requireSession();
+  const liabilities = await db
+    .select({ id: accounts.id, billId: accounts.billId })
+    .from(accounts)
+    .where(inArray(accounts.accountType, [...LIABILITY_ACCOUNT_TYPES]));
+  if (!liabilities.length) return new Map();
+  const liabIds = liabilities.map((l) => l.id);
+  const liabBills = liabilities.map((l) => l.billId).filter((b): b is number => b != null);
+  const partner = alias(transactions, "dfp");
+  const touchesDebt = or(
+    inArray(transactions.accountId, liabIds),
+    eq(transactions.category, DEBT_REPAYMENT_CATEGORY),
+    inArray(partner.accountId, liabIds),
+    ...(liabBills.length ? [inArray(transactions.billId, liabBills)] : []),
+  )!;
+  const rows = await db
+    .select({
+      period: periods.label,
+      accountId: transactions.accountId,
+      direction: transactions.direction,
+      category: transactions.category,
+      billId: transactions.billId,
+      partnerAccountId: partner.accountId,
+      amount: transactions.amount,
+    })
+    .from(transactions)
+    .innerJoin(periods, eq(periods.id, transactions.periodId))
+    .leftJoin(partner, eq(partner.id, transactions.transferPartnerId))
+    .where(periodLabel ? and(eq(periods.label, periodLabel), touchesDebt) : touchesDebt);
+  return computeDebtFlows(
+    rows.map((r) => ({ ...r, amount: toNum(r.amount) ?? 0 })),
+    liabilities,
+  );
+}
+
+export interface CashflowMonth {
+  label: string;
+  year: number;
+  month: number;
+  /** Credits, transfers and card-side payment credits excluded. */
+  income: number;
+  /** What the month consumed: purchases (card or bank), bills, interest, fees — never payments. */
+  spending: number;
+  /** Net reduction in what's owed: payments minus new charges (negative = debt grew). */
+  debtPaydown: number;
+  /** Cash that actually left: spending + debtPaydown. income − outgoing ≈ change in cash. */
+  outgoing: number;
+}
+
+// Income vs outgoing per period, from transactions. Cash withdrawals count only for their
+// unaccounted remainder — the purchases they funded are counted as themselves, in the month
+// they happened. That's why moving a withdrawal's cash into the next month's purchases lowers
+// the withdrawal's month here and raises the next one.
+//
+// Debt payments are NOT spending. A card purchase is counted once, as the purchase; the payment
+// that later clears it is a rebalance. Only what the payments knocked off the balance beyond
+// the month's new charges counts — as debtPaydown, alongside (not inside) spending.
+export async function getCashflowByPeriod(): Promise<CashflowMonth[]> {
   await requireSession();
   // A split row counts its own share when its own category isn't Transfer, and each piece when
   // the piece's isn't — so a transfer that was partly a real purchase counts for that part.
@@ -1895,17 +1957,25 @@ export async function getCashflowByPeriod() {
         : r,
     );
   }
-  const rows = [...merged.values()].sort((a, b) => a.year - b.year || a.month - b.month);
 
   // Outgoing drops by the cash that stayed in your pocket that month — same correction the
   // category chart makes, so the two dashboard views can't tell different stories.
-  const heldBy = await effectiveHeldByPeriod();
-  return rows.map((r) => {
-    const held = r.direction === "Debit" ? (heldBy.get(r.label) ?? 0) : 0;
-    if (held === 0) return r;
-    const left = Math.max(0, Math.round(((toNum(r.total) ?? 0) - held) * 100) / 100);
-    return { ...r, total: left.toFixed(2) };
-  });
+  const [heldBy, debtBy] = await Promise.all([effectiveHeldByPeriod(), getDebtFlows()]);
+  const months = new Map<string, CashflowMonth>();
+  for (const r of merged.values()) {
+    const m = months.get(r.label) ?? { label: r.label, year: r.year, month: r.month, income: 0, spending: 0, debtPaydown: 0, outgoing: 0 };
+    if (r.direction === "Credit") m.income = toNum(r.total) ?? 0;
+    else m.spending = Math.max(0, round2((toNum(r.total) ?? 0) - (heldBy.get(r.label) ?? 0)));
+    months.set(r.label, m);
+  }
+  for (const m of months.values()) {
+    const debt = debtBy.get(m.label) ?? emptyDebtFlow();
+    m.income = Math.max(0, round2(m.income - debt.mirrorCredits));
+    m.spending = Math.max(0, round2(m.spending - debt.countedPayments));
+    m.debtPaydown = debt.paydown;
+    m.outgoing = round2(m.spending + m.debtPaydown);
+  }
+  return [...months.values()].sort((a, b) => a.year - b.year || a.month - b.month);
 }
 
 // Net spend grouped by category (optionally for one period). Debits count as
@@ -1959,6 +2029,14 @@ export async function getCategorySpend(periodLabel?: string) {
   for (const r of [...ownRows, ...pieceRows]) {
     byCat.set(r.category, round2((byCat.get(r.category) ?? 0) + (toNum(r.total) ?? 0)));
   }
+  // Debt Repayment reads as what the payments actually knocked off the balances, not their face
+  // value: the part that only cleared this month's card purchases is already counted under those
+  // purchases' own categories. Same figure as getCashflowByPeriod's debtPaydown.
+  const debtFlows = await getDebtFlows(periodLabel);
+  byCat.set(
+    DEBT_REPAYMENT_CATEGORY,
+    round2([...debtFlows.values()].reduce((s, f) => s + f.paydown, 0)),
+  );
   const rows: { category: string | null; total: string }[] = [...byCat]
     .filter(([, total]) => total > 0)
     .sort((a, b) => b[1] - a[1])
@@ -2329,7 +2407,13 @@ export interface BudgetLineRow {
   locked: boolean;
   sortOrder: number;
   notes: string | null;
-  actual: number; // what the month's transactions say so far
+  // What the month's transactions say so far. On a debt line that's PAYDOWN — `paid` minus
+  // `charged` — because a payment that only clears this month's new card purchases moves the
+  // balance nowhere (those purchases already count in their own envelopes). Negative means
+  // the balance grew. Both sides are 0 on non-debt lines.
+  actual: number;
+  paid: number;
+  charged: number;
   // Category display
   color: string | null;
   emoji: string | null;
@@ -2399,42 +2483,6 @@ export async function getBudgetedPeriodLabels(): Promise<Set<string>> {
   return new Set(rows.map((r) => r.label));
 }
 
-/**
- * Debit payments toward each liability in a month, keyed by accountId. A payment counts when
- * it's linked (bill_id) to the account's bill and did NOT happen on the liability itself — a
- * card's own linked rows are purchases and interest, not payments.
- */
-async function debtPaymentsForPeriod(
-  periodLabel: string,
-  accts: { id: number; billId: number | null }[],
-): Promise<Map<number, number>> {
-  const billIds = accts.map((a) => a.billId).filter((b): b is number => b != null);
-  const out = new Map<number, number>();
-  if (!billIds.length) return out;
-  const rows = await db
-    .select({
-      billId: transactions.billId,
-      accountId: transactions.accountId,
-      total: sql<string>`COALESCE(SUM(${transactions.amount}), 0)`,
-    })
-    .from(transactions)
-    .innerJoin(periods, eq(periods.id, transactions.periodId))
-    .where(
-      and(
-        eq(periods.label, periodLabel),
-        eq(transactions.direction, "Debit"),
-        inArray(transactions.billId, billIds),
-      ),
-    )
-    .groupBy(transactions.billId, transactions.accountId);
-  for (const r of rows) {
-    const acct = accts.find((a) => a.billId === r.billId);
-    if (!acct || r.accountId === acct.id) continue;
-    out.set(acct.id, (out.get(acct.id) ?? 0) + (toNum(r.total) ?? 0));
-  }
-  return out;
-}
-
 export async function getBudgetView(periodLabel: string): Promise<BudgetView | null> {
   await requireSession();
   const [row] = await db
@@ -2484,10 +2532,7 @@ export async function getBudgetView(periodLabel: string): Promise<BudgetView | n
   const nowBy = new Map(liabNow.map((l) => [l.id, l]));
   const startBy = new Map(liabStart.map((l) => [l.id, l]));
 
-  const debtAccts = lines
-    .filter((l) => l.kind === "debt" && l.accountId != null)
-    .map((l) => ({ id: l.accountId!, billId: nowBy.get(l.accountId!)?.billId ?? null }));
-  const paidBy = await debtPaymentsForPeriod(periodLabel, debtAccts);
+  const debtBy = (await getDebtFlows(periodLabel)).get(periodLabel)?.accounts ?? new Map();
 
   // "Debt Repayment" debits nobody claimed: total in the category minus what the lines matched.
   // Split-aware like the category chart — a row counts its own share when it's filed as Debt
@@ -2516,9 +2561,7 @@ export async function getBudgetView(periodLabel: string): Promise<BudgetView | n
   ]);
   const repay = { total: round2((toNum(repayOwn?.total) ?? 0) + (toNum(repayParts?.total) ?? 0)) };
 
-  const actualIncome = cashflow
-    .filter((c) => c.label === periodLabel && c.direction === "Credit")
-    .reduce((s, c) => s + (toNum(c.total) ?? 0), 0);
+  const actualIncome = cashflow.find((c) => c.label === periodLabel)?.income ?? 0;
 
   const rows: BudgetLineRow[] = lines.map((l) => {
     const isDebt = l.kind === "debt";
@@ -2528,6 +2571,7 @@ export async function getBudgetView(periodLabel: string): Promise<BudgetView | n
     const now = l.accountId != null ? nowBy.get(l.accountId) : undefined;
     const before = l.accountId != null ? startBy.get(l.accountId) : undefined;
     const meta = l.category ? catMeta.get(l.category) : undefined;
+    const flow = isDebt && l.accountId != null ? debtBy.get(l.accountId) : undefined;
     return {
       id: l.id,
       kind,
@@ -2540,13 +2584,9 @@ export async function getBudgetView(periodLabel: string): Promise<BudgetView | n
       locked: !!l.locked,
       sortOrder: l.sortOrder,
       notes: l.notes,
-      actual: isDebt
-        ? l.accountId != null
-          ? paidBy.get(l.accountId) ?? 0
-          : 0
-        : l.category
-          ? spendBy.get(l.category) ?? 0
-          : 0,
+      actual: isDebt ? (flow?.paydown ?? 0) : l.category ? spendBy.get(l.category) ?? 0 : 0,
+      paid: flow?.paid ?? 0,
+      charged: flow?.charged ?? 0,
       color: meta?.color ?? null,
       emoji: meta?.emoji ?? null,
       accountLabel: now ? now.label ?? `••${now.accountNumber}` : null,
@@ -2977,7 +3017,7 @@ export async function getCashProjection(view: BudgetView): Promise<CashProjectio
     const own = isViewed ? view : await getBudgetView(m.label);
     // No budget of its own → the viewed month's plan, untouched (actual = 0), as the best guess.
     // Negative ids so a stand-in line never collides with a real one.
-    const lines = own ? own.lines : view.lines.map((l) => ({ ...l, actual: 0, id: -l.id }));
+    const lines = own ? own.lines : view.lines.map((l) => ({ ...l, actual: 0, paid: 0, charged: 0, id: -l.id }));
     segments.push(
       segmentFor(
         m.label,

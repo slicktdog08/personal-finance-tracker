@@ -50,7 +50,7 @@ export function Envelope({
 }) {
   const accent = color || "#6366f1";
   const over = used != null && used > planned;
-  const pct = planned > 0 && used != null ? Math.min(100, (used / planned) * 100) : 0;
+  const pct = planned > 0 && used != null ? Math.min(100, Math.max(0, (used / planned) * 100)) : 0;
   const overPct = planned > 0 && used != null && over ? Math.min(100, ((used - planned) / Math.max(used, 1)) * 100) : 0;
   return (
     <div

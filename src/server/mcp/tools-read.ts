@@ -182,7 +182,7 @@ export function registerReadTools(server: McpServer) {
     {
       title: "Month summary",
       description:
-        "Income vs. spending for one month, spending by category, bills (planned / settled / outstanding) and the budget plan-vs-actual if a budget exists. The core tool for 'how did last month go' and 'where is my money going'. Cash withdrawals are reconciled so nothing is double counted.",
+        "Income vs. spending for one month, spending by category, bills (planned / settled / outstanding) and the budget plan-vs-actual if a budget exists. The core tool for 'how did last month go' and 'where is my money going'. Cash withdrawals are reconciled so nothing is double counted. `spending` never includes debt payments: paying back a card's new purchases only rebalances it (the purchases are already counted). `debtPaydown` is payments minus new charges across every debt (negative = debt grew); `outgoing` = spending + debtPaydown, so `net` tracks the change in cash on hand.",
       inputSchema: z.object({ period: periodArg }),
       annotations: READ_ONLY,
     },
@@ -195,15 +195,17 @@ export function registerReadTools(server: McpServer) {
         billsForPeriod(label),
         getBudgetView(label),
       ]);
-      const month = flows.filter((f) => f.label === label);
-      const income = money0(month.find((f) => f.direction === "Credit")?.total);
-      const spending = money0(month.find((f) => f.direction === "Debit")?.total);
+      const month = flows.find((f) => f.label === label);
+      const income = money0(month?.income);
+      const spending = money0(month?.spending);
+      const debtPaydown = money0(month?.debtPaydown);
+      const outgoing = money0(month?.outgoing);
       const settledBills = (bills ?? []).filter((b) => b.settled && !b.cancelled);
       const openBills = (bills ?? []).filter((b) => !b.settled && !b.cancelled);
 
       return ok({
         period: label,
-        cashflow: { income, spending, net: money0(income - spending) },
+        cashflow: { income, spending, debtPaydown, outgoing, net: money0(income - outgoing) },
         spendingByCategory: categories.map((c) => ({ category: c.category ?? "Uncategorized", amount: money0(c.total) })),
         bills: bills
           ? {
@@ -229,6 +231,7 @@ export function registerReadTools(server: McpServer) {
                 actual: money0(l.actual),
                 remaining: money0(l.planned - l.actual),
                 isTarget: l.isTarget,
+                ...(l.kind === "debt" ? { paid: money0(l.paid), charged: money0(l.charged) } : {}),
               })),
               plannedTotal: money0(budget.lines.reduce((s, l) => s + l.planned, 0)),
               actualTotal: money0(budget.lines.reduce((s, l) => s + l.actual, 0)),
@@ -244,7 +247,7 @@ export function registerReadTools(server: McpServer) {
     {
       title: "Spending trends",
       description:
-        "Income, spending and net for each of the last N months, plus a category × month matrix. Use to spot drift ('dining has doubled since June') and to estimate a realistic monthly burn. Remember months before ~2026-06 may be incomplete.",
+        "Income, spending, debt paydown (payments minus new charges) and net for each of the last N months, plus a category × month matrix. Use to spot drift ('dining has doubled since June') and to estimate a realistic monthly burn. Remember months before ~2026-06 may be incomplete.",
       inputSchema: z.object({
         months: z.number().int().min(1).max(12).default(6).describe("How many months back from `endPeriod`."),
         endPeriod: periodArg,
@@ -259,13 +262,7 @@ export function registerReadTools(server: McpServer) {
         getCashflowByPeriod(),
         Promise.all(labels.map((l) => getCategorySpend(l))),
       ]);
-      const byLabel = new Map<string, { income: number; spending: number }>();
-      for (const f of flows) {
-        const row = byLabel.get(f.label) ?? { income: 0, spending: 0 };
-        if (f.direction === "Credit") row.income = money0(f.total);
-        else if (f.direction === "Debit") row.spending = money0(f.total);
-        byLabel.set(f.label, row);
-      }
+      const byLabel = new Map(flows.map((f) => [f.label, f]));
       const categorySet = new Set<string>();
       perMonth.forEach((rows) => rows.forEach((r) => categorySet.add(r.category ?? "Uncategorized")));
       const matrix = [...categorySet].map((category) => ({
@@ -277,8 +274,14 @@ export function registerReadTools(server: McpServer) {
       matrix.sort((a, b) => Object.values(b.byMonth).reduce((s, v) => s + v, 0) - Object.values(a.byMonth).reduce((s, v) => s + v, 0));
       return ok({
         months: labels.map((l) => {
-          const row = byLabel.get(l) ?? { income: 0, spending: 0 };
-          return { period: l, income: row.income, spending: row.spending, net: money0(row.income - row.spending) };
+          const row = byLabel.get(l);
+          return {
+            period: l,
+            income: money0(row?.income),
+            spending: money0(row?.spending),
+            debtPaydown: money0(row?.debtPaydown),
+            net: money0((row?.income ?? 0) - (row?.outgoing ?? 0)),
+          };
         }),
         categories: matrix,
       });
@@ -568,7 +571,7 @@ export function registerReadTools(server: McpServer) {
     {
       title: "Budget for a month",
       description:
-        "The month's budget plan with every line's planned vs. actual, the debt target, planned vs. actual income, and cash at month start vs. now. Returns null when the month has no budget.",
+        "The month's budget plan with every line's planned vs. actual, the debt target, planned vs. actual income, and cash at month start vs. now. A debt line's actual is PAYOFF: linked payments minus new charges on that card this month (paying back new spending only rebalances the card); `paid` and `charged` give both sides. Returns null when the month has no budget.",
       inputSchema: z.object({ period: periodArg }),
       annotations: READ_ONLY,
     },
@@ -599,6 +602,7 @@ export function registerReadTools(server: McpServer) {
             actual: money0(l.actual),
             remaining: money0(l.planned - l.actual),
             minimum: money(l.minimum),
+            ...(l.kind === "debt" ? { paid: money0(l.paid), charged: money0(l.charged) } : {}),
             isTarget: l.isTarget,
             balance: money(l.balance),
             balanceStart: money(l.balanceStart),

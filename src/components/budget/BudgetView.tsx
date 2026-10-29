@@ -145,7 +145,7 @@ export function BudgetView({
         />
 
         <div className="grid grid-cols-2 md:grid-cols-4 gap-x-8 gap-y-6">
-          <Stat label="Spent so far" value={formatMoney(spent)} hint={`of ${formatMoney(debtPlanned + spendPlanned)} planned`} tone={spent > debtPlanned + spendPlanned ? "bad" : undefined} />
+          <Stat label="Used so far" value={formatMoney(spent)} hint={`spending + debt paydown, of ${formatMoney(debtPlanned + spendPlanned)} planned`} tone={spent > debtPlanned + spendPlanned ? "bad" : undefined} />
           <Stat label="Left to spend" value={formatMoney(Math.max(0, spendPlanned - sum(spendLines, "actual")))} hint="everyday envelopes" />
           <Stat label="Extra to snowball" value={formatMoney(extra)} hint={target ? `on ${target.label}` : "no target"} tone="accent" />
           <Stat
@@ -180,8 +180,16 @@ export function BudgetView({
               color={l.isTarget ? COLORS.extra : COLORS.debt}
               planned={l.planned}
               used={l.actual}
-              usedLabel="paid"
-              remainingLabel={l.actual >= l.planned ? "✓ paid" : `${formatMoney(l.planned - l.actual)} to go`}
+              usedLabel="paid down"
+              remainingLabel={
+                l.actual < 0 ? (
+                  <span className="text-red-600 dark:text-red-400">{formatMoney(-l.actual)} more charged than paid</span>
+                ) : l.actual >= l.planned ? (
+                  "✓ paid down"
+                ) : (
+                  `${formatMoney(l.planned - l.actual)} to go`
+                )
+              }
               aside={
                 lineExtra > 0 ? <span className="text-sky-600 dark:text-sky-400 tabular-nums">+{formatMoney(lineExtra)} extra</span> : parked ? <span className="text-neutral-400">minimum only</span> : l.linkedBillId == null ? <span className="text-amber-600">no bill linked</span> : undefined
               }
@@ -192,6 +200,12 @@ export function BudgetView({
               onRemove={() => run(() => deleteBudgetLine(l.id))}
               control={
                 <div className="space-y-3">
+                  {/* Paydown is net of new charges: paying back this month's card purchases only rebalances the card. */}
+                  {l.charged !== 0 && (
+                    <p className="text-xs text-neutral-500 tabular-nums">
+                      Paid {formatMoney(l.paid)} − {formatMoney(l.charged)} new charges = {formatMoney(l.actual)} paid down
+                    </p>
+                  )}
                   {controlFor(l, min, Math.max(500, Math.ceil(Math.max(l.planned * 1.5, l.balance ?? 0) / 50) * 50), l.isTarget ? COLORS.extra : COLORS.debt)}
                   {!l.isTarget && !parked && (
                     <button type="button" onClick={() => run(() => setBudgetTarget(view.id, l.id))} className="text-xs text-indigo-600 hover:underline">
