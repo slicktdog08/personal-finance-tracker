@@ -1,9 +1,13 @@
+import { Suspense } from "react";
 import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { Nav } from "@/components/Nav";
 import { SyncNotice } from "@/components/SyncNotice";
 import { SignOutButton } from "@/components/auth/SignOutButton";
+import { LaunchSplash } from "@/components/ui/LaunchSplash";
+import { NavProgress } from "@/components/ui/NavProgress";
+import { SPLASH_SEEN_KEY } from "@/lib/launch-splash";
 import { getSession } from "@/server/auth/session";
 
 const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
@@ -30,8 +34,25 @@ export default async function RootLayout({
   const session = await getSession();
 
   return (
-    <html lang="en" className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}>
+    // suppressHydrationWarning: the pre-paint script below may add data-splash to <html>.
+    <html
+      lang="en"
+      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      suppressHydrationWarning
+    >
+      <head>
+        {/* Runs before first paint so a reload mid-session never flashes the splash. */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `try{if(sessionStorage.getItem(${JSON.stringify(SPLASH_SEEN_KEY)}))document.documentElement.dataset.splash="off"}catch(e){}`,
+          }}
+        />
+      </head>
       <body className="min-h-full flex flex-col bg-neutral-50 text-neutral-900 dark:bg-neutral-950 dark:text-neutral-100">
+        <LaunchSplash />
+        <Suspense fallback={null}>
+          <NavProgress />
+        </Suspense>
         {session && <Nav email={session.email ?? session.username} signOut={<SignOutButton />} />}
         {session && <SyncNotice />}
         <main className="flex-1 w-full max-w-7xl mx-auto px-4 py-6">{children}</main>
