@@ -1,8 +1,9 @@
+import { Badge, Card, DataTable, EmptyState, Glyph, Icon, Money, PageHeader, StatTile, buttonClass, type VarStyle } from "@/components/ds";
 import Link from "next/link";
 import { SetupNotice } from "@/components/SetupNotice";
-import { ColorBadge } from "@/components/ColorBadge";
 import { BillMerge } from "@/components/bills/BillMerge";
 import { BillRename } from "@/components/bills/BillRename";
+import { BillCategory } from "@/components/bills/BillCategory";
 import { BillTransactions } from "@/components/bills/BillTransactions";
 import {
   getBillById,
@@ -11,9 +12,13 @@ import {
   getStatusConfig,
   getPaymentTypeConfig,
   getBillNames,
+  getCategoryOptionsRich,
+  getBillGuessedCategory,
 } from "@/server/queries";
 import { formatMoney, toNum } from "@/server/lib/money";
-import { prettyPeriod } from "@/server/lib/period";
+import { MONTH_ABBR, prettyPeriod } from "@/server/lib/period";
+import { todayIso } from "@/server/lib/pay-schedule";
+import { billIcon } from "@/components/bills/billGlyph";
 
 export const dynamic = "force-dynamic";
 
@@ -25,140 +30,167 @@ export default async function BillDetailPage({
   const { id } = await params;
   const billId = Number(id);
 
-  let bill, history, linked, statuses, payments, allBills;
+  let bill, history, linked, statuses, payments, allBills, categoryNames;
   try {
     bill = await getBillById(billId);
-    if (!bill) {
-      return (
-        <div className="space-y-3">
-          <p className="text-neutral-500">Bill not found.</p>
-          <Link href="/settings/bills" className="text-blue-600 hover:underline">
-            ← Back to bills (Settings)
-          </Link>
-        </div>
-      );
-    }
-    [history, linked, statuses, payments, allBills] = await Promise.all([
-      getBillHistory(billId),
-      getBillTransactions(billId),
-      getStatusConfig(),
-      getPaymentTypeConfig(),
-      getBillNames(),
-    ]);
+    if (bill)
+      [history, linked, statuses, payments, allBills, categoryNames] = await Promise.all([
+        getBillHistory(billId),
+        getBillTransactions(billId),
+        getStatusConfig(),
+        getPaymentTypeConfig(),
+        getBillNames(),
+        getCategoryOptionsRich(),
+      ]);
   } catch (e) {
-    return <SetupNotice error={e instanceof Error ? e.message : String(e)} />;
+    return <SetupNotice error={e} />;
+  }
+  if (!bill || !history || !linked || !statuses || !payments || !allBills || !categoryNames) {
+    return (
+      <EmptyState
+        icon="receipt"
+        title="Bill not found"
+        body="It may have been merged into another bill."
+        action={
+          <Link href="/settings/bills" className={buttonClass({ variant: "secondary", size: "sm" })}>
+            Back to recurring bills
+          </Link>
+        }
+      />
+    );
   }
 
   const statusColor = new Map(statuses.map((s) => [s.name, s.color]));
-  const statusEmoji = new Map(statuses.map((s) => [s.name, s.emoji]));
   const paymentColor = new Map(payments.map((p) => [p.name, p.color]));
-  const paymentEmoji = new Map(payments.map((p) => [p.name, p.emoji]));
   const settled = new Set(statuses.filter((s) => s.isSettled).map((s) => s.name));
 
-  const billed = history.reduce((s, h) => s + (toNum(h.amount) ?? 0), 0);
+  const amountOf = (h: (typeof history)[number]) => toNum(h.amount) ?? 0;
+  const billed = history.reduce((s, h) => s + amountOf(h), 0);
   const paidRows = history.filter((h) => settled.has(h.status));
-  const paid = paidRows.reduce((s, h) => s + (toNum(h.amount) ?? 0), 0);
+  const paid = paidRows.reduce((s, h) => s + amountOf(h), 0);
+  const latest = history[0] ?? null; // newest first
+  const recent = history.slice(0, 6);
+  const avg6 = recent.length ? recent.reduce((s, h) => s + amountOf(h), 0) / recent.length : 0;
+  const thisYear = Number(todayIso().slice(0, 4));
+  const paidThisYear = paidRows.filter((h) => h.year === thisYear);
   const others = allBills.filter((b) => b.id !== billId);
+  // What the old transaction-majority guess produces, shown so "unset" is never a mystery.
+  const guessedCategory = await getBillGuessedCategory(billId);
+  // Oldest → newest for the chart, last twelve months on record.
+  const chart = history.slice(0, 12).reverse();
+  const chartMax = Math.max(1, ...chart.map(amountOf));
 
   return (
     <div className="space-y-6">
-      <div>
-        <Link href="/settings/bills" className="text-sm text-neutral-500 hover:underline">
-          ← Bills
-        </Link>
-        <div className="flex items-center gap-3 flex-wrap">
-          <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
+      <PageHeader
+        showTitleOnMobile
+        eyebrow={
+          <Link href="/settings/bills" className="inline-flex items-center gap-1 hover:text-accent-text">
+            <Icon name="arrow-left" size={14} /> Recurring bills
+          </Link>
+        }
+        title={
+          <span className="inline-flex flex-wrap items-center gap-x-3 gap-y-1">
+            <Glyph icon={billIcon(bill.name, bill.isDebt)} color={latest ? statusColor.get(latest.status) : undefined} size="lg" />
             {bill.name}
-            {bill.isDebt ? <span title="Debt">💳</span> : null}
-          </h1>
-          <BillRename id={billId} name={bill.name} />
+            {bill.isDebt ? <Badge label="Debt" variant="outline" size="sm" dot={false} /> : null}
+          </span>
+        }
+        description="This is the bill's general name. Monthly line items can keep their own, more detailed names — renaming here doesn't change past line items."
+        actions={<BillRename id={billId} name={bill.name} />}
+      />
+
+      <Card>
+        <div className="mp-grid mp-grid--keep2" style={{ "--cols": 4 } as VarStyle}>
+          <StatTile
+            label="Latest"
+            value={latest ? amountOf(latest) : "—"}
+            sub={
+              latest ? (
+                <span className="inline-flex flex-wrap items-center gap-1.5">
+                  {prettyPeriod(latest.year, latest.month)}
+                  <Badge label={latest.status} color={statusColor.get(latest.status)} variant="solid" size="sm" />
+                </span>
+              ) : (
+                "No months yet"
+              )
+            }
+          />
+          <StatTile label="6-month average" value={avg6} sub={`Over ${recent.length} month${recent.length === 1 ? "" : "s"}`} />
+          <StatTile label="Paid this year" value={paidThisYear.reduce((s, h) => s + amountOf(h), 0)} sub={`${paidThisYear.length} payment${paidThisYear.length === 1 ? "" : "s"} in ${thisYear}`} />
+          <StatTile label="Total paid" value={paid} kind="income" sub={`${paidRows.length} of ${history.length} months paid`} />
         </div>
-        <p className="text-xs text-neutral-500 mt-1">
-          This is the bill&apos;s general name. Monthly line items can keep their own, more
-          detailed names — renaming here doesn&apos;t change past line items.
-        </p>
-      </div>
+        <div className="mt-3 text-sm text-fg-2">
+          <Money value={billed} kind="neutral" /> billed across {history.length} month{history.length === 1 ? "" : "s"} tracked.
+        </div>
+      </Card>
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <Stat label="Months tracked" value={String(history.length)} />
-        <Stat label="Times paid" value={String(paidRows.length)} />
-        <Stat label="Total billed" value={formatMoney(billed)} />
-        <Stat label="Total paid" value={formatMoney(paid)} accent />
-      </div>
+      <Card title="Budget envelope">
+        <BillCategory
+          id={billId}
+          category={bill.category ?? null}
+          inherited={guessedCategory}
+          options={categoryNames.filter((c) => c.active)}
+        />
+      </Card>
 
-      <section className="space-y-2">
-        <h2 className="text-lg font-semibold">History</h2>
-        <div className="overflow-x-auto rounded-lg border border-neutral-200 dark:border-neutral-800">
-          <table className="w-full text-sm">
-            <thead className="bg-neutral-100 dark:bg-neutral-900 text-left">
-              <tr>
-                <th className="px-3 py-2 font-medium">Month</th>
-                <th className="px-3 py-2 font-medium text-right">Amount</th>
-                <th className="px-3 py-2 font-medium">Status</th>
-                <th className="px-3 py-2 font-medium">Due</th>
-                <th className="px-3 py-2 font-medium">Payment</th>
-              </tr>
-            </thead>
-            <tbody>
-              {history.map((h) => (
-                <tr key={h.instanceId} className="border-t border-neutral-200 dark:border-neutral-800">
-                  <td className="px-3 py-1.5">
-                    <Link href={`/months/${h.label}`} className="text-blue-600 hover:underline">
-                      {prettyPeriod(h.year, h.month)}
-                    </Link>
-                  </td>
-                  <td className="px-3 py-1.5 text-right tabular-nums">{formatMoney(h.amount)}</td>
-                  <td className="px-3 py-1.5">
-                    <ColorBadge
-                      label={h.status}
-                      color={statusColor.get(h.status)}
-                      emoji={statusEmoji.get(h.status)}
-                    />
-                  </td>
-                  <td className="px-3 py-1.5">{h.dueDay ?? "—"}</td>
-                  <td className="px-3 py-1.5">
-                    {h.paymentType ? (
-                      <ColorBadge
-                        label={h.paymentType}
-                        color={paymentColor.get(h.paymentType)}
-                        emoji={paymentEmoji.get(h.paymentType)}
-                      />
-                    ) : (
-                      "—"
-                    )}
-                  </td>
-                </tr>
+      <Card title="History" meta={history.length ? `${history.length}` : undefined} padded={false}>
+        {chart.length > 1 && (
+          // Answers "is this bill creeping up?" — amounts per month, the newest in the accent.
+          <div className="px-5 pb-2 pt-4 max-md:px-3.5" aria-label="Amount by month" role="img">
+            <div className="grid h-[104px] items-end gap-1.5" style={{ gridTemplateColumns: `repeat(${chart.length}, minmax(0, 1fr))` }}>
+              {chart.map((h, i) => (
+                <div key={h.instanceId} className="flex h-full flex-col items-center justify-end gap-1" title={`${prettyPeriod(h.year, h.month)}: ${formatMoney(h.amount)} · ${h.status}`}>
+                  <div
+                    className={`w-full max-w-10 rounded-[6px] ${i === chart.length - 1 ? "bg-accent" : settled.has(h.status) ? "bg-accent-soft-2" : "bg-line-2"}`}
+                    style={{ height: `${Math.max(2, (amountOf(h) / chartMax) * 80)}px` }}
+                  />
+                  <span className="text-[11px] text-fg-3">{MONTH_ABBR[h.month - 1]}</span>
+                </div>
               ))}
-              {history.length === 0 && (
-                <tr>
-                  <td colSpan={5} className="px-3 py-6 text-center text-neutral-500">
-                    No history.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </section>
+            </div>
+          </div>
+        )}
+        <DataTable
+          rows={history}
+          rowKey={(h) => h.instanceId}
+          columns={[
+            {
+              key: "month",
+              header: "Month",
+              render: (h) => (
+                <Link href={`/months/${h.label}`} className="font-medium text-accent-text hover:underline">
+                  {prettyPeriod(h.year, h.month)}
+                </Link>
+              ),
+            },
+            { key: "amount", header: "Amount", num: true, render: (h) => <Money value={h.amount} kind="neutral" /> },
+            { key: "status", header: "Status", render: (h) => <Badge label={h.status} color={statusColor.get(h.status)} variant="solid" /> },
+            { key: "due", header: "Due", shrink: true, render: (h) => <span className="tnum text-fg-2">{h.dueDay != null ? `${MONTH_ABBR[h.month - 1]} ${h.dueDay}` : "—"}</span> },
+            { key: "payment", header: "Payment", render: (h) => <Badge label={h.paymentType} color={h.paymentType ? paymentColor.get(h.paymentType) : undefined} /> },
+          ]}
+          mobile={{
+            title: (h) => (
+              <Link href={`/months/${h.label}`} className="hover:text-accent-text">
+                {prettyPeriod(h.year, h.month)}
+              </Link>
+            ),
+            sub: (h) => (
+              <>
+                <Badge label={h.status} color={statusColor.get(h.status)} variant="solid" size="sm" />
+                {h.dueDay != null && <span className="tnum">Due {MONTH_ABBR[h.month - 1]} {h.dueDay}</span>}
+              </>
+            ),
+            amount: (h) => <Money value={h.amount} kind="neutral" />,
+            meta: (h) => h.paymentType ?? "",
+          }}
+          empty={<EmptyState compact icon="history" title="No history yet" body="This bill hasn't been on a month yet." />}
+        />
+      </Card>
 
       <BillTransactions billId={billId} billName={bill.name} rows={linked} others={others} />
 
       <BillMerge currentId={billId} currentName={bill.name} others={others} />
-    </div>
-  );
-}
-
-function Stat({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
-  return (
-    <div
-      className={`rounded-lg border p-4 ${
-        accent
-          ? "border-blue-300 bg-blue-50 dark:border-blue-800 dark:bg-blue-950/30"
-          : "border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-900"
-      }`}
-    >
-      <div className="text-xs uppercase tracking-wide text-neutral-500">{label}</div>
-      <div className="mt-1 text-2xl font-semibold tabular-nums">{value}</div>
     </div>
   );
 }

@@ -2,8 +2,8 @@ pipeline {
     agent any
 
     parameters {
-        string(name: 'DOMAIN', defaultValue: 'finance.example.com', description: 'Domain to deploy and issue a TLS cert for')
-        string(name: 'CERTBOT_EMAIL', defaultValue: 'you@example.com', description: 'Contact address Let\'s Encrypt registers for renewal notices')
+        string(name: 'DOMAIN', defaultValue: '', description: 'Domain to deploy and issue a TLS cert for. Blank = the host of APP_URL in .env.production')
+        string(name: 'CERTBOT_EMAIL', defaultValue: '', description: 'Contact address Let\'s Encrypt registers for renewal notices (first cert only). Blank = CERTBOT_EMAIL in .env.production')
         booleanParam(name: 'RUN_MIGRATIONS', defaultValue: false, description: 'Run `drizzle-kit migrate` against the production DB before swapping containers (journaled migrations 0000-0004 only)')
         booleanParam(name: 'APPLY_SQL', defaultValue: true, description: 'Apply every hand-written migration in drizzle/ not yet recorded in the sql_migrations table (scripts/apply-sql.ts --pending) before swapping containers. Already-applied files are skipped, so leaving this on is safe.')
     }
@@ -50,8 +50,13 @@ pipeline {
         stage("Deploy Nginx Config & TLS") {
             steps {
                 script {
-                    def domain = params.DOMAIN
-                    def email = params.CERTBOT_EMAIL
+                    // Personal values live in .env.production (restored above from the Jenkins
+                    // credential), not in this public file: the domain falls back to APP_URL's host,
+                    // the certbot address to CERTBOT_EMAIL.
+                    def envVal = { key -> sh(returnStdout: true, script: "sed -n 's/^${key}=//p' .env | head -1 | tr -d \"\\\"' \"").trim() }
+                    def domain = params.DOMAIN?.trim() ?: envVal('APP_URL').replaceAll('^https?://', '').replaceAll('[/:].*$', '')
+                    def email = params.CERTBOT_EMAIL?.trim() ?: envVal('CERTBOT_EMAIL')
+                    if (!domain) { error('No DOMAIN parameter and no APP_URL in .env.production') }
                     def host = '172.17.0.1' // Docker bridge gateway — reaches the VPS host from inside Jenkins container
                     sshagent(credentials: ['vps-deploy-key']) {
                         sh """
@@ -67,6 +72,7 @@ pipeline {
                             # Get cert if needed, otherwise reinstall into nginx config
                             CERT_EXISTS=\$(ssh deployer@${host} '[ -f /etc/letsencrypt/live/${domain}/fullchain.pem ] && echo yes || echo no')
                             if [ "\$CERT_EXISTS" = "no" ]; then
+                                [ -n "${email}" ] || { echo "First certificate needs CERTBOT_EMAIL (parameter or .env.production)"; exit 1; }
                                 ssh deployer@${host} "sudo certbot-deploy --nginx -d ${domain} --non-interactive --agree-tos -m ${email}"
                             else
                                 ssh deployer@${host} "sudo certbot-deploy install --nginx --cert-name ${domain} --non-interactive"

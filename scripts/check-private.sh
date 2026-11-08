@@ -11,7 +11,7 @@ set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
 fail=0
-blocked='^(\.env($|\.)|config/advisor-profile\.json$|planning/(progress|projects)/|private/|notion_data/|\.setting/|temp/)'
+blocked='^(\.env($|\.)|config/advisor-profile\.json$|planning/(progress|projects)/|private/|notion_data/|design/|\.setting/|temp/)'
 while IFS= read -r f; do
   [ -z "$f" ] && continue
   case "$f" in .env.example|.env.test.example) continue ;; esac

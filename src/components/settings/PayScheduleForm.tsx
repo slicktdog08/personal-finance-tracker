@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
 import { savePaySchedule, clearPaySchedule } from "@/server/actions/pay-schedule";
 import {
   PAY_FREQUENCIES,
@@ -12,9 +11,7 @@ import { payCountdown, countdownLabel, paychecksPerYear } from "@/server/lib/pay
 import { formatMoney } from "@/server/lib/money";
 import { formatDate } from "@/server/lib/period";
 import { DEFAULT_DEPOSIT_MATCH, DEFAULT_DEPOSIT_WINDOW_DAYS } from "@/server/lib/payday-reconcile";
-
-const inputCls =
-  "border rounded px-2 py-1 text-sm bg-transparent border-neutral-300 dark:border-neutral-700";
+import { Button, Card, Field, Icon, Input, Notice, Segmented, Select } from "@/components/ds";
 
 export interface PayScheduleFormProps {
   initial: {
@@ -31,7 +28,6 @@ export interface PayScheduleFormProps {
 }
 
 export function PayScheduleForm({ initial, today }: PayScheduleFormProps) {
-  const router = useRouter();
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
@@ -83,212 +79,147 @@ export function PayScheduleForm({ initial, today }: PayScheduleFormProps) {
         return;
       }
       setSaved(true);
-      router.refresh();
     });
   };
 
   const reset = () => {
     start(async () => {
       await clearPaySchedule();
-      router.refresh();
     });
   };
 
+  const enterSubmits = (e: React.KeyboardEvent) => e.key === "Enter" && submit();
+
   return (
     <div className="space-y-5">
-      {/* Cadence picker — cards rather than a <select> so each option can carry its blurb. */}
-      <section className="rounded-lg border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-5">
-        <h2 className="text-sm font-semibold text-neutral-600 dark:text-neutral-300">
-          How often do you get paid?
-        </h2>
-        <div className="mt-3 grid gap-2 sm:grid-cols-2">
-          {PAY_FREQUENCIES.map((f) => {
-            const m = PAY_FREQUENCY_META[f];
-            const on = f === frequency;
-            return (
-              <button
-                key={f}
-                type="button"
-                onClick={() => setFrequency(f)}
-                className={`text-left rounded-lg border p-3 transition-colors ${
-                  on
-                    ? "border-blue-500 bg-blue-50 dark:bg-blue-950/40"
-                    : "border-neutral-200 dark:border-neutral-800 hover:border-blue-300"
-                }`}
-              >
-                <div className="font-medium text-sm">
-                  {m.emoji} {m.label}
-                </div>
-                <div className="text-xs text-neutral-500 mt-0.5">{m.blurb}</div>
-              </button>
-            );
-          })}
-        </div>
-      </section>
+      <Card title="When you get paid" meta="drives the payday countdown">
+        <div className="grid max-w-xl gap-4">
+          {/* Cadence: segmented from sm up; a select on phones, where four labels don't fit a row. */}
+          <Field label="How often do you get paid?" hint={meta.blurb}>
+            <Segmented
+              label="Pay frequency"
+              className="max-sm:hidden"
+              value={frequency}
+              onChange={setFrequency}
+              options={PAY_FREQUENCIES.map((f) => ({ value: f, label: PAY_FREQUENCY_META[f].label }))}
+            />
+            <Select
+              aria-label="Pay frequency"
+              className="sm:hidden"
+              value={frequency}
+              onChange={(e) => setFrequency(e.target.value as PayFrequency)}
+              options={PAY_FREQUENCIES.map((f) => ({ value: f, label: PAY_FREQUENCY_META[f].label }))}
+            />
+          </Field>
 
-      {/* Cadence-specific setup */}
-      <section className="rounded-lg border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-5 space-y-4">
-        <h2 className="text-sm font-semibold text-neutral-600 dark:text-neutral-300">
-          When does it land?
-        </h2>
-
-        {meta.usesDays ? (
-          <div className="flex flex-wrap items-end gap-4">
-            <label className="text-sm">
-              <div className="text-xs text-neutral-500 mb-1">
-                {frequency === "semimonthly" ? "First payday" : "Payday"}
+          {meta.usesDays ? (
+            <div className="space-y-1.5">
+              <div className="grid grid-cols-2 gap-3">
+                <Field label={frequency === "semimonthly" ? "First payday" : "Payday"} htmlFor="pay-day-one">
+                  <Input id="pay-day-one" type="number" min={1} max={31} value={dayOne} onChange={(e) => setDayOne(e.target.value)} onKeyDown={enterSubmits} />
+                </Field>
+                {frequency === "semimonthly" && (
+                  <Field label="Second payday" htmlFor="pay-day-two">
+                    <Input id="pay-day-two" type="number" min={1} max={31} value={dayTwo} onChange={(e) => setDayTwo(e.target.value)} onKeyDown={enterSubmits} />
+                  </Field>
+                )}
               </div>
-              <input
-                type="number"
-                min={1}
-                max={31}
-                value={dayOne}
-                onChange={(e) => setDayOne(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && submit()}
-                className={`${inputCls} w-24`}
-              />
-            </label>
-            {frequency === "semimonthly" && (
-              <label className="text-sm">
-                <div className="text-xs text-neutral-500 mb-1">Second payday</div>
-                <input
-                  type="number"
-                  min={1}
-                  max={31}
-                  value={dayTwo}
-                  onChange={(e) => setDayTwo(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && submit()}
-                  className={`${inputCls} w-24`}
-                />
-              </label>
-            )}
-            <p className="text-xs text-neutral-400 max-w-sm">
-              Day of the month. A date past the end of a short month slides to the last day — a
-              31st payday lands on the 30th in April. Weekends are not adjusted for.
-            </p>
-          </div>
-        ) : (
-          <div className="flex flex-wrap items-end gap-4">
-            <label className="text-sm">
-              <div className="text-xs text-neutral-500 mb-1">A recent payday</div>
-              <input
-                type="date"
-                value={anchorDate}
-                onChange={(e) => setAnchorDate(e.target.value)}
-                className={`${inputCls} w-44`}
-              />
-            </label>
-            <p className="text-xs text-neutral-400 max-w-sm">
-              Every {frequency === "weekly" ? "7" : "14"} days is counted off this date, forward and
-              back. Any real payday works — recent is easiest to remember.
-            </p>
-          </div>
-        )}
+              <p className="text-xs text-fg-3">
+                Day of the month. A date past the end of a short month slides to the last day, so a 31st payday lands on the
+                30th in April. Weekends are not adjusted for.
+              </p>
+            </div>
+          ) : (
+            <Field
+              label="A recent payday"
+              htmlFor="pay-anchor"
+              hint={`Every ${frequency === "weekly" ? "7" : "14"} days is counted off this date, forward and back. Any real payday works; recent is easiest to remember.`}
+            >
+              <Input id="pay-anchor" type="date" value={anchorDate} onChange={(e) => setAnchorDate(e.target.value)} className="max-w-52" />
+            </Field>
+          )}
 
-        <div className="pt-1">
-          <label className="text-sm">
-            <div className="text-xs text-neutral-500 mb-1">Estimated take-home per paycheck</div>
-            <input
-              inputMode="decimal"
-              placeholder="1850.00"
-              value={takeHome}
-              onChange={(e) => setTakeHome(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && submit()}
-              className={`${inputCls} w-40`}
-            />
-          </label>
-          <p className="text-xs text-neutral-400 mt-1">
-            What actually hits the bank, after taxes and deductions.
-            {perYear != null && (
-              <> Roughly {formatMoney(perYear)}/year across {paychecksPerYear(frequency)} checks.</>
-            )}
-          </p>
+          <Field
+            label="Typical paycheck"
+            htmlFor="pay-take-home"
+            hint={
+              <>
+                What actually hits the bank, after taxes and deductions.
+                {perYear != null && (
+                  <> Roughly {formatMoney(perYear)}/year across {paychecksPerYear(frequency)} checks.</>
+                )}
+              </>
+            }
+          >
+            <Input id="pay-take-home" money placeholder="1,850.00" value={takeHome} onChange={(e) => setTakeHome(e.target.value)} onKeyDown={enterSubmits} className="max-w-52" />
+          </Field>
         </div>
+      </Card>
 
-        {/* How the projection recognises a payday that already landed. Without this it adds the
-            scheduled amount on top of deposits already sitting in the balance. */}
-        <div className="pt-4 border-t border-neutral-200 dark:border-neutral-800 space-y-3">
-          <div className="text-xs uppercase tracking-wide text-neutral-500">Matching real deposits</div>
-          <label className="text-sm block">
-            <div className="text-xs text-neutral-500 mb-1">Deposit window (± days)</div>
-            <input
-              inputMode="numeric"
-              value={windowDays}
-              onChange={(e) => setWindowDays(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && submit()}
-              className={`${inputCls} w-20`}
-            />
-          </label>
-          <p className="text-xs text-neutral-400 max-w-md">
-            A split direct deposit pays its halves on different days, and a payday can land early
-            before a holiday. Payroll arriving within this many days of a scheduled payday counts as
-            that payday, so the projection only adds the part that hasn&apos;t shown up yet — rather
-            than the whole amount on top of money already in the account.
-          </p>
-          <label className="text-sm block">
-            <div className="text-xs text-neutral-500 mb-1">Payroll description pattern (optional)</div>
-            <input
+      {/* How the projection recognises a payday that already landed. Without this it adds the
+          scheduled amount on top of deposits already sitting in the balance. */}
+      <Card title="Matching real deposits">
+        <div className="grid max-w-xl gap-4">
+          <Field
+            label="Deposit window (± days)"
+            htmlFor="pay-window"
+            hint="A split direct deposit pays its halves on different days, and a payday can land early before a holiday. Payroll arriving within this many days of a scheduled payday counts as that payday, so the projection only adds the part that hasn't shown up yet."
+          >
+            <Input id="pay-window" inputMode="numeric" value={windowDays} onChange={(e) => setWindowDays(e.target.value)} onKeyDown={enterSubmits} className="max-w-28" />
+          </Field>
+          <Field
+            label="Payroll description pattern (optional)"
+            htmlFor="pay-match"
+            hint={
+              <>
+                Case-insensitive regular expression, alternatives separated by <code>|</code>. Leave it blank for the default
+                shown. If a paycheck&apos;s description doesn&apos;t match, the projection can&apos;t tell it apart from a refund:
+                it shows up as unexpected income on the budget screen, which is the cue to add the wording here.
+              </>
+            }
+          >
+            <Input
+              id="pay-match"
               placeholder={DEFAULT_DEPOSIT_MATCH}
               value={depositMatch}
               onChange={(e) => setDepositMatch(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && submit()}
-              className={`${inputCls} w-full max-w-md font-mono text-xs`}
+              onKeyDown={enterSubmits}
+              className="font-mono text-xs"
             />
-          </label>
-          <p className="text-xs text-neutral-400 max-w-md">
-            Case-insensitive regular expression, alternatives separated by <code>|</code>. Leave it
-            blank for the default above. If a paycheck&apos;s description doesn&apos;t match, the
-            projection can&apos;t tell it apart from a refund — it shows up as unexpected income on
-            the budget screen, which is the cue to add the wording here.
-          </p>
+          </Field>
         </div>
-      </section>
+      </Card>
 
       {/* Live preview of exactly what the dashboard will render */}
-      <section className="rounded-lg border border-indigo-300 bg-indigo-50 dark:border-indigo-800 dark:bg-indigo-950/30 p-5">
-        <div className="text-xs uppercase tracking-wide text-neutral-500">Preview</div>
+      <Card title="Preview" meta="what the dashboard shows">
         {preview ? (
-          <div className="mt-1">
-            <div className="text-3xl font-bold tabular-nums text-indigo-700 dark:text-indigo-300">
-              {countdownLabel(preview.daysUntil)}
-            </div>
-            <div className="mt-1 text-xs text-neutral-500">
+          <div>
+            <div className="font-display text-3xl font-semibold tabular-nums text-plan">{countdownLabel(preview.daysUntil)}</div>
+            <div className="mt-1 text-xs text-fg-3">
               Next payday {formatDate(preview.next)}
               {net != null && <> · {formatMoney(net)} incoming</>}
             </div>
           </div>
         ) : (
-          <div className="mt-1 text-sm text-neutral-500">
-            Fill in the fields above to see your countdown.
-          </div>
+          <div className="text-sm text-fg-3">Fill in the fields above to see your countdown.</div>
         )}
-      </section>
+      </Card>
 
-      {error && (
-        <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
-      )}
+      {error && <Notice tone="danger">{error}</Notice>}
 
-      <div className="flex items-center gap-3">
-        <button
-          type="button"
-          onClick={submit}
-          disabled={pending}
-          className="px-3 py-1.5 rounded-md bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 disabled:opacity-50"
-        >
+      <div className="flex flex-wrap items-center gap-3">
+        <Button onClick={submit} loading={pending} icon="check">
           {pending ? "Saving…" : "Save schedule"}
-        </button>
+        </Button>
         {saved && !pending && (
-          <span className="text-sm text-emerald-600 dark:text-emerald-400">Saved ✓</span>
+          <span className="inline-flex items-center gap-1 text-sm text-income">
+            <Icon name="circle-check" size={16} /> Saved
+          </span>
         )}
         {initial && (
-          <button
-            type="button"
-            onClick={reset}
-            disabled={pending}
-            className="text-sm text-neutral-500 hover:text-red-600 disabled:opacity-50"
-          >
+          <Button variant="ghost" icon="trash-2" onClick={reset} disabled={pending}>
             Remove schedule
-          </button>
+          </Button>
         )}
       </div>
     </div>

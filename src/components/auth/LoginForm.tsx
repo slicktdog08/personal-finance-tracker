@@ -5,11 +5,9 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { completeNewPassword, signIn } from "@/server/actions/auth";
 
-const inputCls =
-  "w-full border rounded px-3 py-2 text-sm bg-transparent border-neutral-300 dark:border-neutral-700 focus:outline-none focus:ring-2 focus:ring-neutral-900 dark:focus:ring-neutral-100";
+const inputCls = "mp-input";
 
-const buttonCls =
-  "w-full rounded px-3 py-2 text-sm font-medium bg-neutral-900 text-white dark:bg-white dark:text-neutral-900 disabled:opacity-50";
+const buttonCls = "mp-btn mp-btn--primary mp-btn--lg mp-btn--block";
 
 /** Set by Cognito when an admin-created user signs in with a temporary password. */
 type Challenge = { session: string; username: string };
@@ -75,14 +73,14 @@ export function LoginForm({ next }: { next: string }) {
         }}
       >
         <div>
-          <h1 className="text-lg font-semibold tracking-tight">Choose a new password</h1>
-          <p className="mt-1 text-sm text-neutral-600 dark:text-neutral-400">
+          <h1 className="font-display text-lg font-semibold tracking-tight">Choose a new password</h1>
+          <p className="mt-1 text-sm text-fg-2">
             This account still has its temporary password. Set a permanent one to continue.
           </p>
         </div>
 
         <div className="space-y-1">
-          <label className="text-sm font-medium" htmlFor="new-password">
+          <label className="mp-field__label" htmlFor="new-password">
             New password
           </label>
           <input
@@ -97,7 +95,7 @@ export function LoginForm({ next }: { next: string }) {
         </div>
 
         <div className="space-y-1">
-          <label className="text-sm font-medium" htmlFor="confirm-password">
+          <label className="mp-field__label" htmlFor="confirm-password">
             Confirm password
           </label>
           <input
@@ -111,7 +109,7 @@ export function LoginForm({ next }: { next: string }) {
           />
         </div>
 
-        {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
+        {error && <p className="text-sm text-danger" role="alert">{error}</p>}
 
         <button className={buttonCls} type="submit" disabled={pending}>
           {pending ? "Saving…" : "Set password and sign in"}
@@ -129,14 +127,11 @@ export function LoginForm({ next }: { next: string }) {
       }}
     >
       <div>
-        <h1 className="text-lg font-semibold tracking-tight">💳 Billing</h1>
-        <p className="mt-1 text-sm text-neutral-600 dark:text-neutral-400">
-          Sign in to continue.
-        </p>
+        <h1 className="font-display text-lg font-semibold tracking-tight">Sign in</h1>
       </div>
 
       <div className="space-y-1">
-        <label className="text-sm font-medium" htmlFor="email">
+        <label className="mp-field__label" htmlFor="email">
           Email
         </label>
         <input
@@ -152,7 +147,7 @@ export function LoginForm({ next }: { next: string }) {
       </div>
 
       <div className="space-y-1">
-        <label className="text-sm font-medium" htmlFor="password">
+        <label className="mp-field__label" htmlFor="password">
           Password
         </label>
         <input
@@ -166,7 +161,7 @@ export function LoginForm({ next }: { next: string }) {
         />
       </div>
 
-      {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
+      {error && <p className="text-sm text-danger" role="alert">{error}</p>}
 
       <button className={buttonCls} type="submit" disabled={pending}>
         {pending ? "Signing in…" : "Sign in"}
@@ -175,7 +170,7 @@ export function LoginForm({ next }: { next: string }) {
       <p className="text-center text-sm">
         <Link
           href="/forgot-password"
-          className="text-neutral-600 hover:underline dark:text-neutral-400"
+          className="text-fg-2 hover:text-accent-text hover:underline"
         >
           Forgot password?
         </Link>

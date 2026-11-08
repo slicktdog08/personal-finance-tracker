@@ -1,5 +1,7 @@
 #!/bin/sh
-# Renders nginx/template for a domain, substituting the app port read from .env.
+# Renders nginx/template for a domain, substituting the app port read from .env and the
+# server's own public IP (SERVER_PUBLIC_IP, optional: without it that allow-line is dropped,
+# so host cron calls to /api/sync/run need a device cert or must go via 127.0.0.1).
 # Lives in a script rather than inline in the Jenkinsfile so the quoting survives
 # Groovy -> shell, and so it can be run by hand to preview the config.
 #
@@ -15,4 +17,11 @@ port=$(sed -n 's/^PORT=//p' .env | head -1 | tr -d "\"'
 
 [ -n "$port" ] || { echo "PORT not found in .env" >&2; exit 1; }
 
-sed -e "s/__DOMAIN__/$domain/g" -e "s/__PORT__/$port/g" nginx/template
+server_ip=$(sed -n 's/^SERVER_PUBLIC_IP=//p' .env | head -1 | tr -d "\"' 	
+")
+
+if [ -n "$server_ip" ]; then
+  sed -e "s/__DOMAIN__/$domain/g" -e "s/__PORT__/$port/g" -e "s/__SERVER_IP__/$server_ip/g" nginx/template
+else
+  sed -e "s/__DOMAIN__/$domain/g" -e "s/__PORT__/$port/g" -e "/__SERVER_IP__/d" nginx/template
+fi

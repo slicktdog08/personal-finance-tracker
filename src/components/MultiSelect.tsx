@@ -75,7 +75,7 @@ export function MultiSelect({
               width: MENU_W,
               maxHeight: Math.min(MENU_MAX_H, pos.maxHeight),
             }}
-            className="z-50 overflow-auto rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 shadow-lg p-1"
+            className="z-50 overflow-auto rounded-lg border border-neutral-300 dark:border-neutral-700 bg-surface shadow-lg p-1"
           >
             {value.length > 0 && (
               <button

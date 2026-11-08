@@ -9,6 +9,9 @@ export interface SparkPoint {
 // latest point (the "present") and a ringed dot on the highlighted (selected) month. Leading
 // months with no recorded value are skipped so the line begins where the data begins. Renders
 // nothing with fewer than two data points — a lone point isn't a trend.
+//
+// `color` may be a CSS variable (var(--mp-accent)) so the line follows the theme; it's applied
+// through `style`, where var() is honored everywhere, rather than as an SVG presentation attribute.
 export function Sparkline({
   points,
   color,
@@ -58,24 +61,24 @@ export function Sparkline({
     >
       <defs>
         <linearGradient id={gid} x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor={color} stopOpacity="0.28" />
-          <stop offset="100%" stopColor={color} stopOpacity="0" />
+          <stop offset="0%" style={{ stopColor: color }} stopOpacity="0.16" />
+          <stop offset="100%" style={{ stopColor: color }} stopOpacity="0" />
         </linearGradient>
       </defs>
       <polygon points={area} fill={`url(#${gid})`} />
       <polyline
         points={line}
         fill="none"
-        stroke={color}
-        strokeWidth="2"
+        style={{ stroke: color }}
+        strokeWidth="1.5"
         strokeLinecap="round"
         strokeLinejoin="round"
         vectorEffect="non-scaling-stroke"
       />
       {hi && hi.i !== last.i && (
-        <circle cx={x(hi.i)} cy={y(hi.value)} r="3.5" fill="#fff" stroke={color} strokeWidth="2" />
+        <circle cx={x(hi.i)} cy={y(hi.value)} r="3.5" style={{ fill: "var(--mp-bg-surface)", stroke: color }} strokeWidth="2" />
       )}
-      <circle cx={x(last.i)} cy={y(last.value)} r="3" fill={color} />
+      <circle cx={x(last.i)} cy={y(last.value)} r="3" style={{ fill: color }} />
       {/* Invisible hover targets for a per-point value tooltip. */}
       {defined.map((d) => (
         <rect

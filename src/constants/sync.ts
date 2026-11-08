@@ -13,6 +13,8 @@ export const SOURCE_LABELS: Record<string, string> = {
   import: "CSV import",
   pdf: "PDF statement",
   manual: "Entered by hand",
+  simplefin: "Bank sync (SimpleFIN)",
+  plaid: "Bank sync (Plaid)",
 };
 
 export function sourceLabel(source: string | null | undefined): string {

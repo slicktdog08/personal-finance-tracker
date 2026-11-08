@@ -1,17 +1,21 @@
 "use client";
 
 import Link from "next/link";
-import { LockIcon, UnlockIcon } from "@/components/icons";
-import { formatMoney } from "@/server/lib/money";
+import { Badge, Glyph, Icon, Money, ProgressBar, buttonClass, cx, type IconName } from "@/components/ds";
+import { PLAN_COLORS } from "@/components/budget/colors";
 
 /**
- * The envelope: one card per budget line. At rest it shows the name, the planned amount, and
- * how much of it is used. Tap the card (or its padlock) and it opens — a colored ring, the
- * amount control slides in at the bottom — and it joins the balancing pool. That's the whole
- * interaction: no separate lock pill, no move dialog. Everything else on the card is quiet.
+ * The envelope: one card per budget line. At rest it leads with what's LEFT (numbers first),
+ * "left of $plan" beside it, and a thin bar with a tick where you'd be on pace today. Tap the
+ * card (or its padlock) and it opens — an accent ring, the amount control slides in at the
+ * bottom — and it joins the balancing pool. Everything else on the card is quiet.
+ *
+ * `tone` decides what going past the plan means: spending past it is over (rose); paying a debt
+ * past it, or keeping more than a savings line asked, is good news (green).
  */
 export function Envelope({
   emoji,
+  icon,
   title,
   subtitle,
   href,
@@ -20,6 +24,8 @@ export function Envelope({
   used,
   usedLabel = "spent",
   remainingLabel,
+  tone = "spend",
+  marker,
   open,
   auto = false,
   pending = false,
@@ -29,6 +35,8 @@ export function Envelope({
   aside,
 }: {
   emoji?: string | null;
+  /** Shown in the glyph when there's no emoji. */
+  icon?: IconName;
   title: string;
   subtitle?: React.ReactNode;
   href?: string | null;
@@ -36,8 +44,11 @@ export function Envelope({
   planned: number;
   used: number | null;
   usedLabel?: string;
-  /** Custom "left"/"over" line; default derives from planned − used. */
+  /** Custom caption beside the big number; default derives from planned − used. */
   remainingLabel?: React.ReactNode;
+  tone?: "spend" | "pay" | "save";
+  /** Pace tick on the bar (same units as planned). */
+  marker?: number | null;
   open: boolean;
   /** The auto-rebalance sink: not lockable, shown with a subtle badge instead of a padlock. */
   auto?: boolean;
@@ -45,75 +56,115 @@ export function Envelope({
   onToggle: () => void;
   onRemove?: () => void;
   control?: React.ReactNode;
-  /** Small extra line under the numbers (badges, notes). */
+  /** Small extra line under the bar (badges, notes). */
   aside?: React.ReactNode;
 }) {
-  const accent = color || "#6366f1";
-  const over = used != null && used > planned;
-  const pct = planned > 0 && used != null ? Math.min(100, Math.max(0, (used / planned) * 100)) : 0;
-  const overPct = planned > 0 && used != null && over ? Math.min(100, ((used - planned) / Math.max(used, 1)) * 100) : 0;
+  const accent = color || PLAN_COLORS.spend;
+  const has = used != null;
+  const diff = has ? planned - used : planned;
+  const over = has && diff < -0.005;
+  const overBad = over && tone === "spend";
+  const settled = has && Math.abs(diff) <= 0.005 && planned > 0;
+  const big = has ? Math.abs(diff) : planned;
+  const bigKind = overBad ? "over" : over ? "income" : "neutral";
+  const planMoney = <Money value={planned} kind="neutral" whole />;
+  const caption =
+    remainingLabel ??
+    (!has ? null : tone === "spend" ? (
+      <>
+        {over ? "over" : "left"} of {planMoney}
+      </>
+    ) : tone === "pay" ? (
+      settled ? (
+        "paid in full"
+      ) : over ? (
+        <>extra beyond {planMoney}</>
+      ) : (
+        <>to go of {planMoney}</>
+      )
+    ) : over ? (
+      <>above {planMoney}</>
+    ) : (
+      <>short of {planMoney}</>
+    ));
+
   return (
     <div
-      className={`group relative rounded-2xl border bg-white dark:bg-neutral-900 transition-all duration-200 ${
-        open
-          ? "border-indigo-400/70 shadow-[0_8px_30px_-12px_rgba(99,102,241,0.45)] ring-1 ring-indigo-400/40"
-          : "border-neutral-200/80 dark:border-neutral-800 hover:border-neutral-300 dark:hover:border-neutral-700 hover:shadow-sm"
-      } ${pending ? "opacity-70" : ""}`}
+      className={cx(
+        "mp-card relative transition-[border-color,box-shadow] duration-200",
+        open ? "border-accent ring-2 ring-accent/25" : "hover:border-line-2 hover:shadow-hover",
+        pending && "opacity-70",
+      )}
     >
-      {/* Accent thread along the top edge in the envelope's color. */}
-      <div className="absolute inset-x-5 top-0 h-px opacity-70" style={{ background: `linear-gradient(90deg, transparent, ${accent}, transparent)` }} />
-      <button type="button" onClick={auto ? undefined : onToggle} disabled={auto} className="w-full text-left p-4 pb-3 disabled:cursor-default">
+      <button type="button" onClick={auto ? undefined : onToggle} disabled={auto} aria-expanded={auto ? undefined : open} className="block w-full text-left p-5 max-md:p-3.5 disabled:cursor-default rounded-card">
         <div className="flex items-start justify-between gap-3">
           <div className="flex items-center gap-2.5 min-w-0">
-            <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl text-lg font-semibold" style={{ backgroundColor: `${accent}1a`, color: emoji ? undefined : accent }} aria-hidden>
-              {emoji ?? title.slice(0, 1).toUpperCase()}
-            </span>
+            {emoji ? (
+              <Glyph color={accent} size="sm">
+                <span className="text-[13px] leading-none">{emoji}</span>
+              </Glyph>
+            ) : icon ? (
+              <Glyph icon={icon} color={accent} size="sm" />
+            ) : (
+              <Glyph color={accent} size="sm">
+                <span className="text-xs font-semibold">{title.slice(0, 1).toUpperCase()}</span>
+              </Glyph>
+            )}
             <div className="min-w-0">
-              <div className="font-medium leading-tight truncate">{title}</div>
-              {subtitle && <div className="text-xs text-neutral-500 truncate mt-0.5">{subtitle}</div>}
+              <div className="font-medium leading-snug truncate">{title}</div>
+              {subtitle && <div className="text-xs text-fg-3 truncate mt-0.5">{subtitle}</div>}
             </div>
           </div>
-          {auto ? (
-            <span className="shrink-0 mt-0.5 rounded-full bg-indigo-50 dark:bg-indigo-950/40 px-2 py-0.5 text-[11px] font-medium text-indigo-600 dark:text-indigo-300">auto</span>
-          ) : (
-            <span className={`shrink-0 mt-0.5 transition-colors ${open ? "text-indigo-500" : "text-neutral-300 dark:text-neutral-600 group-hover:text-neutral-400"}`} aria-hidden>
-              {open ? <UnlockIcon /> : <LockIcon />}
-            </span>
-          )}
+          <div className="flex shrink-0 items-center gap-2 mt-0.5">
+            {overBad ? (
+              <Badge label="Over" color="var(--mp-money-over)" size="sm" />
+            ) : (
+              has && (
+                <span className="text-xs text-fg-3 whitespace-nowrap">
+                  <Money value={used} kind="neutral" /> {usedLabel}
+                </span>
+              )
+            )}
+            {auto ? (
+              <Badge label="Auto" variant="outline" dot={false} size="sm" title="Auto-rebalance target — it absorbs every change" />
+            ) : (
+              <Icon name={open ? "lock-open" : "lock"} size={14} className={open ? "text-accent-text" : "text-fg-3"} />
+            )}
+          </div>
         </div>
-        <div className="mt-4 flex items-baseline justify-between gap-2">
-          <div className="text-2xl font-semibold tabular-nums tracking-tight">{formatMoney(planned)}</div>
-          {used != null && (
-            <div className="text-sm tabular-nums text-neutral-500">
-              <span className={over ? "text-red-600 dark:text-red-400 font-medium" : "text-neutral-700 dark:text-neutral-300"}>{formatMoney(used)}</span> {usedLabel}
-            </div>
-          )}
+        <div className="mt-3 flex items-baseline justify-between gap-2">
+          <Money value={overBad ? diff : big} kind={bigKind} sign={overBad ? "auto" : "none"} style={{ font: "var(--mp-type-money-md)" }} />
+          {caption && <span className="text-xs text-fg-3 text-right min-w-0">{caption}</span>}
         </div>
-        <div className="mt-2.5 h-1.5 w-full flex overflow-hidden rounded-full bg-neutral-100 dark:bg-neutral-800">
-          <div className="h-full rounded-full transition-[width] duration-500" style={{ width: `${over ? 100 - overPct : pct}%`, backgroundColor: accent }} />
-          {over && <div className="h-full bg-red-500 transition-[width] duration-500" style={{ width: `${overPct}%` }} />}
-        </div>
-        <div className="mt-1.5 flex items-center justify-between text-xs">
-          <span className={over ? "text-red-600 dark:text-red-400 font-medium" : "text-neutral-500"}>
-            {remainingLabel ?? (used == null ? "" : over ? `${formatMoney(used - planned)} over` : `${formatMoney(planned - used)} left`)}
-          </span>
-          {aside}
-        </div>
+        {has && planned > 0 && (
+          <ProgressBar
+            size="sm"
+            className="mt-3"
+            max={planned}
+            value={Math.min(used, planned)}
+            color={overBad ? PLAN_COLORS.over : accent}
+            marker={marker != null && marker > 0 && marker < planned ? marker : undefined}
+            label={`${title}: ${Math.round((used / planned) * 100)}% ${usedLabel}`}
+          />
+        )}
+        {aside && <div className="mt-2 text-xs">{aside}</div>}
       </button>
       {open && (control || onRemove || href) && (
-        <div className="px-4 pb-4 pt-3 border-t border-neutral-100 dark:border-neutral-800 motion-safe:animate-[rise_.2s_ease-out]">
+        <div className="px-5 pb-4 pt-3 max-md:px-3.5 border-t border-line motion-safe:animate-[rise_.2s_ease-out]">
           {control}
           {(onRemove || href) && (
-            <div className="mt-3 flex items-center justify-between text-xs">
+            <div className="mt-3 flex items-center justify-between gap-2">
               {href ? (
-                <Link href={href} className="text-neutral-500 hover:text-indigo-600 hover:underline">
-                  See transactions →
+                <Link href={href} className={buttonClass({ variant: "ghost", size: "sm" })}>
+                  See transactions
+                  <Icon name="arrow-right" size={14} />
                 </Link>
               ) : (
                 <span />
               )}
               {onRemove && (
-                <button type="button" onClick={onRemove} className="text-neutral-400 hover:text-red-600">
+                <button type="button" onClick={onRemove} className={cx(buttonClass({ variant: "ghost", size: "sm" }), "text-fg-3 hover:text-over")}>
+                  <Icon name="trash-2" size={14} />
                   Remove envelope
                 </button>
               )}

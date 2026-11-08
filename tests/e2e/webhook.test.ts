@@ -31,7 +31,7 @@ const bad = new Headers({ "x-e2e-sig": "nope" });
 
 describe("handleWebhook", () => {
   test("unknown provider → 404, no work", async () => {
-    const r = await handleWebhook("plaid", body({ type: "test" }), good);
+    const r = await handleWebhook("no-such-provider", body({ type: "test" }), good);
     assert.equal(r.status, 404);
     assert.equal(r.work, null);
   });

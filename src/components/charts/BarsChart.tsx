@@ -27,7 +27,7 @@ export function BarsChart({
   const fmt = valueFormat === "money" ? formatMoney : (n: number) => String(n);
 
   if (labels.length === 0) {
-    return <p className="text-sm text-neutral-500">No data yet.</p>;
+    return <p className="text-sm text-fg-3">No data yet.</p>;
   }
 
   return (
@@ -42,7 +42,7 @@ export function BarsChart({
           <div
             key={lab + i}
             className={`flex-1 h-full flex flex-col justify-end rounded ${
-              i === highlightIndex ? "bg-blue-100/60 dark:bg-blue-950/40 ring-1 ring-blue-300 dark:ring-blue-800" : ""
+              i === highlightIndex ? "bg-sunken" : ""
             }`}
           >
             <div className="flex items-end justify-center gap-0.5 h-full">
@@ -54,7 +54,7 @@ export function BarsChart({
                     key={s.name}
                     title={`${lab} · ${s.name}: ${fmt(v)}`}
                     style={{ height: `${h}%`, backgroundColor: s.color }}
-                    className="w-2.5 rounded-t transition-all hover:opacity-80 min-h-[2px]"
+                    className="w-2 rounded-t-[3px] transition-all hover:opacity-80 min-h-[2px]"
                   />
                 );
               })}
@@ -68,8 +68,8 @@ export function BarsChart({
             key={lab + i}
             className={`flex-1 text-center text-[10px] truncate ${
               i === highlightIndex
-                ? "font-bold text-neutral-900 dark:text-neutral-100"
-                : "text-neutral-500"
+                ? "font-semibold text-fg"
+                : "text-fg-3"
             }`}
           >
             {lab}
@@ -79,10 +79,10 @@ export function BarsChart({
         </div>
       </div>
       {series.length > 1 && (
-        <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-neutral-500">
+        <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-fg-3">
           {series.map((s) => (
             <span key={s.name} className="inline-flex items-center gap-1">
-              <span className="inline-block w-3 h-3 rounded-sm" style={{ backgroundColor: s.color }} />
+              <span className="inline-block w-2.5 h-2.5 rounded-[3px]" style={{ backgroundColor: s.color }} />
               {s.name}
             </span>
           ))}

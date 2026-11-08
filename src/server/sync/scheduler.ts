@@ -2,7 +2,7 @@ import { getSyncSettings } from "@/server/lib/sync/settings";
 import { runSync } from "@/server/lib/sync/sync";
 
 // In-process scheduler (bank-sync.md D6). Started once per server process from
-// src/instrumentation.ts when SYNC_SCHEDULER=1. Every TICK_MS it reads sync_settings and
+// src/instrumentation.ts in production builds. Every TICK_MS it reads sync_settings and
 // runs when `enabled` and `next_run_at` has passed; the run itself re-arms next_run_at.
 // The DB row is the source of truth, so the interval can be changed from the settings
 // page and a redeploy/restart never double-runs (the run lock lives in the DB too).

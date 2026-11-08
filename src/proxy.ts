@@ -184,7 +184,10 @@ export const config = {
      * Server Actions are POSTs to the page route they're used on, so they are covered
      * by this matcher — but per the Next.js docs that coverage is not something to
      * rely on alone, which is why every action also calls `requireSession()`.
+     *
+     * The web app manifest is excluded too: browsers fetch it without cookies, so gating
+     * it would hand iOS the login redirect instead of the app's scope.
      */
-    "/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|woff|woff2|ttf)$).*)",
+    "/((?!_next/static|_next/image|favicon.ico|manifest.webmanifest|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|woff|woff2|ttf)$).*)",
   ],
 };

@@ -9,6 +9,22 @@ export interface DbConn {
   user: string;
   password: string;
   database: string;
+  ssl?: { rejectUnauthorized: boolean };
+}
+
+// `?ssl-mode=` follows MySQL's own client flag. A server running with
+// require_secure_transport=ON rejects plain connections, and one using MySQL's
+// auto-generated (self-signed) cert fails verification, so it needs REQUIRED:
+// encrypted, but the cert isn't checked. DISABLED/PREFERRED (or no param) keeps the
+// old plain-TCP behaviour.
+function parseSslMode(params: string): DbConn["ssl"] {
+  const mode = new URLSearchParams(params).get("ssl-mode")?.toUpperCase();
+  if (!mode || mode === "DISABLED" || mode === "PREFERRED") return undefined;
+  if (mode === "REQUIRED") return { rejectUnauthorized: false };
+  if (mode === "VERIFY_CA" || mode === "VERIFY_IDENTITY") return { rejectUnauthorized: true };
+  throw new Error(
+    `Invalid DATABASE_URL: unknown ssl-mode "${mode}" (use DISABLED, REQUIRED, or VERIFY_IDENTITY).`,
+  );
 }
 
 export function parseDbUrl(url: string): DbConn {
@@ -29,6 +45,7 @@ export function parseDbUrl(url: string): DbConn {
 
   // hostpart: host[:port][/database][?params]
   const q = hostpart.indexOf("?");
+  const ssl = q === -1 ? undefined : parseSslMode(hostpart.slice(q + 1));
   if (q !== -1) hostpart = hostpart.slice(0, q);
   const slash = hostpart.indexOf("/");
   const hostport = slash === -1 ? hostpart : hostpart.slice(0, slash);
@@ -38,5 +55,5 @@ export function parseDbUrl(url: string): DbConn {
   const host = lastColon === -1 ? hostport : hostport.slice(0, lastColon);
   const port = lastColon === -1 ? 3306 : Number(hostport.slice(lastColon + 1)) || 3306;
 
-  return { host, port, user, password, database };
+  return { host, port, user, password, database, ...(ssl && { ssl }) };
 }

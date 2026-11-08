@@ -65,12 +65,21 @@ async function main() {
       del: [`DELETE FROM sync_ignored WHERE source = ?`, [FAKE]],
     },
     {
-      // No real provider has ever been enrolled (Teller shut down before launch), so every
-      // sync_run in this database came from the fake provider. Once a real bank is wired up
-      // this predicate must be narrowed — see planning/features/bank-sync.md.
-      label: "sync runs (all of them: only the fake provider has ever run)",
-      show: [`SELECT id, \`trigger\`, status, started_at, inserted, updated FROM sync_runs ORDER BY id`, []],
-      del: [`DELETE FROM sync_runs`, []],
+      // Runs that touched the fake provider (details.enrollments[].provider), plus runs that
+      // touched no enrollment at all. Real SimpleFIN runs are kept.
+      label: "fake-provider sync runs (and runs with no enrollments)",
+      show: [
+        `SELECT id, \`trigger\`, status, started_at, inserted, updated FROM sync_runs
+         WHERE JSON_SEARCH(details, 'one', ?, NULL, '$.enrollments[*].provider') IS NOT NULL
+            OR JSON_LENGTH(details, '$.enrollments') = 0 ORDER BY id`,
+        [FAKE],
+      ],
+      del: [
+        `DELETE FROM sync_runs
+         WHERE JSON_SEARCH(details, 'one', ?, NULL, '$.enrollments[*].provider') IS NOT NULL
+            OR JSON_LENGTH(details, '$.enrollments') = 0`,
+        [FAKE],
+      ],
     },
     {
       label: "e2e import batches (only those with no transactions left)",

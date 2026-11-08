@@ -1,0 +1,151 @@
+/* MiPlata design tokens — imported from the MiPlata Design System (claude.ai/design).
+   Every token is prefixed `--mp-` so it can't collide with Tailwind's own theme variables
+   (Tailwind defines --text-base, --radius-sm, --ease-out, --tracking-tight with different values).
+   Dark mode follows the OS (prefers-color-scheme), matching Tailwind's default `dark:` variant;
+   `data-theme="light|dark"` on <html> overrides it. Accent: emerald by default,
+   `data-accent="marigold"` for the alternate direction. */
+
+/* ── Color ramps + semantic aliases (light) ── */
+:root {
+  /* Plata — cool silver/slate neutrals */
+  --mp-plata-0: #ffffff; --mp-plata-25: #f8f9fb; --mp-plata-50: #f3f5f8; --mp-plata-100: #e9ecf1;
+  --mp-plata-150: #e1e5eb; --mp-plata-200: #d4dae2; --mp-plata-300: #b8c0cc; --mp-plata-400: #959fae;
+  --mp-plata-500: #6b7588; --mp-plata-600: #525b6c; --mp-plata-700: #3c4351; --mp-plata-800: #272d37;
+  --mp-plata-850: #1d222a; --mp-plata-900: #161a21; --mp-plata-950: #0e1116;
+  /* Emerald — calm, money */
+  --mp-emerald-50: #ebf8f2; --mp-emerald-100: #d2f0e2; --mp-emerald-200: #a6e2c6; --mp-emerald-300: #6ccda4;
+  --mp-emerald-400: #36b383; --mp-emerald-500: #14966a; --mp-emerald-600: #0b7a56; --mp-emerald-700: #0a6247;
+  --mp-emerald-800: #0b4e3a; --mp-emerald-900: #0a3f30;
+  /* Marigold — sunny, Colombian */
+  --mp-marigold-50: #fff8e6; --mp-marigold-100: #ffedbf; --mp-marigold-200: #ffdc85; --mp-marigold-300: #fcc54a;
+  --mp-marigold-400: #f5ad1f; --mp-marigold-500: #e0920b; --mp-marigold-600: #b87306; --mp-marigold-700: #8f5808;
+  --mp-marigold-800: #6f450c; --mp-marigold-900: #5a390e;
+  /* Clay (owed), Rose (over), Sky (plan/projection) */
+  --mp-clay-50: #fcefe9; --mp-clay-300: #f0936f; --mp-clay-500: #c4562f; --mp-clay-600: #a8461f;
+  --mp-rose-50: #fdecee; --mp-rose-300: #f2798a; --mp-rose-500: #d23a4b; --mp-rose-600: #b42a3a;
+  --mp-sky-50: #ebf1fb; --mp-sky-300: #93acec; --mp-sky-500: #4a6cc0; --mp-sky-600: #3a5aa8;
+
+  /* Surfaces */
+  --mp-bg-app: var(--mp-plata-50); --mp-bg-surface: var(--mp-plata-0); --mp-bg-raised: var(--mp-plata-0);
+  --mp-bg-sunken: #eef1f5; --mp-bg-hover: #f1f3f7; --mp-bg-active: #e6eaf0; --mp-bg-inverse: var(--mp-plata-900);
+  --mp-bg-overlay: rgb(14 17 22 / 0.42); --mp-bg-nav: #ffffff;
+  --mp-border-1: #e4e8ee; --mp-border-2: #d3d9e1; --mp-border-strong: #b3bccb;
+  --mp-text-1: var(--mp-plata-900); --mp-text-2: #475063; --mp-text-3: #687286;
+  --mp-text-disabled: #a2aab7; --mp-text-inverse: #ffffff;
+  /* Accent (emerald default) */
+  --mp-accent: var(--mp-emerald-600); --mp-accent-hover: var(--mp-emerald-700); --mp-accent-ink: #ffffff;
+  --mp-accent-soft: var(--mp-emerald-50); --mp-accent-soft-2: var(--mp-emerald-100); --mp-accent-text: var(--mp-emerald-700);
+  --mp-focus-ring: 0 0 0 2px var(--mp-bg-surface), 0 0 0 4px color-mix(in oklch, var(--mp-accent) 70%, transparent);
+  /* Money semantics — one meaning per color, everywhere */
+  --mp-money-income: var(--mp-emerald-600); --mp-money-income-soft: var(--mp-emerald-50);
+  --mp-money-spend: var(--mp-text-1);
+  --mp-money-owed: var(--mp-clay-600); --mp-money-owed-soft: var(--mp-clay-50);
+  --mp-money-pending: #5c667a; --mp-money-pending-soft: #eef1f5;
+  --mp-money-over: var(--mp-rose-600); --mp-money-over-soft: var(--mp-rose-50);
+  --mp-money-plan: var(--mp-sky-600); --mp-money-plan-soft: var(--mp-sky-50);
+  --mp-money-safe: var(--mp-emerald-700);
+  /* Status feedback */
+  --mp-ok: var(--mp-emerald-600); --mp-warn: #a86b05; --mp-warn-soft: #fdf3dc;
+  --mp-danger: var(--mp-rose-600); --mp-danger-soft: var(--mp-rose-50);
+  --mp-track: #e7eaf0;
+  /* User-hex badge tint recipe (oklch relative color, fixed lightness per theme) */
+  --mp-tint-bg-l: 0.955; --mp-tint-bg-c: 0.045; --mp-tint-text-l: 0.43; --mp-tint-text-c: 0.13; --mp-tint-dot-l: 0.62;
+}
+:root[data-accent="marigold"] {
+  --mp-accent: var(--mp-marigold-400); --mp-accent-hover: var(--mp-marigold-300); --mp-accent-ink: #2a1c04;
+  --mp-accent-soft: var(--mp-marigold-50); --mp-accent-soft-2: var(--mp-marigold-100); --mp-accent-text: var(--mp-marigold-700);
+}
+
+/* ── Dark: true black app + nav for OLED; cards lift to near-black. Declared twice (OS and
+   explicit attribute) because a custom property block can't be shared between the two. ── */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --mp-bg-app: #000000; --mp-bg-nav: #000000; --mp-bg-surface: #0e1014; --mp-bg-raised: #15181e;
+    --mp-bg-sunken: #070809; --mp-bg-hover: #181b21; --mp-bg-active: #20242c; --mp-bg-inverse: var(--mp-plata-100);
+    --mp-bg-overlay: rgb(0 0 0 / 0.7);
+    --mp-border-1: #1c2027; --mp-border-2: #272c35; --mp-border-strong: #3d4452;
+    --mp-text-1: #eef1f5; --mp-text-2: #b4bcc9; --mp-text-3: #8c96a7; --mp-text-disabled: #5a6374; --mp-text-inverse: var(--mp-plata-900);
+    --mp-accent: var(--mp-emerald-400); --mp-accent-hover: var(--mp-emerald-300); --mp-accent-ink: #03170f;
+    --mp-accent-soft: #0f2a20; --mp-accent-soft-2: #14382a; --mp-accent-text: #62d4a5;
+    --mp-money-income: #62d4a5; --mp-money-income-soft: #0f2a20; --mp-money-spend: var(--mp-text-1);
+    --mp-money-owed: var(--mp-clay-300); --mp-money-owed-soft: #2e1a12;
+    --mp-money-pending: #9ba5b6; --mp-money-pending-soft: #1c2129;
+    --mp-money-over: var(--mp-rose-300); --mp-money-over-soft: #311619;
+    --mp-money-plan: var(--mp-sky-300); --mp-money-plan-soft: #17203a; --mp-money-safe: #62d4a5;
+    --mp-ok: #62d4a5; --mp-warn: #f2c060; --mp-warn-soft: #2c2209; --mp-danger: var(--mp-rose-300); --mp-danger-soft: #311619;
+    --mp-track: #1f2329;
+    --mp-tint-bg-l: 0.31; --mp-tint-bg-c: 0.06; --mp-tint-text-l: 0.87; --mp-tint-text-c: 0.1; --mp-tint-dot-l: 0.72;
+    --mp-shadow-1: 0 0 0 1px rgb(255 255 255 / 0.02);
+    --mp-shadow-2: 0 2px 8px -2px rgb(0 0 0 / 0.5);
+    --mp-shadow-3: 0 16px 40px -8px rgb(0 0 0 / 0.65), 0 0 0 1px rgb(255 255 255 / 0.04);
+    --mp-shadow-sheet: 0 -8px 32px -8px rgb(0 0 0 / 0.7);
+  }
+  :root:not([data-theme="light"])[data-accent="marigold"] {
+    --mp-accent: var(--mp-marigold-300); --mp-accent-hover: var(--mp-marigold-200); --mp-accent-ink: #241703;
+    --mp-accent-soft: #2c2209; --mp-accent-soft-2: #3a2d0c; --mp-accent-text: #f7c867;
+  }
+}
+:root[data-theme="dark"] {
+  --mp-bg-app: #000000; --mp-bg-nav: #000000; --mp-bg-surface: #0e1014; --mp-bg-raised: #15181e;
+  --mp-bg-sunken: #070809; --mp-bg-hover: #181b21; --mp-bg-active: #20242c; --mp-bg-inverse: var(--mp-plata-100);
+  --mp-bg-overlay: rgb(0 0 0 / 0.7);
+  --mp-border-1: #1c2027; --mp-border-2: #272c35; --mp-border-strong: #3d4452;
+  --mp-text-1: #eef1f5; --mp-text-2: #b4bcc9; --mp-text-3: #8c96a7; --mp-text-disabled: #5a6374; --mp-text-inverse: var(--mp-plata-900);
+  --mp-accent: var(--mp-emerald-400); --mp-accent-hover: var(--mp-emerald-300); --mp-accent-ink: #03170f;
+  --mp-accent-soft: #0f2a20; --mp-accent-soft-2: #14382a; --mp-accent-text: #62d4a5;
+  --mp-money-income: #62d4a5; --mp-money-income-soft: #0f2a20; --mp-money-spend: var(--mp-text-1);
+  --mp-money-owed: var(--mp-clay-300); --mp-money-owed-soft: #2e1a12;
+  --mp-money-pending: #9ba5b6; --mp-money-pending-soft: #1c2129;
+  --mp-money-over: var(--mp-rose-300); --mp-money-over-soft: #311619;
+  --mp-money-plan: var(--mp-sky-300); --mp-money-plan-soft: #17203a; --mp-money-safe: #62d4a5;
+  --mp-ok: #62d4a5; --mp-warn: #f2c060; --mp-warn-soft: #2c2209; --mp-danger: var(--mp-rose-300); --mp-danger-soft: #311619;
+  --mp-track: #1f2329;
+  --mp-tint-bg-l: 0.31; --mp-tint-bg-c: 0.06; --mp-tint-text-l: 0.87; --mp-tint-text-c: 0.1; --mp-tint-dot-l: 0.72;
+  --mp-shadow-1: 0 0 0 1px rgb(255 255 255 / 0.02);
+  --mp-shadow-2: 0 2px 8px -2px rgb(0 0 0 / 0.5);
+  --mp-shadow-3: 0 16px 40px -8px rgb(0 0 0 / 0.65), 0 0 0 1px rgb(255 255 255 / 0.04);
+  --mp-shadow-sheet: 0 -8px 32px -8px rgb(0 0 0 / 0.7);
+}
+:root[data-theme="dark"][data-accent="marigold"] {
+  --mp-accent: var(--mp-marigold-300); --mp-accent-hover: var(--mp-marigold-200); --mp-accent-ink: #241703;
+  --mp-accent-soft: #2c2209; --mp-accent-soft-2: #3a2d0c; --mp-accent-text: #f7c867;
+}
+
+/* ── Typography. Font families come from next/font (layout.tsx) as --font-outfit /
+   --font-dm-sans / --font-dm-mono; the fallbacks cover the moment before they load. ── */
+:root {
+  --mp-font-display: var(--font-outfit), ui-rounded, "SF Pro Rounded", system-ui, sans-serif;
+  --mp-font-sans: var(--font-dm-sans), ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mp-font-mono: var(--font-dm-mono), ui-monospace, "SF Mono", Menlo, monospace;
+  --mp-text-2xs: 11px; --mp-text-xs: 12px; --mp-text-sm: 13px; --mp-text-base: 14px; --mp-text-md: 16px;
+  --mp-text-lg: 18px; --mp-text-xl: 22px; --mp-text-2xl: 28px; --mp-text-3xl: 36px; --mp-text-4xl: 48px;
+  --mp-lh-tight: 1.1; --mp-lh-snug: 1.3; --mp-lh-body: 1.5;
+  --mp-weight-light: 300; --mp-weight-regular: 400; --mp-weight-medium: 500; --mp-weight-semibold: 600; --mp-weight-bold: 700;
+  --mp-tracking-display: -0.02em; --mp-tracking-tight: -0.01em; --mp-tracking-label: 0.01em;
+  --mp-num-features: "tnum" 1, "lnum" 1;
+  /* Semantic type roles */
+  --mp-type-page-title: 600 var(--mp-text-2xl)/var(--mp-lh-tight) var(--mp-font-display);
+  --mp-type-section: 600 var(--mp-text-lg)/var(--mp-lh-snug) var(--mp-font-display);
+  --mp-type-card-title: 600 var(--mp-text-base)/var(--mp-lh-snug) var(--mp-font-sans);
+  --mp-type-body: 400 var(--mp-text-base)/var(--mp-lh-body) var(--mp-font-sans);
+  --mp-type-label: 500 var(--mp-text-xs)/var(--mp-lh-snug) var(--mp-font-sans);
+  --mp-type-money-hero: 600 var(--mp-text-4xl)/var(--mp-lh-tight) var(--mp-font-sans);
+  --mp-type-money-lg: 600 var(--mp-text-2xl)/var(--mp-lh-tight) var(--mp-font-sans);
+  --mp-type-money-md: 600 var(--mp-text-lg)/var(--mp-lh-snug) var(--mp-font-sans);
+}
+
+/* ── Spacing, radii, elevation, motion, layout ── */
+:root {
+  --mp-space-0: 0; --mp-space-px: 1px; --mp-space-0-5: 2px; --mp-space-1: 4px; --mp-space-1-5: 6px; --mp-space-2: 8px;
+  --mp-space-3: 12px; --mp-space-4: 16px; --mp-space-5: 20px; --mp-space-6: 24px; --mp-space-8: 32px;
+  --mp-space-10: 40px; --mp-space-12: 48px; --mp-space-16: 64px;
+  --mp-radius-xs: 6px; --mp-radius-sm: 8px; --mp-radius-md: 12px; --mp-radius-lg: 16px; --mp-radius-xl: 22px; --mp-radius-pill: 999px;
+  --mp-shadow-0: none;
+  --mp-shadow-1: 0 1px 2px rgb(22 26 33 / 0.05), 0 0 0 1px rgb(22 26 33 / 0.02);
+  --mp-shadow-2: 0 2px 6px -1px rgb(22 26 33 / 0.07), 0 1px 2px rgb(22 26 33 / 0.05);
+  --mp-shadow-3: 0 12px 32px -8px rgb(22 26 33 / 0.18), 0 4px 10px -4px rgb(22 26 33 / 0.08);
+  --mp-shadow-sheet: 0 -8px 32px -8px rgb(22 26 33 / 0.2);
+  --mp-ease-out: cubic-bezier(0.16, 1, 0.3, 1); --mp-ease-in: cubic-bezier(0.5, 0, 0.75, 0); --mp-ease-std: cubic-bezier(0.2, 0, 0, 1);
+  --mp-dur-fast: 120ms; --mp-dur-base: 200ms; --mp-dur-slow: 300ms;
+  --mp-sidebar-w: 244px; --mp-topbar-h: 56px; --mp-tabbar-h: 64px; --mp-content-max: 1180px; --mp-hit-min: 44px;
+}

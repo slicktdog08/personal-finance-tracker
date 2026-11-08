@@ -115,6 +115,7 @@ CREATE TABLE `bills` (
   `default_amount` decimal(10,2) DEFAULT NULL,
   `default_due_day` tinyint(4) DEFAULT NULL,
   `default_payment_type` varchar(32) DEFAULT NULL,
+  `category` varchar(48) DEFAULT NULL,
   `is_debt` tinyint(1) NOT NULL DEFAULT '0',
   `active` tinyint(1) NOT NULL DEFAULT '1',
   `notes` text,
@@ -593,6 +594,15 @@ CREATE TABLE `transfer_dismissals` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `uq_dismissal` (`low_id`,`high_id`)
 ) ENGINE=InnoDB AUTO_INCREMENT=3 DEFAULT CHARSET=utf8mb4;
+/*!40101 SET character_set_client = @saved_cs_client */;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8 */;
+CREATE TABLE `ui_layouts` (
+  `layout_key` varchar(48) NOT NULL,
+  `layout` json NOT NULL,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`layout_key`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 /*!40101 SET character_set_client = @saved_cs_client */;
 /*!40103 SET TIME_ZONE=@OLD_TIME_ZONE */;
 

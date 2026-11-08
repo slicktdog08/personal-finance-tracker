@@ -1,6 +1,6 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { projectCash, type MonthSegment, type ProjectionLine } from "@/server/lib/cash-projection";
+import { planMonth, projectCash, type MonthSegment, type ProjectionLine } from "@/server/lib/cash-projection";
 import { round2 } from "@/server/lib/budget";
 import type { ObservedDeposit } from "@/server/lib/payday-reconcile";
 
@@ -192,11 +192,11 @@ describe("projectCash — overspend is credited forward", () => {
   test("blowing one envelope leaves the month with less to spend, not the same", () => {
     // Gas $20 over its $160, Restaurant $200 left of its $400. Net remaining is $180.
     const over = twoLines(180);
-    assert.equal(over.spreadTotal, 180);
+    assert.equal(over.envelope.total, 180);
     assert.equal(over.months[0].overspend, 20);
     // Exactly on plan, the same month has the full $200 left — so the $20 overspend is what
     // moved it. The old per-line floor clamped Gas at 0 and left $200 either way.
-    assert.equal(twoLines(160).spreadTotal, 200);
+    assert.equal(twoLines(160).envelope.total, 200);
     assert.equal(twoLines(160).months[0].overspend, 0);
   });
 
@@ -207,9 +207,9 @@ describe("projectCash — overspend is credited forward", () => {
       segments: [september({ paydays: [], lines: [cat(1, 100, 900), cat(2, 200, 0)] })],
       debts: [],
     });
-    assert.equal(p.spreadTotal, 0); // 200 left − 800 over → floored
+    assert.equal(p.envelope.total, 0); // 200 left − 800 over → floored
     assert.equal(p.months[0].overspend, 800);
-    assert.equal(p.endBalance, 1000); // nothing further is assumed to leave
+    assert.equal(p.envelope.endBalance, 1000); // on the envelope bookend, nothing further leaves
   });
 
   test("a bill bigger than its line eats into the rest of the month's budget", () => {
@@ -226,8 +226,8 @@ describe("projectCash — overspend is credited forward", () => {
       debts: [],
     });
     // 50 + 300 planned, a 200 bill against the 50 line → 150 of it comes out of the other envelope.
-    assert.equal(p.spreadTotal, 150);
-    assert.equal(p.endBalance, 650); // 1000 − 200 bill − 150 spread
+    assert.equal(p.envelope.total, 150);
+    assert.equal(p.envelope.endBalance, 650); // 1000 − 200 bill − 150 envelope
   });
 });
 
@@ -264,6 +264,265 @@ describe("projectCash — reserved cash", () => {
     const p = withReserve(0);
     assert.equal(p.spendable.now, p.start);
     assert.equal(p.spendable.end, p.endBalance);
+  });
+});
+
+describe("projectCash — observed pace vs. the envelope bookend", () => {
+  test("the last day of the month no longer absorbs the whole unspent remainder", () => {
+    // The case this was built for. Anchored 2026-09-29 with one day left and $275.09 of envelope
+    // unspent, the envelope rate is "everything left ÷ 1 day" — it put the entire remainder on
+    // the 30th, more than twice the month's own average. Pace spreads nothing: it just keeps
+    // spending at the rate the month has actually run at.
+    const p = projectCash({
+      asOf: "2026-09-29",
+      cashNow: 7027.12,
+      // $2,900 spent over 29 days ≈ $100/day, with $275.09 of envelope left.
+      segments: [september({ paydays: [], lines: [cat(1, 3175.09, 2900)] })],
+      debts: [],
+    });
+    assert.equal(p.spreadDays, 1);
+    assert.equal(p.envelope.total, 275.09); // the old number, still reported
+    assert.equal(p.envelope.daily, 275.09); // …and still a cliff: all of it on one day
+    assert.equal(p.spreadDaily, 100); // 2900 / 29 — what the month has actually been doing
+    assert.equal(p.endBalance, 6927.12); // 7027.12 − 100
+    assert.equal(p.envelope.endBalance, 6752.03); // 7027.12 − 275.09, the conservative bookend
+  });
+
+  test("the envelope rate accelerates toward month end; a steady pace does not", () => {
+    const at = (asOf: string, spent: number) =>
+      projectCash({ asOf, cashNow: 5000, segments: [september({ paydays: [], lines: [cat(1, 3000, spent)] })], debts: [] });
+    // Envelope: the same $2,000 left on both days, but fewer days to force it into, so the rate
+    // climbs — 2000/10 on the 20th against 2000/5 on the 25th.
+    assert.equal(at("2026-09-20", 1000).envelope.total, 2000);
+    assert.equal(at("2026-09-25", 1000).envelope.total, 2000);
+    assert.ok(at("2026-09-25", 1000).envelope.daily > at("2026-09-20", 1000).envelope.daily * 1.9);
+    // Pace, held at a genuine $50/day on both anchors, reads $50/day on both. It tracks what the
+    // month is doing rather than how much calendar is left to cram the budget into.
+    assert.equal(at("2026-09-20", 1000).spreadDaily, 50);
+    assert.equal(at("2026-09-25", 1250).spreadDaily, 50);
+  });
+
+  test("running hot projects over budget — pace is not capped at the envelope", () => {
+    // $2,500 spent in 10 days against a $3,000 plan: at this rate the budget is gone by the 12th.
+    const p = projectCash({
+      asOf: "2026-09-10",
+      cashNow: 9000,
+      segments: [september({ paydays: [], lines: [cat(1, 3000, 2500)] })],
+      debts: [],
+    });
+    assert.equal(p.spreadDaily, 250);
+    assert.equal(p.spreadTotal, 5000); // 250 × 20 remaining days
+    assert.equal(p.envelope.total, 500); // what the plan actually leaves
+    assert.ok(p.endBalance < p.envelope.endBalance); // the honest read is worse, and says so
+  });
+
+  test("a month with nothing spent yet falls back to the envelope rate", () => {
+    const p = projectCash({
+      asOf: "2026-09-01",
+      cashNow: 1000,
+      segments: [september({ paydays: [], lines: [cat(1, 290, 0)] })],
+      debts: [],
+    });
+    assert.equal(p.months[0].pacedFromHistory, false);
+    assert.equal(p.spreadDaily, p.envelope.daily);
+    assert.equal(p.endBalance, p.envelope.endBalance);
+  });
+
+  test("a future month has no history to pace from and uses its own envelope", () => {
+    const p = projectCash({
+      asOf: "2026-09-29",
+      cashNow: 5000,
+      segments: [september({ paydays: [], lines: [cat(1, 1000, 900)] }), october({ paydays: [], lines: [cat(2, 3100, 0)] })],
+      focusIndex: 0,
+      debts: [],
+    });
+    assert.equal(p.months[1].pacedFromHistory, false);
+    assert.equal(p.months[1].spreadDaily, p.months[1].envelopeDaily);
+  });
+
+  test("a thin sample is blended toward the plan, not extrapolated off a cliff", () => {
+    // Day 1 of the month, one $300 grocery run. Raw pace would be $300/day → a $9,300 month
+    // against a $3,100 plan. The blend weights it 1/7 pace, 6/7 plan.
+    const d1 = projectCash({
+      asOf: "2026-09-01",
+      cashNow: 20000,
+      segments: [september({ paydays: [], lines: [cat(1, 3100, 300)] })],
+      debts: [],
+    });
+    assert.equal(d1.months[0].paceWeight, 0.14); // 1/7
+    assert.ok(d1.spreadDaily < 150, `blended rate ${d1.spreadDaily} should be nowhere near 300`);
+    // By day 7 the sample is trusted on its own.
+    const d7 = projectCash({
+      asOf: "2026-09-07",
+      cashNow: 20000,
+      segments: [september({ paydays: [], lines: [cat(1, 3100, 700)] })],
+      debts: [],
+    });
+    assert.equal(d7.months[0].paceWeight, 1);
+    assert.equal(d7.spreadDaily, 100); // 700 / 7, no blending left
+  });
+
+  test("the pace measurement is reported so the UI can show its working", () => {
+    const p = projectCash({
+      asOf: "2026-09-10",
+      cashNow: 1000,
+      segments: [september({ paydays: [], lines: [cat(1, 600, 300)] })],
+      debts: [],
+    });
+    assert.equal(p.months[0].observedSpend, 300);
+    assert.equal(p.months[0].elapsedDays, 10);
+    assert.equal(p.months[0].pacedFromHistory, true);
+    assert.equal(p.spreadDaily, 30);
+  });
+});
+
+describe("projectCash — pace measures everyday spending, not bills", () => {
+  // The regression. A category line's `actual` is EVERY transaction in that category, bill
+  // payments included. Measuring a daily rate off it raw extrapolates each paid bill across the
+  // whole month: four days into 2026-10, rent ($1,410) and a utility ($165.24) made $1,949 of
+  // "spend" read as $487/day and projected rent roughly seven more times — month-end $883 and a
+  // −$1,368 low on a budget that nets to zero.
+  const octoberish = (paid: boolean) =>
+    projectCash({
+      asOf: "2026-10-04",
+      cashNow: 5125.13,
+      segments: [
+        october({
+          paydays: [],
+          // $1,575.24 of bills + ~$374 of real everyday spending.
+          lines: [cat(1, 1414, 1413.95), cat(2, 240, 165.24), cat(3, 2645, 369.94)],
+          bills: [
+            { id: 1, name: "Riverside Apartments", amount: 1410, dueDay: 1, paid, lineId: 1, accountId: null },
+            { id: 2, name: "City Power & Light", amount: 165.24, dueDay: 2, paid, lineId: 2, accountId: null },
+          ],
+        }),
+      ],
+      focusIndex: 0,
+      debts: [],
+    });
+
+  test("a paid bill is taken out of the pace measurement", () => {
+    const p = octoberish(true);
+    const m = p.months[0];
+    assert.equal(m.categoryActual, 1949.13); // everything in the category lines
+    assert.equal(m.paidBillsInLines, 1575.24); // …of which this much was bills
+    assert.equal(m.observedSpend, 373.89); // leaving the everyday spending
+    // ~$93/day, not the ~$487/day the raw figure would have given.
+    assert.ok(m.observedSpend / m.elapsedDays < 100);
+  });
+
+  test("…so the month no longer projects rent seven more times", () => {
+    const p = octoberish(true);
+    // The broken version put 27 × $308 = $8,325 of everyday spending ahead of a $2,350 envelope.
+    // Now the two assumptions agree closely, which is the real signal: a pace measured off
+    // everyday spending lands near the plan instead of several times it.
+    assert.ok(p.spreadTotal < 3000, `spreadTotal ${p.spreadTotal} should be near the envelope`);
+    assert.ok(
+      Math.abs(p.endBalance - p.envelope.endBalance) < 300,
+      `pace end ${p.endBalance} and envelope end ${p.envelope.endBalance} should be close`,
+    );
+    assert.ok(p.low.balance > 0, `low ${p.low.balance} should not go negative`);
+  });
+
+  test("an UNPAID bill stays out of the measurement too — its money hasn't moved yet", () => {
+    // Unpaid bills aren't in `actual` at all, so there is nothing to subtract and nothing to
+    // extrapolate; they are future events instead. Pace sees only the everyday spending.
+    const p = octoberish(false);
+    const m = p.months[0];
+    // Same category actuals, but the bills are still ahead, so none is credited as "paid".
+    assert.equal(m.paidBillsInLines, 0);
+    assert.equal(m.observedSpend, 1949.13);
+  });
+
+  test("pace is never negative, even if bills exceed what the lines recorded", () => {
+    const p = projectCash({
+      asOf: "2026-10-04",
+      cashNow: 5000,
+      segments: [
+        october({
+          paydays: [],
+          lines: [cat(1, 1414, 100)], // the line records less than the bill claims
+          bills: [{ id: 1, name: "Rent", amount: 1410, dueDay: 1, paid: true, lineId: 1, accountId: null }],
+        }),
+      ],
+      debts: [],
+    });
+    assert.equal(p.months[0].observedSpend, 0);
+    assert.ok(p.spreadDaily >= 0);
+  });
+});
+
+describe("projectCash — a bill draws from its envelope", () => {
+  // The whole point: a bill and the category line that plans for it describe the SAME money, so
+  // the month must not pay it twice. The link is `lineId`; when it is null the bill is pure extra
+  // outflow, which is correct for a genuinely unplanned bill and a $1,575/month bug otherwise.
+  const withBill = (lineId: number | null, envelope = 1440, bill = 1410) =>
+    projectCash({
+      asOf: "2026-09-01",
+      cashNow: 10000,
+      segments: [
+        september({
+          paydays: [],
+          lines: [cat(1, envelope, 0)],
+          bills: [{ id: 1, name: "Riverside Apartments", amount: bill, dueDay: 1, paid: false, lineId, accountId: null }],
+        }),
+      ],
+      debts: [],
+    });
+
+  test("envelope covers the bill exactly → the month nets to the envelope, not envelope + bill", () => {
+    const p = withBill(1, 1410, 1410);
+    assert.equal(p.spreadTotal, 0); // the bill consumed the whole envelope
+    assert.equal(p.endBalance, 8590); // 10000 − 1410, counted ONCE
+    assert.equal(p.months[0].unbudgetedBillTotal, 0);
+  });
+
+  test("a bill bigger than its envelope only adds the overage", () => {
+    const p = withBill(1, 1000, 1410);
+    assert.equal(p.spreadTotal, 0);
+    assert.equal(p.endBalance, 8590); // still just the bill — the $410 over is not charged twice
+    assert.equal(p.months[0].overspend, 410); // …but it IS reported as over plan
+  });
+
+  test("an unlinked bill is counted twice — the bug, pinned so it cannot come back quietly", () => {
+    const linked = withBill(1);
+    const orphan = withBill(null);
+    // 10000 − 1410 bill − (1440 envelope − 1410 consumed) = 8560
+    assert.equal(linked.endBalance, 8560);
+    // 10000 − 1410 bill − 1440 envelope spread in full = 7150. That $1,410 gap is the double count.
+    assert.equal(orphan.endBalance, 7150);
+    assert.equal(round2(linked.endBalance - orphan.endBalance), 1410);
+  });
+
+  test("an unlinked bill is reported, not silently absorbed", () => {
+    const p = withBill(null);
+    assert.equal(p.months[0].unbudgetedBillTotal, 1410);
+    assert.deepEqual(
+      p.months[0].unbudgetedBills.map((b) => b.name),
+      ["Riverside Apartments"],
+    );
+  });
+
+  test("a zero-based month where every bill finds its envelope projects flat", () => {
+    // Income = debt + envelopes, and each bill draws from a line. Month-end should equal start.
+    const p = projectCash({
+      asOf: "2026-09-01",
+      cashNow: 5000,
+      segments: [
+        september({
+          paydays: [{ date: "2026-09-06", amount: 2000 }],
+          lines: [cat(1, 1200, 0), cat(2, 800, 0)],
+          bills: [
+            { id: 1, name: "Rent", amount: 1000, dueDay: 1, paid: false, lineId: 1, accountId: null },
+            { id: 2, name: "Power", amount: 150, dueDay: 2, paid: false, lineId: 2, accountId: null },
+          ],
+        }),
+      ],
+      debts: [],
+    });
+    // 2000 in; out = 1150 of bills + (2000 planned − 1150 consumed) = 2000. Net zero.
+    assert.equal(p.endBalance, 5000);
+    assert.equal(p.months[0].unbudgetedBillTotal, 0);
   });
 });
 
@@ -319,38 +578,42 @@ describe("projectCash — focus month and lead-in", () => {
   });
 });
 
-describe("projectCash — debt lines plan paydown, not payments", () => {
-  const debtLine = (o: Partial<ProjectionLine>): ProjectionLine => ({
-    id: 900,
-    kind: "debt",
-    label: "Card A",
-    planned: 200,
-    actual: 0,
-    accountId: 10,
-    ...o,
-  });
-  const debtEvents = (line: ProjectionLine) =>
-    projectCash({
-      asOf: "2026-09-20",
-      cashNow: 2000,
-      segments: [september({ paydays: [], lines: [line] })],
-      debts: [],
-    }).events.filter((e) => e.kind === "debt");
+describe("planMonth — the fixed budgeted path", () => {
+  const seg = () =>
+    october({
+      // Half of October's payroll already landed and half the groceries are spent — none of which
+      // the plan may look at.
+      observedDeposits: [{ date: "2026-10-06", amount: 3000.02 }],
+      pending: [{ id: 1, label: "Pending", date: "2026-10-09", amount: 80, lineId: 1 }],
+      bills: [
+        { id: 1, name: "Rent", amount: 1410, dueDay: 1, paid: true, lineId: null, accountId: null },
+        { id: 2, name: "Gym", amount: 50, dueDay: 9, paid: false, lineId: 1, accountId: null },
+      ],
+      lines: [cat(1, 620, 310)],
+    });
 
-  test("card purchases not paid off yet are still owed on top of the planned paydown", () => {
-    // $150 of groceries went on the card (already counted as spent by its envelope), nothing paid
-    // yet: the cash that will leave is $150 to clear them + the $200 paydown.
-    const ev = debtEvents(debtLine({ actual: -150, paid: 0, charged: 150 }));
-    assert.equal(ev.length, 1);
-    assert.equal(ev[0].amount, -350);
+  test("walks every day of the month from the opening balance", () => {
+    const plan = planMonth(seg(), 5000);
+    assert.equal(plan.start, 5000);
+    assert.equal(plan.days.length, 31);
+    assert.equal(plan.days[0].date, "2026-10-01");
+    assert.equal(plan.days[30].date, "2026-10-31");
   });
 
-  test("a payment that only cleared the new charges leaves the whole paydown owed", () => {
-    const ev = debtEvents(debtLine({ actual: 0, paid: 150, charged: 150 }));
-    assert.equal(ev[0].amount, -200);
+  test("ignores actuals, paid marks, matched deposits and pending", () => {
+    // In full: +2 paydays, −rent, −gym, and the grocery line's 620 (gym comes out of it, so 570
+    // is spread). Nothing that happened changes that.
+    const expected = round2(5000 + 3000.01 * 2 - 1410 - 50 - 570);
+    assert.equal(planMonth(seg(), 5000).endBalance, expected);
+    const untouched = { ...seg(), observedDeposits: [], pending: [], bills: seg().bills.map((b) => ({ ...b, paid: false })), lines: [cat(1, 620, 0)] };
+    assert.deepEqual(planMonth(untouched, 5000), planMonth(seg(), 5000));
   });
 
-  test("paydown met: nothing more goes out", () => {
-    assert.equal(debtEvents(debtLine({ actual: 200, paid: 350, charged: 150 })).length, 0);
+  test("bills leave on their due day, paydays land on theirs", () => {
+    const by = new Map(planMonth(seg(), 5000).days.map((d) => [d.date, d.balance]));
+    const daily = 570 / 31;
+    assert.equal(by.get("2026-10-01"), round2(5000 - 1410 - daily));
+    assert.equal(by.get("2026-10-06"), round2(5000 - 1410 + 3000.01 - daily * 6));
+    assert.equal(by.get("2026-10-09"), round2(5000 - 1410 + 3000.01 - 50 - daily * 9));
   });
 });

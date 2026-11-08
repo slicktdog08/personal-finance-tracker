@@ -10,11 +10,23 @@
  *   status                                  settings, banks, last run, pending count
  *   enrollments                             linked banks + their accounts + mappings
  *   enroll --provider <id> --token T --enrollment ENR [--institution NAME]
- *                                           store an access token (headless / sandbox)
+ *                                           store an access token (headless / sandbox);
+ *                                           for simplefin, T is the Access URL and
+ *                                           --enrollment may be left out
+ *   simplefin claim [setupToken]            exchange a Setup Token for its Access URL
+ *                                           (single-use — keep the output secret)
+ *   simplefin link [setupToken]             claim + store the enrollment in one step
+ *                                           (token defaults to SIMPLE_FIN_SETUP_TOKEN)
+ *   plaid sandbox-link [institutionId]      SANDBOX: create + store a test Item without Link
+ *   plaid fire-webhook <enrollmentDbId> [CODE]   SANDBOX: make Plaid send a webhook
+ *   plaid reset-login <enrollmentDbId>      SANDBOX: force ITEM_LOGIN_REQUIRED (test Reconnect)
+ *   plaid set-webhook <enrollmentDbId> [url] point an Item's webhooks at this app
  *   map <syncAccountId> <accountId|none> [--from YYYY-MM-DD]
  *   account <syncAccountId> [--enabled 0|1] [--balances 0|1] [--from YYYY-MM-DD]
  *   pause <enrollmentDbId> | resume <enrollmentDbId> | remove <enrollmentDbId> [--keep-remote]
- *   sync [--enrollment <dbId>] [--dry-run]  run the sync writer (provider call)
+ *   sync [--enrollment <dbId>] [--dry-run] [--raw]
+ *                                           run the sync writer (provider call); --raw (dry
+ *                                           runs) prints the provider's response JSON
  *   runs [--last N] | run <id>              run history / one run's details
  *   settings [key=value ...]                show or change sync_settings
  *   ignored [--clear <source> <externalId>] tombstones for deleted synced rows
@@ -118,12 +130,81 @@ async function main() {
     case "enroll": {
       const provider = str(args.provider);
       const token = str(args.token);
-      const enrollmentId = str(args.enrollment);
+      let enrollmentId = str(args.enrollment);
+      if (provider === "simplefin" && token && !enrollmentId) {
+        enrollmentId = (await import("@/server/lib/simplefin")).simplefinEnrollmentId(token);
+      }
       if (!provider || !token || !enrollmentId) throw new Error("enroll needs --provider, --token and --enrollment");
       const { completeEnrollment } = await Y();
       const res = await completeEnrollment({ provider, accessToken: token, enrollmentId, institutionName: str(args.institution) ?? null });
       console.log(`enrollment #${res.enrollmentDbId} stored; ${res.accounts.length} accounts (${res.accounts.filter((a) => a.accountId != null).length} auto-mapped)`);
       table(res.accounts.map((a) => ({ syncAccountId: a.id, name: a.name, type: a.type, last4: a.lastFour, feeds: a.accountId ?? "—", from: a.syncFrom ?? "" })));
+      break;
+    }
+    case "plaid": {
+      const [sub, arg, arg2] = rest;
+      const plaid = await import("@/server/lib/plaid");
+      const tokenFor = async (id: string | undefined) => {
+        if (!id) throw new Error(`plaid ${sub} <enrollmentDbId>`);
+        const { db } = await import("@/server/db");
+        const { syncEnrollments } = await import("@/server/db/schema");
+        const { eq } = await import("drizzle-orm");
+        const { decryptToken } = await import("@/server/lib/sync/crypto");
+        const [row] = await db.select().from(syncEnrollments).where(eq(syncEnrollments.id, Number(id))).limit(1);
+        if (!row || row.provider !== "plaid") throw new Error(`#${id} is not a Plaid enrollment`);
+        return decryptToken(row.accessTokenEnc);
+      };
+      console.log(`Plaid environment: ${plaid.plaidEnv()}`);
+      if (sub === "sandbox-link") {
+        const { accessToken, itemId } = await plaid.exchangePublicToken(await plaid.sandboxCreatePublicToken(arg ?? plaid.SANDBOX_INSTITUTION));
+        const { completeEnrollment } = await Y();
+        const res = await completeEnrollment({ provider: "plaid", accessToken, enrollmentId: itemId });
+        console.log(`enrollment #${res.enrollmentDbId} (item ${itemId}); ${res.accounts.length} accounts — map them before syncing`);
+        table(res.accounts.map((a) => ({ syncAccountId: a.id, name: a.name, type: a.type, subtype: a.subtype, last4: a.lastFour, feeds: a.accountId ?? "—" })));
+      } else if (sub === "fire-webhook") {
+        await plaid.sandboxFireWebhook(await tokenFor(arg), arg2 ?? "DEFAULT_UPDATE");
+        console.log(`asked Plaid to send ${arg2 ?? "DEFAULT_UPDATE"} to ${plaid.plaidWebhookUrl() ?? "(the Item's webhook URL)"}`);
+      } else if (sub === "reset-login") {
+        await plaid.sandboxResetLogin(await tokenFor(arg));
+        console.log("Item now needs re-authentication: the next sync marks it disconnected; Reconnect fixes it.");
+      } else if (sub === "set-webhook") {
+        const url = arg2 ?? plaid.plaidWebhookUrl();
+        if (!url) throw new Error("no URL given and neither PLAID_WEBHOOK_URL nor an https APP_URL is set");
+        await plaid.updateItemWebhook(await tokenFor(arg), url);
+        console.log(`webhook set to ${url}`);
+      } else {
+        throw new Error("usage: plaid sandbox-link|fire-webhook|reset-login|set-webhook …");
+      }
+      break;
+    }
+    case "simplefin": {
+      const [sub, arg] = rest;
+      const setupToken = arg ?? process.env.SIMPLE_FIN_SETUP_TOKEN?.trim();
+      if ((sub !== "claim" && sub !== "link") || !setupToken) {
+        throw new Error("usage: simplefin claim|link [setupToken]  (defaults to SIMPLE_FIN_SETUP_TOKEN)");
+      }
+      const { claimSetupToken, simplefinEnrollmentId } = await import("@/server/lib/simplefin");
+      const accessUrl = await claimSetupToken(setupToken);
+      if (sub === "claim") {
+        console.log(accessUrl);
+        break;
+      }
+      const { completeEnrollment } = await Y();
+      try {
+        const res = await completeEnrollment({
+          provider: "simplefin",
+          accessToken: accessUrl,
+          enrollmentId: simplefinEnrollmentId(accessUrl),
+          institutionName: "SimpleFIN Bridge",
+        });
+        console.log(`enrollment #${res.enrollmentDbId} stored; ${res.accounts.length} accounts (${res.accounts.filter((a) => a.accountId != null).length} auto-mapped)`);
+        table(res.accounts.map((a) => ({ syncAccountId: a.id, name: a.name, bank: a.subtype, last4: a.lastFour, feeds: a.accountId ?? "—" })));
+        console.log("The Setup Token is now used up — remove SIMPLE_FIN_SETUP_TOKEN from the env file.");
+      } catch (e) {
+        // The token is spent; print the Access URL so `enroll --provider simplefin --token <url>` can retry.
+        console.error(`storing failed: ${(e as Error).message}\nretry with: npm run sync -- enroll --provider simplefin --token '${accessUrl}'`);
+        throw e;
+      }
       break;
     }
     case "map": {
@@ -182,6 +263,13 @@ async function main() {
       for (const e of summary.enrollments) {
         for (const a of e.accounts) {
           for (const d of a.softDupes) console.log(`  dupe skipped: ${d.date} ${d.direction} ${money(d.amount)} "${d.description}" ≈ #${d.existingId} "${d.existingDescription}"`);
+        }
+      }
+      if (args.raw) {
+        if (!summary.dryRun) console.log("(--raw needs --dry-run)");
+        for (const e of summary.enrollments) {
+          console.log(`\n--- provider response: ${e.institution ?? e.enrollmentId} ---`);
+          console.log(JSON.stringify(e.providerResponse ?? null, null, 2));
         }
       }
       if (summary.status === "failed") process.exitCode = 1;
@@ -257,7 +345,7 @@ async function main() {
         console.log(`#${e.id} ${e.institutionName ?? e.enrollmentId} (${e.status})`);
         const accounts = await provider.listAccounts(token);
         for (const a of accounts) {
-          const b = await provider.getBalances(token, a.externalId);
+          const b = await provider.getBalances(token, { externalId: a.externalId, type: a.type });
           console.log(`  ${a.externalId} ${a.name} ${a.type}/${a.subtype} ····${a.lastFour} ${a.status}  ledger=${b.ledger ?? "?"} available=${b.available ?? "?"}`);
         }
       }
@@ -271,6 +359,14 @@ async function main() {
       console.log(`SYNC_TOKEN_ENCRYPTION_KEY: ${hasTokenKey() ? "ok" : "MISSING / not 32-byte hex"}`);
       console.log(`SYNC_SCHEDULER: ${process.env.SYNC_SCHEDULER ?? "(unset)"}`);
       console.log(`SYNC_CRON_SECRET: ${process.env.SYNC_CRON_SECRET ? "set" : "not set (/api/sync/run needs a session)"}`);
+      {
+        const plaid = await import("@/server/lib/plaid");
+        console.log(
+          plaid.plaidConfigured()
+            ? `Plaid: ${plaid.plaidEnv()} · redirect ${plaid.plaidRedirectUri() ?? "(none: APP_URL isn't https — OAuth banks unavailable)"} · webhook ${plaid.plaidWebhookUrl() ?? "(none)"}`
+            : "Plaid: not configured (PLAID_API_CLIENT_ID / PLAID_API_SECRET)",
+        );
+      }
       const { listEnrollmentsWithAccounts } = await Y();
       const { decryptToken } = await import("@/server/lib/sync/crypto");
       const { db } = await import("@/server/db");

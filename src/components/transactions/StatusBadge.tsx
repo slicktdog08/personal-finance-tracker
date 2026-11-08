@@ -4,6 +4,7 @@ import { useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { LOCAL_SOURCES, sourceLabel } from "@/constants/sync";
 import { setTransactionPending } from "@/server/actions/transactions";
+import { Icon } from "@/components/ds";
 
 // Provenance and one-click settling for the transactions tables. The "Pending" pill itself is
 // NOT here — each table renders its own from `t.pending`, which is the flag the database
@@ -15,8 +16,8 @@ import { setTransactionPending } from "@/server/actions/transactions";
 export function SourceGlyph({ source }: { source?: string | null }) {
   if (!source || LOCAL_SOURCES.includes(source)) return null;
   return (
-    <span title={sourceLabel(source)} className="shrink-0 text-[11px] text-neutral-400" aria-label={sourceLabel(source)}>
-      ⇄
+    <span title={sourceLabel(source)} className="inline-flex shrink-0 text-fg-3" aria-label={sourceLabel(source)}>
+      <Icon name="refresh-cw" size={12} />
     </span>
   );
 }
@@ -45,14 +46,16 @@ export function MarkPostedButton({
       onClick={() =>
         start(async () => {
           const res = await setTransactionPending(id, false, path);
-          if (!res.ok) alert(res.error);
-          router.refresh();
+          if (!res.ok) {
+            alert(res.error);
+            router.refresh();
+          }
         })
       }
       title="Mark as posted"
-      className="shrink-0 text-[10px] font-medium text-amber-700 dark:text-amber-400 hover:underline disabled:opacity-50"
+      className="shrink-0 text-[11px] font-medium text-accent-text hover:underline disabled:opacity-50"
     >
-      mark posted
+      Mark posted
     </button>
   );
 }

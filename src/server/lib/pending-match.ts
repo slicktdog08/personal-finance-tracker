@@ -5,7 +5,16 @@
 // ("Dinner at Joe's") rarely matches the bank's ("SQ *JOES GRILL 8842"), the bank posts a
 // day or several later, and a restaurant hold grows by the tip. What does line up is the
 // account and the direction, a date within a few days, and an amount within a tip's reach —
-// so those are the gates, and the description only breaks ties.
+// so those are the gates.
+//
+// The description is a gate too, of a kind that depends on who wrote the pending row:
+// - A bank-synced pending row carries the bank's own descriptor, and the posted version of the
+//   same charge keeps the merchant's words ("TST* DEMO CANTINA" → "TST*DEMO CANTINA - NORTH"). So
+//   it only pairs with a posted row that shares the merchant name. Without this, any same-card
+//   charge a few dollars apart was offered as its twin (SAMPLE GROCER #12 ↔ DEMO CANTINA).
+// - A row typed by hand ("Dinner at Joe's") can't be expected to share words, so it may still
+//   pair on amount and date alone — but then the evidence has to look like a real settle: the
+//   exact amount, or the bank posting on/after the entry with the charge grown by at most a tip.
 //
 // Pure — no DB — so the import preview, the reconcile panel and a quick script all share it.
 
@@ -19,7 +28,17 @@ export interface MatchSide {
   amount: number; // magnitude
   direction: string; // Debit | Credit
   description: string;
+  /** Pending side only: typed by hand (true) or carrying the bank's descriptor (false).
+   *  Missing = typed by hand, the case the matcher was first written for. */
+  handEntered?: boolean;
 }
+
+/** Shared-word score a bank-synced pending row needs with its posted twin. */
+export const BANK_NAME_MIN = 0.5;
+/** With no shared words, a hand-typed row's posted twin may grow by at most this share… */
+export const UNNAMED_TIP_PCT = 0.25;
+/** …or this many dollars, whichever is larger (a $4 coffee with a $1 tip). */
+export const UNNAMED_TIP_MIN = 1;
 
 /** The posted row may land this many days before the hand-entered date (a typo'd date)… */
 export const DAYS_BEFORE = 3;
@@ -45,8 +64,8 @@ export function amountTolerance(enteredAmount: number): number {
 }
 
 // Share of the shorter merchant key's words that appear in the other — "JOES GRILL" vs
-// "SQ JOES GRILL" is 1.0, unrelated names 0. Only a tie-breaker, never a gate.
-function nameSimilarity(a: string, b: string): number {
+// "SQ JOES GRILL" is 1.0, unrelated names 0.
+export function nameSimilarity(a: string, b: string): number {
   const ta = new Set(normalizeMerchant(a).split(" ").filter((w) => w.length >= 3));
   const tb = new Set(normalizeMerchant(b).split(" ").filter((w) => w.length >= 3));
   if (!ta.size || !tb.size) return 0;
@@ -70,10 +89,21 @@ export function matchScore(entered: MatchSide, posted: MatchSide): number | null
   const tol = amountTolerance(entered.amount);
   if (diff > tol + 0.005) return null;
 
-  const amountScore = diff < 0.005 ? 1 : 0.8 * (1 - diff / tol);
+  const exact = diff < 0.005;
+  const nameScore = nameSimilarity(entered.description, posted.description);
+  if (entered.handEntered === false) {
+    if (nameScore < BANK_NAME_MIN) return null;
+  } else if (nameScore === 0 && !exact) {
+    // Nothing in common but the numbers: only a charge that settled on/after the entry and grew
+    // by a tip at most. A "posted" row dated before the entry, or one that nearly doubled
+    // ($1.60 → $3.00), is a different purchase.
+    const grew = Math.abs(posted.amount) - Math.abs(entered.amount);
+    if (gap < 0 || grew < -0.005 || grew > Math.max(UNNAMED_TIP_MIN, Math.abs(entered.amount) * UNNAMED_TIP_PCT) + 0.005) return null;
+  }
+
+  const amountScore = exact ? 1 : 0.8 * (1 - diff / tol);
   // Same day or the next couple of days is the norm; far ends of the window score low.
   const dateScore = 1 - Math.abs(gap) / (gap < 0 ? DAYS_BEFORE + 1 : DAYS_AFTER + 1);
-  const nameScore = nameSimilarity(entered.description, posted.description);
   return Math.round((0.5 * amountScore + 0.3 * dateScore + 0.2 * nameScore) * 1000) / 1000;
 }
 
@@ -89,11 +119,16 @@ export interface PendingPair {
  * Pair each hand-entered row with at most one posted row (and vice versa), best-scoring
  * pairs first, so two $12 lunches on the same card don't both claim the same bank row.
  */
-export function pairPending(entered: MatchSide[], posted: MatchSide[]): PendingPair[] {
+export function pairPending(
+  entered: MatchSide[],
+  posted: MatchSide[],
+  /** Pairs the user said are different charges ("Keep both"), as `${enteredId}:${postedId}`. */
+  dismissed: ReadonlySet<string> = new Set(),
+): PendingPair[] {
   const all: PendingPair[] = [];
   for (const e of entered) {
     for (const p of posted) {
-      if (e.id === p.id) continue;
+      if (e.id === p.id || dismissed.has(`${e.id}:${p.id}`)) continue;
       const score = matchScore(e, p);
       if (score == null) continue;
       all.push({

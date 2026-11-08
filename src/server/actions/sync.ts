@@ -1,12 +1,12 @@
 "use server";
 
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { db } from "@/server/db";
 import { syncAccounts, syncEnrollments } from "@/server/db/schema";
 import { requireSession } from "@/server/auth/session";
 import { hasTokenKey } from "@/server/lib/sync/crypto";
-import { isKnownProvider, registeredProviderIds } from "@/server/lib/sync/provider";
+import { getProvider, isKnownProvider, registeredProviderIds } from "@/server/lib/sync/provider";
 import {
   getSyncSettings,
   updateSyncSettings,
@@ -55,15 +55,34 @@ export interface ConnectConfig {
   providers: string[];
   ready: boolean;
   problems: string[];
+  // SIMPLE_FIN_SETUP_TOKEN is set, so linking can use it without pasting anything.
+  simplefinEnvToken: boolean;
+  // Plaid needs its own keys; null when PLAID_API_CLIENT_ID / PLAID_API_SECRET aren't set.
+  plaid: { env: string } | null;
 }
 
 export async function getConnectConfig(): Promise<ConnectConfig> {
   await requireSession();
   const providers = registeredProviderIds();
   const problems: string[] = [];
-  if (!providers.length) problems.push("No bank provider is wired up yet (Teller shut down in July 2026). The sync engine is ready for the next one.");
+  if (!providers.length) problems.push("No bank provider is registered (see src/server/lib/sync/provider.ts).");
   if (!hasTokenKey()) problems.push("SYNC_TOKEN_ENCRYPTION_KEY is missing or not 32 bytes of hex.");
-  return { providers, ready: problems.length === 0, problems };
+  const { plaidConfigured, plaidEnv } = await import("@/server/lib/plaid");
+  let plaid: ConnectConfig["plaid"] = null;
+  if (plaidConfigured()) {
+    try {
+      plaid = { env: plaidEnv() };
+    } catch (e) {
+      problems.push(message(e)); // bad PLAID_ENV
+    }
+  }
+  return {
+    providers,
+    ready: problems.length === 0,
+    problems,
+    simplefinEnvToken: Boolean(process.env.SIMPLE_FIN_SETUP_TOKEN?.trim()),
+    plaid,
+  };
 }
 
 export interface ConnectSuccess {
@@ -99,6 +118,85 @@ export async function finishEnrollment(input: ConnectSuccess): Promise<Result<{ 
     };
   } catch (e) {
     return { ok: false, error: message(e) };
+  }
+}
+
+// SimpleFIN link flow: the user pastes a Setup Token from SimpleFIN Bridge (or, to recover, the
+// Access URL it was exchanged for); with nothing pasted, SIMPLE_FIN_SETUP_TOKEN is used. The token is single-use, so everything that could fail
+// for local reasons is checked BEFORE it is claimed, and if storing fails after the claim the
+// Access URL is handed back so it can be pasted instead of burning another token.
+// `reconnectEnrollmentDbId` swaps the credentials of an existing SimpleFIN enrollment
+// (revoked access, rotated token) and keeps its mappings.
+export async function linkSimplefin(input: {
+  token: string;
+  reconnectEnrollmentDbId?: number;
+}): Promise<Result<{ enrollmentDbId: number; mapped: number; unmapped: number }>> {
+  await requireSession();
+  const token = input.token?.trim() || process.env.SIMPLE_FIN_SETUP_TOKEN?.trim() || "";
+  if (!token) return { ok: false, error: "Paste the Setup Token from SimpleFIN Bridge (or set SIMPLE_FIN_SETUP_TOKEN)." };
+  if (!hasTokenKey()) return { ok: false, error: "SYNC_TOKEN_ENCRYPTION_KEY is missing or not 32 bytes of hex — set it before linking." };
+  const { claimSetupToken, parseAccessUrl, simplefinEnrollmentId } = await import("@/server/lib/simplefin");
+
+  let enrollmentId: string | null = null;
+  if (input.reconnectEnrollmentDbId != null) {
+    const [row] = await db.select().from(syncEnrollments).where(eq(syncEnrollments.id, input.reconnectEnrollmentDbId)).limit(1);
+    if (!row || row.provider !== "simplefin") return { ok: false, error: "That SimpleFIN connection no longer exists." };
+    enrollmentId = row.enrollmentId;
+  }
+
+  let accessUrl: string;
+  try {
+    if (/^https?:\/\//i.test(token)) {
+      parseAccessUrl(token);
+      accessUrl = token;
+    } else {
+      accessUrl = await claimSetupToken(token);
+    }
+  } catch (e) {
+    return { ok: false, error: message(e) };
+  }
+  const claimed = accessUrl !== token;
+  const recover = (why: string) =>
+    claimed
+      ? `${why} The Setup Token has been used up; to retry without a new one, paste this Access URL instead: ${accessUrl}`
+      : why;
+
+  try {
+    // Accounts already fed by a different SimpleFIN enrollment mean this is the same
+    // Bridge login again — that has to go through Reconnect on the existing entry.
+    if (enrollmentId == null) {
+      enrollmentId = simplefinEnrollmentId(accessUrl);
+      const provider = await getProvider("simplefin");
+      const ids = (await provider.listAccounts(accessUrl)).map((a) => a.externalId);
+      if (ids.length) {
+        const [clash] = await db
+          .select({ enrollmentId: syncEnrollments.enrollmentId, name: syncEnrollments.institutionName })
+          .from(syncAccounts)
+          .innerJoin(syncEnrollments, eq(syncAccounts.enrollmentId, syncEnrollments.id))
+          .where(inArray(syncAccounts.externalAccountId, ids))
+          .limit(1);
+        if (clash && clash.enrollmentId !== enrollmentId) {
+          return { ok: false, error: recover(`These accounts already come in through "${clash.name ?? clash.enrollmentId}". Use Reconnect on that entry instead.`) };
+        }
+      }
+    }
+    const { enrollmentDbId, accounts } = await completeEnrollment({
+      provider: "simplefin",
+      accessToken: accessUrl,
+      enrollmentId,
+      institutionName: "SimpleFIN Bridge",
+    });
+    revalidateSynced();
+    return {
+      ok: true,
+      value: {
+        enrollmentDbId,
+        mapped: accounts.filter((a) => a.accountId != null).length,
+        unmapped: accounts.filter((a) => a.accountId == null).length,
+      },
+    };
+  } catch (e) {
+    return { ok: false, error: recover(message(e)) };
   }
 }
 

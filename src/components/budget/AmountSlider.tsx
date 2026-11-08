@@ -1,11 +1,12 @@
 "use client";
 
 import { useState } from "react";
+import { Input, Slider } from "@/components/ds";
 
 /**
- * Desktop money control: a slim track with a filled portion in the envelope's color and a
- * typed field to its right. `onChange` fires while dragging; `onCommit` once on release / blur /
- * Enter / arrow keys. Styled via `.envelope-range` in globals.css.
+ * Desktop money control: the design system's slider in the envelope's color and a typed field
+ * to its right. `onChange` fires while dragging; `onCommit` once on release / blur / Enter /
+ * arrow keys — so a drag is one server write, not fifty.
  */
 export function AmountSlider({
   value,
@@ -30,7 +31,6 @@ export function AmountSlider({
 }) {
   const [text, setText] = useState<string | null>(null);
   const hi = Math.max(max, value, min + step);
-  const pct = ((Math.min(Math.max(value, min), hi) - min) / (hi - min)) * 100;
   const parse = (s: string) => {
     const n = Number(s.replace(/[$,\s]/g, ""));
     return s.trim() === "" || Number.isNaN(n) ? null : Math.max(min, Math.round(n));
@@ -38,27 +38,26 @@ export function AmountSlider({
   const commit = (v: number) => onCommit?.(v);
   return (
     <div className="flex items-center gap-3 min-w-0 flex-1">
-      <input
-        type="range"
+      <Slider
         min={min}
         max={hi}
         step={step}
         value={Math.min(Math.max(value, min), hi)}
+        color={color ?? undefined}
         disabled={disabled}
         aria-label={ariaLabel}
-        onChange={(e) => onChange(Number(e.target.value))}
+        onChange={onChange}
         onPointerUp={(e) => commit(Number((e.target as HTMLInputElement).value))}
         onKeyUp={(e) => {
           if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End", "PageUp", "PageDown"].includes(e.key))
             commit(Number((e.target as HTMLInputElement).value));
         }}
-        className="envelope-range flex-1 min-w-16 cursor-pointer disabled:cursor-default"
-        style={{ "--range-color": color || "#6366f1", "--range-pct": `${pct}%` } as React.CSSProperties}
+        className="flex-1 min-w-16 cursor-pointer disabled:cursor-default disabled:opacity-40"
       />
-      <div className="relative">
-        <span className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-sm text-neutral-400">$</span>
-        <input
-          inputMode="numeric"
+      <div className="w-28 shrink-0">
+        <Input
+          money
+          icon="dollar-sign"
           aria-label={`${ariaLabel} (typed)`}
           value={text ?? String(value)}
           disabled={disabled}
@@ -76,7 +75,7 @@ export function AmountSlider({
           onKeyDown={(e) => {
             if (e.key === "Enter") (e.target as HTMLInputElement).blur();
           }}
-          className="h-9 w-24 rounded-lg border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 pl-5 pr-2 text-right text-sm font-semibold tabular-nums outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-400/20 disabled:opacity-40"
+          className="h-9 font-semibold"
         />
       </div>
     </div>

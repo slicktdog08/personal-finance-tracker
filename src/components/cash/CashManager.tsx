@@ -15,6 +15,20 @@ import { todayIso } from "@/server/lib/pay-schedule";
 import { formatMoney } from "@/server/lib/money";
 import { formatDate } from "@/server/lib/period";
 import type { CashHeld, CashOverview } from "@/server/queries";
+import {
+  Button,
+  Card,
+  Checkbox,
+  EmptyState,
+  Glyph,
+  Input,
+  ListRow,
+  Money,
+  ProgressBar,
+  Select,
+  StatTile,
+  type VarStyle,
+} from "@/components/ds";
 
 /**
  * The month's cash, both halves side by side: withdrawals that still hold unexplained money,
@@ -56,9 +70,11 @@ export function CashManager({
     setError("");
     start(async () => {
       const res = await allocateCash(wid, spendId);
-      if (!res.ok) setError(res.error);
+      if (!res.ok) {
+        setError(res.error);
+        router.refresh();
+      }
       setPick((p) => ({ ...p, [spendId]: "" }));
-      router.refresh();
     });
   }
 
@@ -88,32 +104,24 @@ export function CashManager({
           ? `Linked ${res.applied}; ${res.skipped} couldn't be applied. ${res.errors.join(" ")}`
           : "",
       );
-      router.refresh();
     });
   }
 
-  const card =
-    "rounded-lg border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900";
-
   return (
-    <div className="space-y-5">
+    <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-2">
-        <select
+        <Select
+          aria-label="Month"
           value={selected}
           onChange={(e) => goMonth(e.target.value)}
-          className="border rounded px-2 py-1 text-sm bg-transparent border-neutral-300 dark:border-neutral-700"
-        >
-          <option value="">All months</option>
-          {periods.map((p) => (
-            <option key={p.label} value={p.label}>
-              {p.pretty}
-            </option>
-          ))}
-        </select>
-        <button
+          options={[{ value: "", label: "All months" }, ...periods.map((p) => ({ value: p.label, label: p.pretty }))]}
+          className="!w-auto min-w-44"
+        />
+        <Button
+          variant="secondary"
+          icon="wand-sparkles"
           onClick={suggest}
           disabled={pending || !unfunded.length}
-          className="px-3 py-1.5 rounded-md bg-neutral-900 text-white dark:bg-white dark:text-neutral-900 text-sm font-medium disabled:opacity-40"
           title={
             unfunded.length
               ? "Match unfunded purchases to the withdrawals that could have paid for them"
@@ -121,105 +129,111 @@ export function CashManager({
           }
         >
           Suggest matches
-        </button>
-        {error && <span className="text-sm text-red-600 dark:text-red-400">{error}</span>}
+        </Button>
+        {error && <span className="text-sm text-over">{error}</span>}
       </div>
 
       {/* The month's arithmetic, in the order it reads: took out, minus the two things that
           explain it (bought something / still holding it), leaves what really went missing. */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <Stat label="Withdrawn" value={totals.withdrawn} hint="Cash pulled out this month" />
-        <Stat
-          label="Spent on logged purchases"
-          value={totals.accounted}
-          // `accounted` is what these withdrawals paid for — which can include purchases dated
-          // next month — so it deliberately isn't the same figure as this month's wallet
-          // spending. Both are shown rather than conflated.
-          hint={
-            totals.unfunded > 0
-              ? `${formatMoney(totals.walletSpend)} of cash purchases logged this month, ${formatMoney(
-                  totals.unfunded,
-                )} of it not tied to a withdrawal yet`
-              : `${formatMoney(totals.walletSpend)} of cash purchases logged this month`
-          }
-          tone="good"
-        />
+      <div className="mp-grid mp-grid--keep2" style={{ "--cols": 4 } as VarStyle}>
+        <Card>
+          <StatTile size="sm" label="Withdrawn" value={totals.withdrawn} sub="Cash pulled out this month" />
+        </Card>
+        <Card>
+          <StatTile
+            size="sm"
+            label="Spent on logged purchases"
+            value={totals.accounted}
+            // `accounted` is what these withdrawals paid for — which can include purchases dated
+            // next month — so it deliberately isn't the same figure as this month's wallet
+            // spending. Both are shown rather than conflated.
+            sub={
+              totals.unfunded > 0
+                ? `${formatMoney(totals.walletSpend)} of cash purchases logged this month, ${formatMoney(
+                    totals.unfunded,
+                  )} of it not tied to a withdrawal yet`
+                : `${formatMoney(totals.walletSpend)} of cash purchases logged this month`
+            }
+          />
+        </Card>
         {/* Swings both ways: cash kept is an asset, cash drawn down from an earlier month is
             spending with no transaction behind it. */}
-        <Stat
-          label={totals.held < 0 ? "Spent from earlier cash" : "Still in your pocket"}
-          value={Math.abs(totals.held)}
-          hint={
-            pocket.countedOn
-              ? `Counted ${formatDate(pocket.countedOn)} — ${formatMoney(
-                  pocket.closing,
-                )} on hand, ${formatMoney(pocket.opening)} carried in`
-              : "Never counted — so all of it reads as spent"
-          }
-          tone={totals.held < 0 ? "bad" : "good"}
-        />
-        <Stat
-          label="Unaccounted spending"
-          value={totals.unaccountedSpend}
-          hint="Gone, with nothing recorded to say where"
-          tone={totals.unaccountedSpend > 0 ? "bad" : "good"}
-        />
+        <Card>
+          <StatTile
+            size="sm"
+            label={totals.held < 0 ? "Spent from earlier cash" : "Still in your pocket"}
+            value={Math.abs(totals.held)}
+            kind={totals.held < 0 ? "over" : "neutral"}
+            sub={
+              pocket.countedOn
+                ? `Counted ${formatDate(pocket.countedOn)} — ${formatMoney(
+                    pocket.closing,
+                  )} on hand, ${formatMoney(pocket.opening)} carried in`
+                : "Never counted — so all of it reads as spent"
+            }
+          />
+        </Card>
+        <Card>
+          <StatTile
+            size="sm"
+            label="Unaccounted spending"
+            value={totals.unaccountedSpend}
+            kind={totals.unaccountedSpend > 0 ? "over" : "neutral"}
+            sub="Gone, with nothing recorded to say where"
+          />
+        </Card>
       </div>
 
       {/* Spell the arithmetic out. The whole point of this screen is that these four numbers
           add up, so show them adding up rather than asking anyone to take it on faith. */}
-      <p className="text-xs text-neutral-500 tabular-nums">
+      <p className="text-xs text-fg-3 tabular-nums">
         {formatMoney(totals.withdrawn)} withdrawn − {formatMoney(totals.accounted)} on logged
         purchases{" "}
         {totals.held < 0
           ? `+ ${formatMoney(Math.abs(totals.held))} spent from earlier cash`
           : `− ${formatMoney(totals.held)} still in your pocket`}{" "}
-        = <strong>{formatMoney(totals.unaccountedSpend)}</strong> unaccounted.
+        = <strong className="text-fg">{formatMoney(totals.unaccountedSpend)}</strong> unaccounted.
       </p>
 
       <CountPocket wallet={wallet} pocket={pocket} monthEnd={selected} />
 
       {proposals && (
-        <div className="rounded-lg border border-blue-300 dark:border-blue-800 bg-blue-50 dark:bg-blue-950/30 p-3 space-y-2">
-          <div className="flex items-center justify-between gap-2">
-            <span className="text-sm font-medium">
-              {proposals.length
-                ? `${proposals.length - skipped.size} match${
-                    proposals.length - skipped.size === 1 ? "" : "es"
-                  } to apply`
-                : "No matches found"}
-            </span>
-            <span className="flex items-center gap-2">
-              <button
-                onClick={() => setProposals(null)}
-                className="text-sm text-neutral-500 hover:underline"
-              >
+        <Card
+          title={
+            proposals.length
+              ? `${proposals.length - skipped.size} match${proposals.length - skipped.size === 1 ? "" : "es"} to apply`
+              : "No matches found"
+          }
+          action={
+            <span className="flex items-center gap-1">
+              <Button size="sm" variant="ghost" onClick={() => setProposals(null)}>
                 Cancel
-              </button>
-              <button
+              </Button>
+              <Button
+                size="sm"
+                icon="check"
                 onClick={applyAll}
                 disabled={pending || proposals.length === skipped.size}
-                className="px-3 py-1.5 rounded-md bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 disabled:opacity-50"
               >
                 Apply
-              </button>
+              </Button>
             </span>
-          </div>
+          }
+        >
           {proposals.length === 0 && (
-            <p className="text-xs text-neutral-600 dark:text-neutral-300">
+            <p className="text-xs text-fg-2">
               Nothing lined up: every unfunded purchase is either older than its nearest
               withdrawal or more than {SUGGEST_WINDOW_DAYS} days after it — too far to guess at.
               Link those by hand below.
             </p>
           )}
-          <ul className="space-y-1">
+          <ul className="space-y-1.5">
             {/* Mobile: spend and withdrawal stack on two lines — two truncating
                 columns side-by-side leave neither readable at phone width. */}
             {proposals.map((p, i) => (
               <li key={`${p.withdrawalId}-${p.spendId}`} className="flex items-start gap-2 text-xs">
-                <input
-                  type="checkbox"
-                  className="mt-0.5"
+                <Checkbox
+                  aria-label="Include this match"
                   checked={!skipped.has(i)}
                   onChange={() =>
                     setSkipped((prev) => {
@@ -235,171 +249,133 @@ export function CashManager({
                     {formatDate(p.spendDate)} · {p.spendDescription}
                     {p.spendCategory ? ` (${p.spendCategory})` : ""}
                   </span>
-                  <span className="min-w-0 truncate text-neutral-600 dark:text-neutral-300 sm:flex-1">
+                  <span className="min-w-0 truncate text-fg-2 sm:flex-1">
                     ← {formatDate(p.withdrawalDate)} · {p.withdrawalDescription}
                   </span>
                 </div>
-                <span className="shrink-0 tabular-nums font-medium">{formatMoney(p.amount)}</span>
+                <Money value={p.amount} kind="neutral" className="shrink-0 font-medium" />
               </li>
             ))}
           </ul>
-        </div>
+        </Card>
       )}
 
-      <div className="grid lg:grid-cols-2 gap-5 items-start">
+      <div className="mp-grid items-start" style={{ "--cols": 2 } as VarStyle}>
         {/* ---- Withdrawals ---- */}
-        <section className={card}>
-          <header className="px-3 py-2 border-b border-neutral-200 dark:border-neutral-800">
-            <h2 className="font-semibold">Withdrawals</h2>
-            <p className="text-xs text-neutral-500">
-              Cash sources in this month, plus any from the last {carryInDays} days that still
-              hold money.
-            </p>
-          </header>
+        <Card title="Withdrawals" meta="where the cash came from">
+          <p className="mb-1 text-xs text-fg-3">
+            Cash sources in this month, plus any from the last {carryInDays} days that still hold
+            money. Tap one to see what it paid for.
+          </p>
           {withdrawals.length === 0 ? (
-            <p className="px-3 py-6 text-sm text-neutral-500">
-              No cash withdrawals here. Rows become withdrawals when you categorize them as
-              Cash.
-            </p>
+            <EmptyState
+              compact
+              icon="banknote"
+              title="No cash withdrawals here"
+              body="Rows become withdrawals when you categorize them as Cash."
+            />
           ) : (
-            <ul className="divide-y divide-neutral-100 dark:divide-neutral-800">
+            <ul className="divide-y divide-line">
               {withdrawals.map((w) => {
-                const pct = w.amount > 0 ? Math.min(100, (w.allocated / w.amount) * 100) : 0;
                 const isOpen = openId === w.id;
                 return (
-                  <li key={w.id}>
-                    <button
+                  <li key={w.id} className="py-1">
+                    <ListRow
                       onClick={() => setOpenId(isOpen ? null : w.id)}
-                      className="w-full text-left px-3 py-2 hover:bg-neutral-50 dark:hover:bg-neutral-800/50"
-                    >
-                      <div className="flex items-baseline gap-2">
-                        <span className="text-xs text-neutral-500 tabular-nums shrink-0">
-                          {formatDate(w.txnDate)}
-                        </span>
-                        <span className="flex-1 min-w-0 truncate text-sm">{w.description}</span>
-                        <span className="shrink-0 text-sm tabular-nums font-medium">
-                          {formatMoney(w.amount)}
-                        </span>
+                      lead={<Glyph icon="banknote" />}
+                      title={w.description}
+                      sub={`${formatDate(w.txnDate)}${w.accountLabel ? ` · ${w.accountLabel}` : ""}`}
+                      end={<Money value={-w.amount} />}
+                      endSub={
+                        w.remaining > 0 ? (
+                          <span className="text-over">{formatMoney(w.remaining)} unaccounted</span>
+                        ) : (
+                          "fully accounted for"
+                        )
+                      }
+                    />
+                    <ProgressBar
+                      value={w.allocated}
+                      max={w.amount || 1}
+                      size="sm"
+                      label="Share of this withdrawal matched to purchases"
+                      legendLeft={`${formatMoney(w.allocated)} matched to purchases`}
+                      legendRight={w.remaining > 0 ? `${formatMoney(w.remaining)} unaccounted` : undefined}
+                      className="mb-1.5"
+                    />
+                    {isOpen && (
+                      <div className="-mx-5 max-md:-mx-3.5 mb-1 border-y border-line">
+                        <CashOffsetDetail withdrawalId={w.id} />
                       </div>
-                      <div className="mt-1 flex items-center gap-2">
-                        <span className="h-1.5 flex-1 rounded-full bg-neutral-200 dark:bg-neutral-800 overflow-hidden">
-                          <span
-                            className="block h-full bg-emerald-500"
-                            style={{ width: `${pct}%` }}
-                          />
-                        </span>
-                        <span
-                          className={`text-[11px] tabular-nums shrink-0 ${
-                            w.remaining > 0
-                              ? "text-red-600 dark:text-red-400"
-                              : "text-emerald-700 dark:text-emerald-400"
-                          }`}
-                        >
-                          {w.remaining > 0
-                            ? `${formatMoney(w.remaining)} unaccounted`
-                            : "fully accounted for"}
-                        </span>
-                      </div>
-                    </button>
-                    {isOpen && <CashOffsetDetail withdrawalId={w.id} />}
+                    )}
                   </li>
                 );
               })}
             </ul>
           )}
-        </section>
+        </Card>
 
         {/* ---- Wallet purchases ---- */}
-        <section className={card}>
-          <header className="px-3 py-2 border-b border-neutral-200 dark:border-neutral-800">
-            <h2 className="font-semibold">Cash purchases needing a source</h2>
-            <p className="text-xs text-neutral-500">
-              Spending logged on the wallet that isn&apos;t drawn from a withdrawal yet — right
-              now it&apos;s counted on top of them.
-            </p>
-          </header>
+        <Card title="Cash purchases" meta="need a source">
+          <p className="mb-1 text-xs text-fg-3">
+            Spending logged on the wallet that isn&apos;t drawn from a withdrawal yet — right now
+            it&apos;s counted on top of them.
+          </p>
           {unfunded.length === 0 ? (
-            <p className="px-3 py-6 text-sm text-neutral-500">
-              {spends.length
-                ? "Every cash purchase in this month is accounted for. 🎉"
-                : "No cash purchases logged for this month."}
-            </p>
+            <EmptyState
+              compact
+              icon="circle-check"
+              title={spends.length ? "Every cash purchase is accounted for" : "No cash purchases logged"}
+              body={spends.length ? "Todo al día." : "Nothing spent from the wallet this month."}
+            />
           ) : (
-            <ul className="divide-y divide-neutral-100 dark:divide-neutral-800">
+            <ul className="divide-y divide-line">
               {unfunded.map((s) => {
                 const options = open.filter((w) => canFund(w, s));
                 return (
-                  <li key={s.id} className="px-3 py-2.5 space-y-1.5">
-                    <div className="flex items-baseline gap-2">
-                      <span className="flex-1 min-w-0 truncate text-sm">{s.description}</span>
-                      <span className="shrink-0 text-sm tabular-nums font-medium">
-                        {formatMoney(s.uncovered)}
-                      </span>
-                    </div>
-                    <div className="text-xs text-neutral-500 tabular-nums truncate">
-                      {formatDate(s.txnDate)}
-                      {s.category ? ` · ${s.category}` : ""}
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <select
+                  <li key={s.id} className="py-1 space-y-1.5">
+                    <ListRow
+                      lead={<Glyph icon="shopping-bag" />}
+                      title={s.description}
+                      sub={`${formatDate(s.txnDate)}${s.category ? ` · ${s.category}` : ""}`}
+                      end={<Money value={-s.uncovered} />}
+                      endSub={s.uncovered + 0.004 < s.amount ? `of ${formatMoney(s.amount)}` : undefined}
+                    />
+                    <div className="flex items-center gap-2 pb-1.5">
+                      <Select
+                        aria-label="Pay this from"
                         value={pick[s.id] ?? ""}
                         onChange={(e) => setPick((p) => ({ ...p, [s.id]: e.target.value }))}
                         disabled={!options.length}
-                        className="flex-1 min-w-0 border rounded px-2 py-1.5 text-xs bg-transparent border-neutral-300 dark:border-neutral-700 disabled:opacity-50"
-                      >
-                        <option value="">
-                          {options.length
-                            ? "— pay this from —"
-                            : "— no withdrawal nearby still holds cash —"}
-                        </option>
-                        {options.map((w) => (
-                          <option key={w.id} value={String(w.id)}>
-                            {formatDate(w.txnDate)} · {w.description.slice(0, 20)} ·{" "}
-                            {formatMoney(w.remaining)} left
-                          </option>
-                        ))}
-                      </select>
-                      <button
+                        options={[
+                          {
+                            value: "",
+                            label: options.length ? "Pick a source" : "No withdrawal nearby still holds cash",
+                          },
+                          ...options.map((w) => ({
+                            value: String(w.id),
+                            label: `${formatDate(w.txnDate)} · ${w.description.slice(0, 20)} · ${formatMoney(w.remaining)} left`,
+                          })),
+                        ]}
+                        className="!h-9 min-w-0 flex-1 !text-xs disabled:opacity-50"
+                      />
+                      <Button
+                        size="sm"
+                        variant="secondary"
                         onClick={() => offset(s.id)}
                         disabled={pending || !pick[s.id]}
-                        className="shrink-0 px-3 py-1.5 rounded bg-amber-600 text-white text-xs font-medium hover:bg-amber-700 disabled:opacity-50"
+                        className="shrink-0"
                       >
                         Offset
-                      </button>
+                      </Button>
                     </div>
                   </li>
                 );
               })}
             </ul>
           )}
-        </section>
+        </Card>
       </div>
-    </div>
-  );
-}
-
-function Stat({
-  label,
-  value,
-  hint,
-  tone,
-}: {
-  label: string;
-  value: number;
-  hint: string;
-  tone?: "good" | "bad";
-}) {
-  const color =
-    tone === "bad"
-      ? "text-red-600 dark:text-red-400"
-      : tone === "good"
-        ? "text-emerald-700 dark:text-emerald-400"
-        : "";
-  return (
-    <div className="rounded-lg border border-neutral-200 dark:border-neutral-800 p-3">
-      <div className="text-xs text-neutral-500">{label}</div>
-      <div className={`text-xl font-semibold tabular-nums ${color}`}>{formatMoney(value)}</div>
-      <div className="text-[11px] text-neutral-400 leading-snug mt-0.5">{hint}</div>
     </div>
   );
 }
@@ -422,7 +398,6 @@ function CountPocket({
   pocket: CashHeld;
   monthEnd: string;
 }) {
-  const router = useRouter();
   const [pending, start] = useTransition();
   const [open, setOpen] = useState(false);
   const [amount, setAmount] = useState("");
@@ -435,7 +410,6 @@ function CountPocket({
       await addAccountBalance(wallet.id, n, date, "Counted");
       setOpen(false);
       setAmount("");
-      router.refresh();
     });
   }
 
@@ -445,42 +419,37 @@ function CountPocket({
     <div className="flex flex-wrap items-center gap-2 text-sm">
       {open ? (
         <>
-          <span className="text-neutral-500">I have</span>
-          <input
+          <span className="text-fg-2">I have</span>
+          <Input
+            aria-label="Cash on hand"
+            money
             value={amount}
             onChange={(e) => setAmount(e.target.value)}
             placeholder="0.00"
-            inputMode="decimal"
             autoFocus
-            className="w-24 border rounded px-2 py-1 text-sm text-right bg-transparent border-neutral-300 dark:border-neutral-700"
+            className="!h-9 !w-28"
           />
-          <span className="text-neutral-500">in cash as of</span>
-          <input
+          <span className="text-fg-2">in cash as of</span>
+          <Input
+            aria-label="Counted on"
             type="date"
             value={date}
             onChange={(e) => setDate(e.target.value)}
-            className="border rounded px-2 py-1 text-sm bg-transparent border-neutral-300 dark:border-neutral-700"
+            className="!h-9 !w-auto"
           />
-          <button
-            onClick={save}
-            disabled={pending || amount === ""}
-            className="px-3 py-1 rounded-md bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700 disabled:opacity-50"
-          >
+          <Button size="sm" icon="check" onClick={save} disabled={pending || amount === ""}>
             Save count
-          </button>
-          <button onClick={() => setOpen(false)} className="text-neutral-500 hover:underline">
+          </Button>
+          <Button size="sm" variant="ghost" onClick={() => setOpen(false)}>
             Cancel
-          </button>
+          </Button>
         </>
       ) : (
         <>
-          <button
-            onClick={() => setOpen(true)}
-            className="px-3 py-1.5 rounded-md border border-emerald-400 dark:border-emerald-700 text-emerald-700 dark:text-emerald-400 text-sm font-medium hover:bg-emerald-50 dark:hover:bg-emerald-950/40"
-          >
-            💵 Count my cash
-          </button>
-          <span className="text-xs text-neutral-500">
+          <Button size="sm" variant="secondary" icon="banknote" onClick={() => setOpen(true)}>
+            Count my cash
+          </Button>
+          <span className="text-xs text-fg-3">
             {pocket.countedOn ? (
               <>
                 Last counted {formatDate(pocket.countedOn)} at {formatMoney(pocket.closing)}

@@ -1,33 +1,124 @@
 @import "tailwindcss";
+/* MiPlata design system: --mp-* tokens + mp-* component classes (see src/components/ds). */
+@import "../styles/miplata/tokens.css";
+@import "../styles/miplata/components.css";
+@import "../styles/miplata/motion.css";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
+/* The existing screens are written in Tailwind's neutral/emerald palette. Re-pointing those
+   ramps at the MiPlata ramps reskins every screen at once without touching its markup:
+   neutral → Plata (cool silver/slate), emerald → MiPlata emerald. */
+@theme {
+  --color-neutral-50: #f3f5f8;
+  --color-neutral-100: #e9ecf1;
+  --color-neutral-200: #d4dae2;
+  --color-neutral-300: #b8c0cc;
+  --color-neutral-400: #959fae;
+  --color-neutral-500: #6b7588;
+  --color-neutral-600: #525b6c;
+  --color-neutral-700: #3c4351;
+  --color-neutral-800: #272d37;
+  --color-neutral-900: #161a21;
+  --color-neutral-950: #0e1116;
+
+  --color-emerald-50: #ebf8f2;
+  --color-emerald-100: #d2f0e2;
+  --color-emerald-200: #a6e2c6;
+  --color-emerald-300: #6ccda4;
+  --color-emerald-400: #36b383;
+  --color-emerald-500: #14966a;
+  --color-emerald-600: #0b7a56;
+  --color-emerald-700: #0a6247;
+  --color-emerald-800: #0b4e3a;
+  --color-emerald-900: #0a3f30;
+  --color-emerald-950: #052e22;
 }
 
+/* Semantic utilities over the themed tokens (they follow light/dark and the accent):
+   bg-surface, text-fg-2, border-line, bg-accent, text-income, rounded-card, font-display… */
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --font-sans: var(--mp-font-sans);
+  --font-mono: var(--mp-font-mono);
+  --font-display: var(--mp-font-display);
+
+  --color-app: var(--mp-bg-app);
+  --color-surface: var(--mp-bg-surface);
+  --color-raised: var(--mp-bg-raised);
+  --color-sunken: var(--mp-bg-sunken);
+  --color-hover: var(--mp-bg-hover);
+  --color-nav: var(--mp-bg-nav);
+  --color-line: var(--mp-border-1);
+  --color-line-2: var(--mp-border-2);
+  --color-line-strong: var(--mp-border-strong);
+  --color-fg: var(--mp-text-1);
+  --color-fg-2: var(--mp-text-2);
+  --color-fg-3: var(--mp-text-3);
+  --color-accent: var(--mp-accent);
+  --color-accent-hover: var(--mp-accent-hover);
+  --color-accent-ink: var(--mp-accent-ink);
+  --color-accent-soft: var(--mp-accent-soft);
+  --color-accent-soft-2: var(--mp-accent-soft-2);
+  --color-accent-text: var(--mp-accent-text);
+  --color-income: var(--mp-money-income);
+  --color-owed: var(--mp-money-owed);
+  --color-pending: var(--mp-money-pending);
+  --color-over: var(--mp-money-over);
+  --color-plan: var(--mp-money-plan);
+  --color-ok: var(--mp-ok);
+  --color-warn: var(--mp-warn);
+  --color-warn-soft: var(--mp-warn-soft);
+  --color-danger: var(--mp-danger);
+  --color-danger-soft: var(--mp-danger-soft);
+
+  --radius-chip: var(--mp-radius-xs);
+  --radius-control: var(--mp-radius-sm);
+  --radius-panel: var(--mp-radius-md);
+  --radius-card: var(--mp-radius-lg);
+  --radius-sheet: var(--mp-radius-xl);
+  --shadow-hairline: var(--mp-shadow-1);
+  --shadow-hover: var(--mp-shadow-2);
+  --shadow-overlay: var(--mp-shadow-3);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+@layer base {
+  /* Keep the scrollbar's space reserved while a sheet locks page scroll (overflow:hidden on the
+     root), so the page doesn't shift sideways as dialogs open and close on systems with classic
+     scrollbars. No effect where scrollbars overlay. */
+  html {
+    scrollbar-gutter: stable;
+  }
+  body {
+    background: var(--mp-bg-app);
+    color: var(--mp-text-1);
+    font-family: var(--mp-font-sans);
+    -webkit-font-smoothing: antialiased;
+    /* Seatbelt against any single overflowing child dragging the whole page into
+       horizontal scroll. `clip` rather than `hidden` so no scroll container is created. */
+    overflow-x: clip;
+  }
+  /* Outfit for headings; utilities (font-semibold, tracking-tight, colors) still apply. */
+  h1, h2, h3, h4 {
+    font-family: var(--mp-font-display);
+    text-wrap: balance;
+  }
+  /* Outline rather than the kit's box-shadow ring: shadow utilities on a control would
+     silently erase a box-shadow ring. */
+  :focus-visible {
+    outline: 2px solid color-mix(in oklch, var(--mp-accent) 70%, transparent);
+    outline-offset: 2px;
+  }
+  ::selection {
+    background: color-mix(in oklch, var(--mp-accent) 28%, transparent);
+  }
+  .tnum {
+    font-variant-numeric: tabular-nums lining-nums;
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  /* Geist is loaded by the root layout; the old Arial rule here silently overrode it. */
-  font-family: var(--font-geist-sans), ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-  font-feature-settings: "cv11", "ss01";
-  /* Seatbelt against any single overflowing child dragging the whole page into
-     horizontal scroll. `clip` rather than `hidden` so no scroll container is created. */
-  overflow-x: clip;
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 1ms !important;
+    transition-duration: 1ms !important;
+  }
 }
 
 /* Enter animations for the Sheet bottom sheet, dialogs, and the nav drawer,
@@ -45,9 +136,11 @@ body {
   from { opacity: 0; }
   to { opacity: 1; }
 }
+/* Scale and opacity only. The dialog is centred by the `translate` property (Tailwind's
+   -translate-x/y-1/2), which composes with `transform`; repeating the -50% offset here moved the
+   panel half its own size up and left for the length of the animation, then snapped it back. */
 @keyframes dialog-in {
-  from { opacity: 0; transform: translate(-50%, -50%) scale(0.97); }
-  to { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  from { opacity: 0; transform: scale(0.97); }
 }
 @keyframes sheet-down {
   from { transform: translateY(0); }
@@ -62,31 +155,8 @@ body {
   to { opacity: 0; }
 }
 @keyframes dialog-out {
-  from { opacity: 1; transform: translate(-50%, -50%) scale(1); }
-  to { opacity: 0; transform: translate(-50%, -50%) scale(0.97); }
+  to { opacity: 0; transform: scale(0.97); }
 }
-
-/* Loading feedback: the iOS-style ActivityIndicator, and the LaunchSplash's icon. */
-@keyframes activity-fade {
-  from { opacity: 1; }
-  to { opacity: 0.2; }
-}
-@keyframes splash-pop {
-  from { opacity: 0; transform: scale(0.6); }
-  to { opacity: 1; transform: scale(1); }
-}
-@keyframes splash-sheen {
-  from { transform: translateX(0); }
-  to { transform: translateX(64px); }
-}
-/* The splash is shown once per session: the root layout's inline script sets
-   data-splash="off" before first paint on later loads. The failsafe hides it if JS
-   never hydrates to dismiss it. */
-html[data-splash="off"] #launch-splash { display: none; }
-@keyframes splash-failsafe {
-  to { opacity: 0; visibility: hidden; }
-}
-#launch-splash { animation: splash-failsafe 0.3s ease-out 5s forwards; }
 
 /* Below md: 16px form controls prevent iOS Safari's zoom-on-focus. Unlayered on
    purpose — it must override the text-sm/text-xs utilities on every input. */
@@ -95,6 +165,28 @@ html[data-splash="off"] #launch-splash { display: none; }
   select,
   textarea {
     font-size: 16px;
+  }
+}
+
+/* iOS Safari gives native date/time inputs an intrinsic min-width and ignores
+   width:100%, so they overflow narrow containers (bottom sheets). Dropping the
+   native appearance lets them size like any other input; the value is still
+   tappable to open the wheel picker. Scoped to iOS so desktop keeps its picker
+   icon. */
+@supports (-webkit-touch-callout: none) {
+  input[type="date"],
+  input[type="time"],
+  input[type="datetime-local"],
+  input[type="month"] {
+    -webkit-appearance: none;
+    appearance: none;
+    display: block;
+    min-width: 0;
+    max-width: 100%;
+  }
+  input::-webkit-date-and-time-value {
+    text-align: left;
+    margin: 0;
   }
 }
 
@@ -113,7 +205,7 @@ input[type="range"].envelope-range {
 input[type="range"].envelope-range::-webkit-slider-runnable-track {
   height: 4px;
   border-radius: 999px;
-  background: linear-gradient(to right, var(--range-color, #6366f1) 0 var(--range-pct, 0%), rgb(0 0 0 / 0.1) var(--range-pct, 0%) 100%);
+  background: linear-gradient(to right, var(--range-color, var(--mp-accent)) 0 var(--range-pct, 0%), rgb(0 0 0 / 0.1) var(--range-pct, 0%) 100%);
 }
 input[type="range"].envelope-range::-moz-range-track {
   height: 4px;
@@ -123,7 +215,7 @@ input[type="range"].envelope-range::-moz-range-track {
 input[type="range"].envelope-range::-moz-range-progress {
   height: 4px;
   border-radius: 999px;
-  background: var(--range-color, #6366f1);
+  background: var(--range-color, var(--mp-accent));
 }
 input[type="range"].envelope-range::-webkit-slider-thumb {
   -webkit-appearance: none;
@@ -133,7 +225,7 @@ input[type="range"].envelope-range::-webkit-slider-thumb {
   margin-top: -7px;
   border-radius: 999px;
   background: #fff;
-  border: 2px solid var(--range-color, #6366f1);
+  border: 2px solid var(--range-color, var(--mp-accent));
   box-shadow: 0 1px 3px rgb(0 0 0 / 0.2);
   transition: transform 0.12s ease;
 }
@@ -142,14 +234,14 @@ input[type="range"].envelope-range::-moz-range-thumb {
   height: 18px;
   border-radius: 999px;
   background: #fff;
-  border: 2px solid var(--range-color, #6366f1);
+  border: 2px solid var(--range-color, var(--mp-accent));
   box-shadow: 0 1px 3px rgb(0 0 0 / 0.2);
 }
 input[type="range"].envelope-range:active::-webkit-slider-thumb { transform: scale(1.15); }
 input[type="range"].envelope-range:disabled { opacity: 0.4; }
 @media (prefers-color-scheme: dark) {
   input[type="range"].envelope-range::-webkit-slider-runnable-track {
-    background: linear-gradient(to right, var(--range-color, #818cf8) 0 var(--range-pct, 0%), rgb(255 255 255 / 0.14) var(--range-pct, 0%) 100%);
+    background: linear-gradient(to right, var(--range-color, var(--mp-accent)) 0 var(--range-pct, 0%), rgb(255 255 255 / 0.14) var(--range-pct, 0%) 100%);
   }
   input[type="range"].envelope-range::-moz-range-track { background: rgb(255 255 255 / 0.14); }
   input[type="range"].envelope-range::-webkit-slider-thumb,

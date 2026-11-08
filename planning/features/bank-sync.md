@@ -1,6 +1,10 @@
-# Feature: Bank sync (engine; no provider wired)
+# Feature: Bank sync
 
-**Status:** engine live, **no provider registered** (2026-09-21) · **Entry:** `/settings/sync` · scheduler + webhook + `scripts/bank-sync.ts`
+**Status:** engine live; providers = **SimpleFIN Bridge** (2026-10-08) and **Plaid** (2026-10-10), side by side · **Entry:** `/settings/sync` · scheduler + webhooks + `scripts/bank-sync.ts`
+
+> **2026-10-08 — SimpleFIN Bridge is the provider.** See "SimpleFIN adapter" below. The
+> earlier "SimpleFIN ruled out (daily only)" call was reversed: daily freshness plus the
+> manual pending model is good enough, it's cheap, and it needs no developer approval.
 
 > Pulls transactions and balances automatically from a bank aggregator instead of CSV/PDF
 > imports. Built and tested against **Teller** on 2026-09-20; Teller then turned out to have
@@ -13,6 +17,84 @@
 > **Next provider:** Plaid's Trial plan (free, 10 Items, real data, "hobbyist use") is the
 > obvious candidate; Quiltt ($100/mo) and SimpleFIN/Lunch Flow (daily only) were ruled out.
 > The Teller sections below are kept as the worked example of what an adapter needs.
+
+## Plaid adapter (`src/server/lib/plaid/`) — added 2026-10-10
+Both providers can be linked at once; each local account is fed by at most one external
+account (D14), so a bank can come through SimpleFIN or Plaid, never both into one account.
+- **Env**: `PLAID_API_CLIENT_ID`, `PLAID_API_SECRET` (per environment), `PLAID_ENV`
+  (`sandbox` default | `production`). The OAuth redirect (`$APP_URL/settings/sync/plaid-oauth`)
+  and webhook (`$APP_URL/api/sync/webhook/plaid`) URLs are derived from an https APP_URL;
+  `PLAID_REDIRECT_URI` / `PLAID_WEBHOOK_URL` override. The redirect must also be registered
+  in the dashboard; if Plaid rejects it (INVALID_FIELD), the link token is re-created
+  without it and the Link button warns that OAuth banks can't finish. API version pinned with `Plaid-Version: 2020-09-14`.
+- **Link flow**: Settings → "Link with Plaid" → `createPlaidLinkToken` (server action) →
+  Plaid Link in the browser (`src/lib/plaid-link.ts` loads cdn.plaid.com) → onSuccess →
+  `finishPlaidLink` exchanges the public token server-side and stores the access token
+  encrypted via `completeEnrollment`. Enrollment id = Plaid `item_id`. The key/config are
+  checked before Link opens (a new Item spends a Trial slot); if storing fails after the
+  exchange, the Item is revoked so it isn't billed unreachable.
+- **OAuth banks**: `/settings/sync/plaid-oauth` (`PlaidOAuthResume`) re-opens Link with the
+  same link token (kept in localStorage) and `receivedRedirectUri` (redirect derived from APP_URL). Session cookies are
+  SameSite=Lax, so the return trip stays signed in.
+- **Reconnect** = Link update mode (`access_token` in the link token, no products,
+  account selection on); afterwards the Item is re-activated and its accounts refreshed.
+- **Transactions**: `/transactions/get` per account, 500/page (date-range based, matching
+  the contract; `/transactions/sync` would need a cursor model). Signs: positive = money
+  out → Debit, for every account type (the opposite of SimpleFIN). A posted row's external
+  id is its `pending_transaction_id` when present, so the pending row is **promoted in
+  place** (edits kept) instead of expiring; if both come back together the posted wins.
+  `txnDate` = `authorized_date ?? date`. `rawCategory` = personal_finance_category.detailed;
+  TRANSFER_IN/OUT → `kind = "transfer"`.
+- **Balances**: `/accounts/get` (free; never `/accounts/balance/get`, billed per call),
+  cached 2 min per run. `current` is already "owed" for credit/loans → no sign flip.
+- **Errors**: ITEM_LOGIN_REQUIRED, ITEM_NOT_FOUND, INVALID_ACCESS_TOKEN, ACCESS_NOT_GRANTED,
+  USER_PERMISSION_REVOKED, … → disconnected. PRODUCT_NOT_READY (first minutes after link),
+  rate limits, API errors → that run fails, retried with backoff (≤ 2).
+- **Webhooks**: `/api/sync/webhook/plaid`. `Plaid-Verification` ES256 JWT, key from
+  `/webhook_verification_key/get` (cached by kid), `iat` ≤ 5 min, body sha256 compared in
+  constant time. TRANSACTIONS/* → sync that Item; ITEM/ERROR with a login code and
+  USER_PERMISSION_REVOKED → disconnected. `verifyWebhook` may now be async in the contract.
+- **Cost (Trial plan)**: 10 Production Items total, and removing one does not free the slot.
+- **CLI**: `npm run sync -- plaid sandbox-link | fire-webhook <id> [CODE] | reset-login <id> |
+  set-webhook <id> [url]`; `check` shows the Plaid config.
+- **Tests**: `tests/unit/plaid.test.ts` (mapping, pending→posted, errors, JWT verification
+  with a generated ES256 key, events); `PLAID_SANDBOX_E2E=1 npm run test:e2e` runs
+  `tests/e2e/plaid-sandbox.test.ts` live against Sandbox in the test DB (link, map, sync,
+  balances, no-op re-run, login-required → disconnected, remove).
+
+## SimpleFIN adapter (`src/server/lib/simplefin/`)
+- **Link flow**: Settings → Bank Sync → "Link with SimpleFIN": paste a Setup Token from
+  bridge.simplefin.org. `linkSimplefin` (server action) checks the encryption key, claims the
+  token (POST to the base64-decoded claim URL → Access URL), and stores the Access URL as the
+  encrypted access token via `completeEnrollment`. Tokens are single-use: if storing fails
+  after the claim, the error hands back the Access URL, which the same box accepts.
+  **Reconnect** on an entry swaps in a new token and keeps the mappings. CLI:
+  `npm run sync -- simplefin claim <token>` then `enroll --provider simplefin --token <accessUrl>`.
+- **One enrollment = one Access URL**, which can cover several banks. Each account's bank
+  (the v2 `connections[].name`) is its `institutionName` (used for auto-mapping) and is shown
+  in the `subtype` slot. Enrollment id = `sf_` + hash of the access username.
+- **Quota (≤ 24 requests/day, tokens get disabled past it)**: one `GET /accounts?version=2&pending=1`
+  returns every account's balances and transactions, so a run fetches once (last 30 days) and
+  serves `listAccounts` / `listTransactions` / `getBalances` from an in-process cache (10 min).
+  Only a range reaching further back adds requests; > 87 days is chunked per account
+  (Bridge caps a request at 90 days). Any interval in the UI stays within quota.
+- **Signs**: every amount is from the holder's side (negative = money out) for all account
+  types → Debit/Credit directly. Card balances are negative while owed; `getBalances` now
+  receives the *local* account's cash/credit type and returns owed = −balance for credit.
+- **Ids**: SimpleFIN txn ids are unique only within an account, so `external_id` =
+  `sft_` + sha256(account id, txn id). Raw ids stay in `raw`.
+- **Dates**: `txnDate` = `transacted_at`, else `posted`, else today (pending) — stable across
+  posting. Range filtering uses the *posted* date (what Bridge filters on); pending rows are
+  always returned so they are never expired by a window cut.
+- **Errors**: HTTP 403 / `gen.auth` → enrollment disconnected (needs a new Setup Token).
+  `con.*` / `act.*` errlist entries fail only the affected accounts that run (message tells you
+  to fix the connection in Bridge); 402 = Bridge subscription. Accounts missing from a
+  response are skipped, **not** marked closed (`SyncProvider.unlistedMeansClosed = false`).
+- **No webhooks, no revoke API**: the scheduler polls; Remove forgets locally and the user
+  disables the app in Bridge. No account type from SimpleFIN — inferred from name/balance
+  sign for display; last four parsed from the account name.
+- Tests: `tests/unit/simplefin.test.ts` (mapping, client, provider with stubbed fetch).
+  Verified live against Bridge's demo access 2026-10-08.
 
 ## Intent / why
 Manual CSV/PDF import means the ledger is only as fresh as the last time the user bothered. The
@@ -58,7 +140,7 @@ on transactions, a generic `sync_*` schema) so a move to Plaid later touches onl
 | D3 | Teller rows get `dedup_hash = sha256("teller|" + external_id)` rather than the content hash. | The content hash changes when pending → posted (date/description shift), which would collide with the UNIQUE index. Cross-source duplicates are handled by reconciliation (D4), not the hash. |
 | D4 | Per-account **`sync_from` date** (default: last existing txn date + 1 for that account, else today − 30) + a **soft-match pass** (same account, same amount & direction, date ±2 days) against existing non-Teller rows inside the window. Soft matches are *skipped*, not inserted, and logged in the run. | CSV/PDF history and Teller overlap for a few weeks; descriptions differ between sources so the hash can't catch it. |
 | D5 | **Pending expiry**: a pending row not returned by Teller for `pending_expiry_days` (default 7) is deleted. If it had user edits (category set by hand, notes, bill link) and a posted row soft-matches, the edits are carried over first. | Teller docs: a pending txn that changes significantly on posting is re-created under a new ID. |
-| D6 | **Scheduler runs in-process** via `src/instrumentation.ts` (Node runtime only, gated by `SYNC_SCHEDULER=1`), reading `interval_minutes` from `sync_settings`. A `/api/sync/run` route with a bearer secret exists as a fallback for host cron. | One long-running container; interval must be changeable from the settings screen without a redeploy; no volumes or host cron to manage. |
+| D6 | **Scheduler runs in-process** via `src/instrumentation.ts` (Node runtime, production builds only — `next dev` never starts it; `SYNC_SCHEDULER=0` opts a production process out. On/off is the `enabled` switch in settings, default off — changed 2026-10-08, previously gated by `SYNC_SCHEDULER=1`), reading `interval_minutes` from `sync_settings`. A `/api/sync/run` route with a bearer secret exists as a fallback for host cron. | One long-running container; interval must be changeable from the settings screen without a redeploy; no volumes or host cron to manage. |
 | D7 | Balances: cash accounts record Teller **`available`**, credit accounts record **`ledger`** (amount owed). One snapshot per `(account, as_of=today)`; later runs the same day **update** that row instead of inserting. | `available` is what the manual entries always meant for cash; `ledger` is the owed figure the debt views expect. Idempotent-per-day matches the CSV/PDF balance rule. |
 | D8 | Secrets in env (`.env.production` Jenkins secret file), **config in DB**. Access tokens encrypted at rest with AES-256-GCM under `TELLER_TOKEN_ENCRYPTION_KEY`. | Matches the existing deploy; tokens are the only thing that can read the user's banks. |
 | D9 | Category rules run at insert; on pending → posted, if the description changed **and** the category was rule-set or null (`category_rule_id` not null or `category` null), rules re-run. A hand-set category is never overwritten. | Same provenance rule as `category_rule_id` today. |
@@ -162,7 +244,7 @@ TELLER_CERT_PEM_B64=...      # base64 of certificate.pem (npm run sync -- teller
 TELLER_KEY_PEM_B64=...       # base64 of private_key.pem
 TELLER_WEBHOOK_SECRETS=...   # comma-separated while rolling; webhooks 401 when unset
 SYNC_TOKEN_ENCRYPTION_KEY=...     # 32 bytes hex; `openssl rand -hex 32` (provider-agnostic)
-SYNC_SCHEDULER=1             # only in .env.production; unset locally (D6)
+SYNC_SCHEDULER=0             # optional opt-out; the scheduler starts in production builds (D6)
 SYNC_CRON_SECRET=...         # bearer for /api/sync/run fallback (optional)
 ```
 Certificates are base64 because `.env.production` is a single Jenkins secret file and the
@@ -214,7 +296,7 @@ in `PROVIDERS` (`provider.ts`). The Teller one had:
 
 ### Scheduler — `src/instrumentation.ts` → `src/server/sync/scheduler.ts`
 `register()` imports the scheduler only when `NEXT_RUNTIME === 'nodejs'` and
-`SYNC_SCHEDULER === '1'`. A `globalThis.__syncScheduler` guard prevents double timers under
+`schedulerAllowed()` (`src/server/sync/scheduler-gate.ts`: production build, not `SYNC_SCHEDULER=0`). A `globalThis.__syncScheduler` guard prevents double timers under
 HMR. Tick every 60 s: read `sync_settings`; if `enabled` and `next_run_at <= now`, run
 `syncAll('scheduled')` then set `next_run_at = now + interval`. Changing the interval in the UI
 resets `next_run_at`. Failures never throw out of the tick (logged to the run row).
@@ -358,7 +440,7 @@ Teller application (cert + app id) and the real-bank enrollments.
    *Checkpoint*: link/pause/reconnect/remove all work from the browser; interval change moves
    `next_run_at`.
 4. **Automation**: `instrumentation.ts` scheduler, webhook route + proxy allowlist + signature
-   verification, `/api/sync/run` fallback, `SYNC_SCHEDULER=1` in prod env, deploy with
+   verification, `/api/sync/run` fallback, scheduler on in production builds, deploy with
    `RUN_MIGRATIONS` (or `apply-sql` per [../design/07-decisions.md](../design/07-decisions.md)).
    *Checkpoint*: Teller dashboard "send test webhook" stamps `last_webhook_at`; a scheduled run
    appears in history without anyone touching the app.

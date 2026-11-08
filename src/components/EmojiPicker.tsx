@@ -83,7 +83,7 @@ export function EmojiPicker({
             ref={menuRef}
             data-popover-root=""
             style={{ position: "fixed", left: rect.left, top: rect.top, width: 288 }}
-            className="z-[60] rounded-lg border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 shadow-xl p-2"
+            className="z-[60] rounded-card border border-line bg-surface shadow-hairline shadow-xl p-2"
           >
             <div className="flex items-center gap-2 mb-2">
               <input
@@ -109,7 +109,7 @@ export function EmojiPicker({
             <div className="max-h-64 overflow-auto pr-1">
               {filtered.map((g) => (
                 <div key={g.label} className="mb-2">
-                  <div className="text-[10px] uppercase tracking-wide text-neutral-400 px-1 mb-1">
+                  <div className="text-[10px] font-medium text-neutral-400 px-1 mb-1">
                     {g.label}
                   </div>
                   <div className="grid grid-cols-8 gap-0.5">
@@ -146,7 +146,7 @@ export function EmojiPicker({
         onClick={() => setOpen((o) => !o)}
         title={title}
         aria-label={title}
-        className={`h-9 w-9 flex items-center justify-center rounded-md border border-neutral-300 dark:border-neutral-700 bg-white/70 dark:bg-neutral-800/70 text-xl leading-none hover:border-blue-400 disabled:opacity-50 ${className}`}
+        className={`h-9 w-9 flex items-center justify-center rounded-md border border-neutral-300 dark:border-neutral-700 bg-white/70 dark:bg-neutral-800/70 text-xl leading-none hover:border-accent disabled:opacity-50 ${className}`}
       >
         {value || <span className="text-neutral-400 text-base">＋</span>}
       </button>

@@ -22,15 +22,17 @@ import {
   transactionSplits,
   budgets,
   budgetLines,
-  projectionSnapshots,
   syncAccounts,
   syncEnrollments,
+  uiLayouts,
 } from "@/server/db/schema";
 import { alias } from "drizzle-orm/mysql-core";
 import type { PayFrequency } from "@/constants/enums";
 import { round2, paydaysInMonth, type DebtInput } from "@/server/lib/budget";
-import { projectCash, type CashProjection, type MonthSegment, type ProjectionPending, type ProjectionTrend } from "@/server/lib/cash-projection";
+import { planMonth, projectCash, type CashProjection, type MonthSegment, type ProjectionPending } from "@/server/lib/cash-projection";
 import { isPayrollDescription, type ObservedDeposit } from "@/server/lib/payday-reconcile";
+import { splitCardPayments } from "@/server/lib/debt";
+import { cardRebalanceFrom, cardStanding, rebalancePlans, type CardStanding } from "@/server/lib/card-rebalance";
 import {
   and,
   eq,
@@ -58,12 +60,13 @@ import {
   SAVINGS_CATEGORY,
 } from "@/constants/enums";
 import { effectiveHeld } from "@/server/lib/cash";
-import { computeDebtFlows, emptyDebtFlow, DEBT_REPAYMENT_CATEGORY, type PeriodDebtFlow } from "@/server/lib/debt-flows";
 import { monthBounds, parsePeriodLabel } from "@/server/lib/period";
 import { clampToMonth, todayIso, resolvePaydays, isoToUtc, utcToIso } from "@/server/lib/pay-schedule";
 import { toNum } from "@/server/lib/money";
 import { normalizeMerchant } from "@/server/lib/merchant";
 import { requireSession } from "@/server/auth/session";
+import { TXN_SEEN_KEY, TXN_SEEN_IGNORED_SOURCE } from "@/lib/transactions-seen";
+import { LAYOUT_KEYS, normalizeLayout, normalizeMobileLayout, type DashboardLayouts } from "@/lib/dashboard-layout";
 
 export async function getPeriods() {
   await requireSession();
@@ -167,6 +170,23 @@ export async function getBillById(id: number) {
   const rows = await db.select().from(bills).where(eq(bills.id, id)).limit(1);
   return rows[0] ?? null;
 }
+/**
+ * The category this bill's transactions mostly land in — the fallback the projection uses when
+ * `bills.category` is unset. Exposed so the bill screen can show what the guess would be (or
+ * that there is nothing to guess from, which is the case that caused double counting).
+ */
+export async function getBillGuessedCategory(billId: number): Promise<string | null> {
+  await requireSession();
+  const rows = await db
+    .select({ category: transactions.category, c: sql<number>`COUNT(*)` })
+    .from(transactions)
+    .where(and(eq(transactions.billId, billId), sql`${transactions.category} IS NOT NULL`))
+    .groupBy(transactions.category)
+    .orderBy(desc(sql`COUNT(*)`))
+    .limit(1);
+  return rows[0]?.category ?? null;
+}
+
 export async function getBillHistory(billId: number) {
   await requireSession();
   return db
@@ -295,6 +315,8 @@ export async function getCashOnHand(asOf?: string) {
       label: accounts.label,
       accountNumber: accounts.accountNumber,
       accountType: accounts.accountType,
+      institution: accounts.institution,
+      active: accounts.active,
     })
     .from(accounts)
     .where(inArray(accounts.accountType, [...CASH_ACCOUNT_TYPES]))
@@ -324,6 +346,8 @@ export async function getCashOnHand(asOf?: string) {
     label: a.label,
     accountNumber: a.accountNumber,
     accountType: a.accountType,
+    institution: a.institution,
+    active: a.active,
     balance: latest.get(a.id)?.balance ?? null,
     asOf: latest.get(a.id)?.asOf ?? null,
   }));
@@ -552,6 +576,41 @@ export async function getLiabilityAccounts(asOf?: string): Promise<LiabilityAcco
       asOf: l?.asOf ?? null,
     };
   });
+}
+
+/**
+ * Each liability's balance as the month began: the latest snapshot before `monthStart`, or — for
+ * an account first recorded mid-month — its earliest snapshot this month (on or before `asOf`).
+ * Keyed by account id; accounts with neither are absent. Feeds the dashboard's card rebalance.
+ */
+export async function getLiabilityStartBalances(
+  monthStart: string,
+  asOf: string,
+): Promise<Map<number, { balance: number; asOf: string }>> {
+  const before = await getLiabilityAccounts(dayBefore(monthStart));
+  const out = new Map<number, { balance: number; asOf: string }>();
+  for (const l of before) {
+    const b = toNum(l.balance);
+    if (b != null && l.asOf) out.set(l.id, { balance: b, asOf: l.asOf });
+  }
+  const unseen = before.filter((l) => !out.has(l.id)).map((l) => l.id);
+  if (!unseen.length) return out;
+  const rows = await db
+    .select({ accountId: accountBalances.accountId, balance: accountBalances.balance, asOf: accountBalances.asOf })
+    .from(accountBalances)
+    .where(
+      and(
+        inArray(accountBalances.accountId, unseen),
+        gte(accountBalances.asOf, monthStart),
+        lte(accountBalances.asOf, asOf),
+      ),
+    )
+    .orderBy(asc(accountBalances.asOf), asc(accountBalances.id));
+  for (const r of rows) {
+    const b = toNum(r.balance);
+    if (b != null && !out.has(r.accountId)) out.set(r.accountId, { balance: b, asOf: r.asOf });
+  }
+  return out;
 }
 
 // Full balance ledger for every liability account (newest first), grouped by accountId in the
@@ -811,6 +870,23 @@ export async function getPendingSummary(periodLabel: string) {
   return { count: Number(row?.count ?? 0), debits: Number(row?.debits ?? 0) };
 }
 
+// Every transaction still pending at the bank, newest first, whatever month it landed in — the
+// dashboard's "Pending" panel. Pending is about now, not the month being viewed.
+export async function getPendingTransactions() {
+  await requireSession();
+  return db
+    .select({
+      ...txnSummaryCols,
+      accountId: transactions.accountId,
+      account: sql<string | null>`COALESCE(NULLIF(${accounts.label}, ''), ${accounts.institution})`,
+      accountNumber: accounts.accountNumber,
+    })
+    .from(transactions)
+    .leftJoin(accounts, eq(accounts.id, transactions.accountId))
+    .where(eq(transactions.pending, true))
+    .orderBy(desc(transactions.txnDate), desc(transactions.id));
+}
+
 // Most recent transactions (by date) for a month.
 export async function getRecentTransactions(periodLabel: string, limit = 5) {
   await requireSession();
@@ -832,6 +908,8 @@ export interface TxQuery {
   uncategorized?: boolean;
   /** Only transactions still marked pending (entered before the bank posted them). */
   pending?: boolean;
+  /** Only transactions linked to a bill. */
+  billLinked?: boolean;
   sort?: string; // date | amount | description | category | account | direction
   dir?: "asc" | "desc";
   page?: number;
@@ -863,6 +941,7 @@ export async function getTransactionsPage(q: TxQuery) {
   if (q.direction) conds.push(eq(transactions.direction, q.direction));
   if (q.search) conds.push(txSearchCond(q.search));
   if (q.pending) conds.push(eq(transactions.pending, true));
+  if (q.billLinked) conds.push(sql`${transactions.billId} IS NOT NULL`);
 
   // Category filters look at a row's own category AND its split pieces: filtering to
   // Household should find the $40 carved out of a Groceries run. `ownCat` matches the row's
@@ -1844,72 +1923,11 @@ export async function getImportBatches() {
   return db.select().from(importBatches).orderBy(desc(importBatches.id)).limit(50);
 }
 
-/**
- * Payments to, new charges on, and net paydown of every liability, per period — the rows behind
- * "a card payment that only covers this month's card purchases isn't outgoing money". All
- * periods by default (the dashboard's trend needs them); pass a label for one month. The math
- * lives in the pure computeDebtFlows (src/server/lib/debt-flows.ts). Split pieces aren't
- * consulted: a payment or a card charge counts at its face amount.
- */
-export async function getDebtFlows(periodLabel?: string): Promise<Map<string, PeriodDebtFlow>> {
-  await requireSession();
-  const liabilities = await db
-    .select({ id: accounts.id, billId: accounts.billId })
-    .from(accounts)
-    .where(inArray(accounts.accountType, [...LIABILITY_ACCOUNT_TYPES]));
-  if (!liabilities.length) return new Map();
-  const liabIds = liabilities.map((l) => l.id);
-  const liabBills = liabilities.map((l) => l.billId).filter((b): b is number => b != null);
-  const partner = alias(transactions, "dfp");
-  const touchesDebt = or(
-    inArray(transactions.accountId, liabIds),
-    eq(transactions.category, DEBT_REPAYMENT_CATEGORY),
-    inArray(partner.accountId, liabIds),
-    ...(liabBills.length ? [inArray(transactions.billId, liabBills)] : []),
-  )!;
-  const rows = await db
-    .select({
-      period: periods.label,
-      accountId: transactions.accountId,
-      direction: transactions.direction,
-      category: transactions.category,
-      billId: transactions.billId,
-      partnerAccountId: partner.accountId,
-      amount: transactions.amount,
-    })
-    .from(transactions)
-    .innerJoin(periods, eq(periods.id, transactions.periodId))
-    .leftJoin(partner, eq(partner.id, transactions.transferPartnerId))
-    .where(periodLabel ? and(eq(periods.label, periodLabel), touchesDebt) : touchesDebt);
-  return computeDebtFlows(
-    rows.map((r) => ({ ...r, amount: toNum(r.amount) ?? 0 })),
-    liabilities,
-  );
-}
-
-export interface CashflowMonth {
-  label: string;
-  year: number;
-  month: number;
-  /** Credits, transfers and card-side payment credits excluded. */
-  income: number;
-  /** What the month consumed: purchases (card or bank), bills, interest, fees — never payments. */
-  spending: number;
-  /** Net reduction in what's owed: payments minus new charges (negative = debt grew). */
-  debtPaydown: number;
-  /** Cash that actually left: spending + debtPaydown. income − outgoing ≈ change in cash. */
-  outgoing: number;
-}
-
-// Income vs outgoing per period, from transactions. Cash withdrawals count only for their
-// unaccounted remainder — the purchases they funded are counted as themselves, in the month
-// they happened. That's why moving a withdrawal's cash into the next month's purchases lowers
-// the withdrawal's month here and raises the next one.
-//
-// Debt payments are NOT spending. A card purchase is counted once, as the purchase; the payment
-// that later clears it is a rebalance. Only what the payments knocked off the balance beyond
-// the month's new charges counts — as debtPaydown, alongside (not inside) spending.
-export async function getCashflowByPeriod(): Promise<CashflowMonth[]> {
+// Income (Credit) vs outgoing (Debit) per period, from transactions. Cash withdrawals count
+// only for their unaccounted remainder — the purchases they funded are counted as themselves,
+// in the month they happened. That's why moving a withdrawal's cash into the next month's
+// purchases lowers the withdrawal's month here and raises the next one.
+export async function getCashflowByPeriod() {
   await requireSession();
   // A split row counts its own share when its own category isn't Transfer, and each piece when
   // the piece's isn't — so a transfer that was partly a real purchase counts for that part.
@@ -1957,25 +1975,17 @@ export async function getCashflowByPeriod(): Promise<CashflowMonth[]> {
         : r,
     );
   }
+  const rows = [...merged.values()].sort((a, b) => a.year - b.year || a.month - b.month);
 
   // Outgoing drops by the cash that stayed in your pocket that month — same correction the
   // category chart makes, so the two dashboard views can't tell different stories.
-  const [heldBy, debtBy] = await Promise.all([effectiveHeldByPeriod(), getDebtFlows()]);
-  const months = new Map<string, CashflowMonth>();
-  for (const r of merged.values()) {
-    const m = months.get(r.label) ?? { label: r.label, year: r.year, month: r.month, income: 0, spending: 0, debtPaydown: 0, outgoing: 0 };
-    if (r.direction === "Credit") m.income = toNum(r.total) ?? 0;
-    else m.spending = Math.max(0, round2((toNum(r.total) ?? 0) - (heldBy.get(r.label) ?? 0)));
-    months.set(r.label, m);
-  }
-  for (const m of months.values()) {
-    const debt = debtBy.get(m.label) ?? emptyDebtFlow();
-    m.income = Math.max(0, round2(m.income - debt.mirrorCredits));
-    m.spending = Math.max(0, round2(m.spending - debt.countedPayments));
-    m.debtPaydown = debt.paydown;
-    m.outgoing = round2(m.spending + m.debtPaydown);
-  }
-  return [...months.values()].sort((a, b) => a.year - b.year || a.month - b.month);
+  const heldBy = await effectiveHeldByPeriod();
+  return rows.map((r) => {
+    const held = r.direction === "Debit" ? (heldBy.get(r.label) ?? 0) : 0;
+    if (held === 0) return r;
+    const left = Math.max(0, Math.round(((toNum(r.total) ?? 0) - held) * 100) / 100);
+    return { ...r, total: left.toFixed(2) };
+  });
 }
 
 // Net spend grouped by category (optionally for one period). Debits count as
@@ -2029,14 +2039,6 @@ export async function getCategorySpend(periodLabel?: string) {
   for (const r of [...ownRows, ...pieceRows]) {
     byCat.set(r.category, round2((byCat.get(r.category) ?? 0) + (toNum(r.total) ?? 0)));
   }
-  // Debt Repayment reads as what the payments actually knocked off the balances, not their face
-  // value: the part that only cleared this month's card purchases is already counted under those
-  // purchases' own categories. Same figure as getCashflowByPeriod's debtPaydown.
-  const debtFlows = await getDebtFlows(periodLabel);
-  byCat.set(
-    DEBT_REPAYMENT_CATEGORY,
-    round2([...debtFlows.values()].reduce((s, f) => s + f.paydown, 0)),
-  );
   const rows: { category: string | null; total: string }[] = [...byCat]
     .filter(([, total]) => total > 0)
     .sort((a, b) => b[1] - a[1])
@@ -2371,6 +2373,34 @@ export interface PayScheduleRow {
   notes: string | null;
 }
 
+/**
+ * The saved dashboard arrangements — desktop and phone — merged with the defaults (normalizeLayout)
+ * so a missing row, a hand-edited one, or a layout saved before a widget existed all come back
+ * complete. The phone layout follows the desktop order until it's been customized on a phone. A
+ * table that isn't there yet (migration not applied) reads as "nothing saved" rather than breaking
+ * the page.
+ */
+export async function getDashboardLayout(): Promise<DashboardLayouts> {
+  await requireSession();
+  try {
+    const rows = await db
+      .select({ key: uiLayouts.layoutKey, layout: uiLayouts.layout })
+      .from(uiLayouts)
+      .where(inArray(uiLayouts.layoutKey, [LAYOUT_KEYS.desktop, LAYOUT_KEYS.mobile]));
+    const rawOf = (key: string) => {
+      const v = rows.find((r) => r.key === key)?.layout;
+      return typeof v === "string" ? JSON.parse(v) : v;
+    };
+    const desktop = normalizeLayout(rawOf(LAYOUT_KEYS.desktop));
+    const rawMobile = rawOf(LAYOUT_KEYS.mobile);
+    return { desktop, mobile: normalizeMobileLayout(rawMobile, desktop), mobileSaved: rawMobile != null };
+  } catch (e) {
+    console.error("getDashboardLayout: falling back to the default layout", e);
+    const desktop = normalizeLayout(null);
+    return { desktop, mobile: normalizeMobileLayout(null, desktop), mobileSaved: false };
+  }
+}
+
 export async function getPaySchedule(): Promise<PayScheduleRow | null> {
   await requireSession();
   const [row] = await db.select().from(paySchedule).where(eq(paySchedule.active, true)).limit(1);
@@ -2407,13 +2437,19 @@ export interface BudgetLineRow {
   locked: boolean;
   sortOrder: number;
   notes: string | null;
-  // What the month's transactions say so far. On a debt line that's PAYDOWN — `paid` minus
-  // `charged` — because a payment that only clears this month's new card purchases moves the
-  // balance nowhere (those purchases already count in their own envelopes). Negative means
-  // the balance grew. Both sides are 0 on non-debt lines.
+  // What the month's transactions say so far. On a debt line it's the PAYOFF: payments beyond
+  // what was newly charged to the card this month (splitCardPayments) — paying back new spending
+  // only rebalances the card, and that spending already shows in its categories.
   actual: number;
+  // Debt lines only (0 elsewhere): every linked payment this month, the new charges on the
+  // liability itself, and the part of `paid` that just covered those charges.
   paid: number;
   charged: number;
+  rebalance: number;
+  // Credit-card debt lines in the CURRENT month only (null otherwise): how far behind the card is,
+  // by the dashboard's card-rebalance rule (balance + pending vs. month start, or vs. the plan's
+  // balance once the payoff is paid) plus the plan.
+  standing: CardStanding | null;
   // Category display
   color: string | null;
   emoji: string | null;
@@ -2483,6 +2519,72 @@ export async function getBudgetedPeriodLabels(): Promise<Set<string>> {
   return new Set(rows.map((r) => r.label));
 }
 
+/**
+ * Debit payments toward each liability in a month, keyed by accountId. A payment counts when
+ * it's linked (bill_id) to the account's bill and did NOT happen on the liability itself — a
+ * card's own linked rows are purchases and interest, not payments.
+ */
+async function debtPaymentsForPeriod(
+  periodLabel: string,
+  accts: { id: number; billId: number | null }[],
+): Promise<Map<number, number>> {
+  const billIds = accts.map((a) => a.billId).filter((b): b is number => b != null);
+  const out = new Map<number, number>();
+  if (!billIds.length) return out;
+  const rows = await db
+    .select({
+      billId: transactions.billId,
+      accountId: transactions.accountId,
+      total: sql<string>`COALESCE(SUM(${transactions.amount}), 0)`,
+    })
+    .from(transactions)
+    .innerJoin(periods, eq(periods.id, transactions.periodId))
+    .where(
+      and(
+        eq(periods.label, periodLabel),
+        eq(transactions.direction, "Debit"),
+        inArray(transactions.billId, billIds),
+      ),
+    )
+    .groupBy(transactions.billId, transactions.accountId);
+  for (const r of rows) {
+    const acct = accts.find((a) => a.billId === r.billId);
+    if (!acct || r.accountId === acct.id) continue;
+    out.set(acct.id, (out.get(acct.id) ?? 0) + (toNum(r.total) ?? 0));
+  }
+  return out;
+}
+
+/**
+ * New spending put ON each liability in a month, keyed by accountId: the card's own purchases,
+ * fees and cash advances, net of refunds. Payments landing on the card, transfers, and interest
+ * (the BUDGET_EXCLUDED_CATEGORIES — never spending) are left out; uncategorized rows count, and
+ * pending rows count like they do in category spend. Paying this back is rebalancing the card,
+ * not paying it down — see splitCardPayments.
+ */
+async function liabilityChargesForPeriod(periodLabel: string, accountIds: number[]): Promise<Map<number, number>> {
+  const out = new Map<number, number>();
+  if (!accountIds.length) return out;
+  const rows = await db
+    .select({
+      accountId: transactions.accountId,
+      total: sql<string>`COALESCE(SUM(CASE WHEN ${transactions.direction} = 'Debit' THEN ${transactions.amount} ELSE -${transactions.amount} END), 0)`,
+    })
+    .from(transactions)
+    .innerJoin(periods, eq(periods.id, transactions.periodId))
+    .where(
+      and(
+        eq(periods.label, periodLabel),
+        inArray(transactions.accountId, accountIds),
+        isNull(transactions.transferPartnerId),
+        or(isNull(transactions.category), notInArray(transactions.category, [...BUDGET_EXCLUDED_CATEGORIES])),
+      ),
+    )
+    .groupBy(transactions.accountId);
+  for (const r of rows) if (r.accountId != null) out.set(r.accountId, round2(toNum(r.total) ?? 0));
+  return out;
+}
+
 export async function getBudgetView(periodLabel: string): Promise<BudgetView | null> {
   await requireSession();
   const [row] = await db
@@ -2532,7 +2634,32 @@ export async function getBudgetView(periodLabel: string): Promise<BudgetView | n
   const nowBy = new Map(liabNow.map((l) => [l.id, l]));
   const startBy = new Map(liabStart.map((l) => [l.id, l]));
 
-  const debtBy = (await getDebtFlows(periodLabel)).get(periodLabel)?.accounts ?? new Map();
+  const debtAccts = lines
+    .filter((l) => l.kind === "debt" && l.accountId != null)
+    .map((l) => ({ id: l.accountId!, billId: nowBy.get(l.accountId!)?.billId ?? null }));
+  // Same inputs the dashboard's rebalance widget uses, so both report one figure. Only "now" has
+  // a meaningful pending/balance-today comparison, like the dashboard.
+  const today = todayIso();
+  const isCurrent = today.slice(0, 7) === periodLabel;
+  const [paidBy, chargedBy, rebalanceStart, pendingTxns] = await Promise.all([
+    debtPaymentsForPeriod(periodLabel, debtAccts),
+    liabilityChargesForPeriod(periodLabel, debtAccts.map((a) => a.id)),
+    isCurrent && debtAccts.length ? getLiabilityStartBalances(start, today) : Promise.resolve(null),
+    isCurrent && debtAccts.length ? getPendingTransactions() : Promise.resolve([]),
+  ]);
+  // Once a card's payoff is paid, the rebalance measures against the plan's balance, not the start.
+  const plans = rebalancePlans(
+    lines.map((l) => ({
+      kind: l.kind,
+      accountId: l.accountId,
+      planned: toNum(l.planned) ?? 0,
+      paid: l.accountId != null ? round2(paidBy.get(l.accountId) ?? 0) : 0,
+      apr: l.accountId != null ? toNum(nowBy.get(l.accountId)?.apr) : null,
+    })),
+  );
+  const rebalanceRows = new Map(
+    (rebalanceStart ? cardRebalanceFrom(liabNow, rebalanceStart, pendingTxns, plans).rows : []).map((r) => [r.accountId, r]),
+  );
 
   // "Debt Repayment" debits nobody claimed: total in the category minus what the lines matched.
   // Split-aware like the category chart — a row counts its own share when it's filed as Debt
@@ -2561,7 +2688,9 @@ export async function getBudgetView(periodLabel: string): Promise<BudgetView | n
   ]);
   const repay = { total: round2((toNum(repayOwn?.total) ?? 0) + (toNum(repayParts?.total) ?? 0)) };
 
-  const actualIncome = cashflow.find((c) => c.label === periodLabel)?.income ?? 0;
+  const actualIncome = cashflow
+    .filter((c) => c.label === periodLabel && c.direction === "Credit")
+    .reduce((s, c) => s + (toNum(c.total) ?? 0), 0);
 
   const rows: BudgetLineRow[] = lines.map((l) => {
     const isDebt = l.kind === "debt";
@@ -2571,7 +2700,10 @@ export async function getBudgetView(periodLabel: string): Promise<BudgetView | n
     const now = l.accountId != null ? nowBy.get(l.accountId) : undefined;
     const before = l.accountId != null ? startBy.get(l.accountId) : undefined;
     const meta = l.category ? catMeta.get(l.category) : undefined;
-    const flow = isDebt && l.accountId != null ? debtBy.get(l.accountId) : undefined;
+    const paid = isDebt && l.accountId != null ? round2(paidBy.get(l.accountId) ?? 0) : 0;
+    const charged = isDebt && l.accountId != null ? chargedBy.get(l.accountId) ?? 0 : 0;
+    const split = splitCardPayments(paid, charged);
+    const rebalanceRow = isDebt && l.accountId != null ? rebalanceRows.get(l.accountId) : undefined;
     return {
       id: l.id,
       kind,
@@ -2584,9 +2716,15 @@ export async function getBudgetView(periodLabel: string): Promise<BudgetView | n
       locked: !!l.locked,
       sortOrder: l.sortOrder,
       notes: l.notes,
-      actual: isDebt ? (flow?.paydown ?? 0) : l.category ? spendBy.get(l.category) ?? 0 : 0,
-      paid: flow?.paid ?? 0,
-      charged: flow?.charged ?? 0,
+      paid,
+      charged,
+      rebalance: split.rebalance,
+      standing: rebalanceRow ? cardStanding(rebalanceRow) : null,
+      actual: isDebt
+        ? split.payoff
+        : l.category
+          ? spendBy.get(l.category) ?? 0
+          : 0,
       color: meta?.color ?? null,
       emoji: meta?.emoji ?? null,
       accountLabel: now ? now.label ?? `••${now.accountNumber}` : null,
@@ -2762,15 +2900,22 @@ export interface ProjectionBillRow {
   paid: boolean;
   /** Liability account this bill pays (accounts.bill_id), if any. */
   accountId: number | null;
-  /** The category its transactions usually land in — how it finds a budget line. */
+  /**
+   * Which budget envelope it draws from: `bills.category` when set, else the majority category
+   * of its linked transactions. The explicit value wins because a new bill has no transactions
+   * to guess from — and a bill that can't find its envelope gets counted twice (paid as a bill
+   * AND spread as everyday spending).
+   */
   category: string | null;
+  /** Where the category came from, so the UI can nudge the unset ones. */
+  categorySource: "bill" | "transactions" | null;
 }
 
 export async function getProjectionBills(periodLabel: string): Promise<ProjectionBillRow[]> {
   await requireSession();
   const period = await getPeriodByLabel(periodLabel);
   if (!period) return [];
-  const [inst, statuses, linked, liab, catRows] = await Promise.all([
+  const [inst, statuses, linked, liab, billCats, catRows] = await Promise.all([
     getInstances(period.id),
     getStatusConfig(),
     db
@@ -2783,6 +2928,8 @@ export async function getProjectionBills(periodLabel: string): Promise<Projectio
       .select({ id: accounts.id, billId: accounts.billId })
       .from(accounts)
       .where(inArray(accounts.accountType, [...LIABILITY_ACCOUNT_TYPES])),
+    // The bill's OWN category — authoritative, and the only source a new bill can have.
+    db.select({ id: bills.id, category: bills.category }).from(bills),
     // Majority category per bill across all its linked transactions (nulls ignored).
     db
       .select({ billId: transactions.billId, category: transactions.category, c: sql<number>`COUNT(*)` })
@@ -2793,6 +2940,7 @@ export async function getProjectionBills(periodLabel: string): Promise<Projectio
   const settled = new Set(statuses.filter((s) => s.isSettled).map((s) => s.name));
   const linkedSet = new Set(linked.filter((l) => Number(l.c) > 0).map((l) => l.instanceId));
   const acctByBill = new Map(liab.filter((a) => a.billId != null).map((a) => [a.billId!, a.id]));
+  const ownCatByBill = new Map(billCats.filter((b) => !!b.category).map((b) => [b.id, b.category!]));
   const catByBill = new Map<number, { category: string; c: number }>();
   for (const r of catRows) {
     if (r.billId == null || !r.category) continue;
@@ -2808,6 +2956,8 @@ export async function getProjectionBills(periodLabel: string): Promise<Projectio
       const paid =
         linkedSet.has(i.id) ||
         (settled.has(i.status) && (!autopay || (dueIso != null && dueIso <= today)));
+      const own = i.billId != null ? ownCatByBill.get(i.billId) ?? null : null;
+      const guessed = i.billId != null ? catByBill.get(i.billId)?.category ?? null : null;
       return {
         id: i.id,
         name: i.name,
@@ -2817,7 +2967,9 @@ export async function getProjectionBills(periodLabel: string): Promise<Projectio
         status: i.status,
         paid,
         accountId: i.billId != null ? acctByBill.get(i.billId) ?? null : null,
-        category: i.billId != null ? catByBill.get(i.billId)?.category ?? null : null,
+        // Explicit first, guess second. A bill with neither is unbudgeted outflow.
+        category: own ?? guessed ?? null,
+        categorySource: own ? "bill" : guessed ? "transactions" : null,
       };
     });
 }
@@ -2931,7 +3083,7 @@ function segmentFor(
       accountId: b.accountId,
       lineId: b.category ? lineByCategory.get(b.category) ?? null : null,
     })),
-    lines: lines.map((l) => ({ id: l.id, kind: l.kind, label: l.label, planned: l.planned, actual: l.actual, accountId: l.accountId })),
+    lines: lines.map((l) => ({ id: l.id, kind: l.kind, label: l.label, planned: l.planned, actual: l.actual, accountId: l.accountId, charged: l.charged })),
   };
 }
 
@@ -2980,8 +3132,8 @@ const monthOffset = (year: number, month: number, delta: number) => {
  *
  * Each month contributes its own bills, plan (its budget, else the viewed month's repeated with
  * actual = 0, flagged `assumed`), paydays netted against the payroll that actually arrived, and
- * pending outflows the balances haven't seen. While the month is still running, one snapshot per
- * day is recorded so today's numbers can be read against last week's (`trend`).
+ * pending outflows the balances haven't seen. The viewed month also gets its fixed budgeted path
+ * (`plan`), the baseline for "above or below plan".
  */
 export async function getCashProjection(view: BudgetView): Promise<CashProjection | null> {
   await requireSession();
@@ -3017,7 +3169,7 @@ export async function getCashProjection(view: BudgetView): Promise<CashProjectio
     const own = isViewed ? view : await getBudgetView(m.label);
     // No budget of its own → the viewed month's plan, untouched (actual = 0), as the best guess.
     // Negative ids so a stand-in line never collides with a real one.
-    const lines = own ? own.lines : view.lines.map((l) => ({ ...l, actual: 0, paid: 0, charged: 0, id: -l.id }));
+    const lines = own ? own.lines : view.lines.map((l) => ({ ...l, actual: 0, paid: 0, charged: 0, rebalance: 0, standing: null, id: -l.id }));
     segments.push(
       segmentFor(
         m.label,
@@ -3045,46 +3197,10 @@ export async function getCashProjection(view: BudgetView): Promise<CashProjectio
     reservedCash: reserved.total,
   });
 
-  // Snapshot + trend: only while the month is still running.
-  if (projection.spreadDays > 0) {
-    const today = todayIso();
-    await db
-      .insert(projectionSnapshots)
-      .values({
-        periodId: view.periodId,
-        takenOn: today,
-        asOf,
-        cashNow: String(cashNow),
-        endBalance: String(projection.endBalance),
-        horizonBalance: String(projection.horizonBalance),
-        lowBalance: String(projection.low.balance),
-        lowDate: projection.low.date,
-        spreadTotal: String(projection.spreadTotal),
-        hotEnd: String(projection.debt.hotEnd),
-      })
-      .onDuplicateKeyUpdate({ set: { id: sql`id` } }); // first write of the day wins
-    const snaps = await db
-      .select()
-      .from(projectionSnapshots)
-      .where(eq(projectionSnapshots.periodId, view.periodId))
-      .orderBy(asc(projectionSnapshots.takenOn));
-    const toT = (r: (typeof snaps)[number]) => ({
-      takenOn: r.takenOn,
-      endBalance: toNum(r.endBalance) ?? 0,
-      horizonBalance: toNum(r.horizonBalance) ?? 0,
-      spreadTotal: toNum(r.spreadTotal) ?? 0,
-    });
-    const weekAgoIso = new Date(Date.parse(today + "T00:00:00Z") - 7 * 86_400_000).toISOString().slice(0, 10);
-    const earlier = snaps.filter((r) => r.takenOn < today);
-    const weekAgo = [...earlier].reverse().find((r) => r.takenOn <= weekAgoIso) ?? null;
-    const trend: ProjectionTrend = {
-      first: earlier.length ? toT(earlier[0]) : null,
-      weekAgo: weekAgo ? toT(weekAgo) : null,
-      count: snaps.length,
-      series: snaps.map(toT),
-    };
-    projection.trend = trend;
-  }
+  // The fixed path to measure today against — the viewed month as budgeted, from its opening
+  // balance. Needs that opening balance; a month nobody recorded a starting cash for has no plan.
+  const focusSeg = segments[projection.focusIndex];
+  projection.plan = view.cash.start != null && focusSeg ? planMonth(focusSeg, view.cash.start) : null;
   return projection;
 }
 
@@ -3139,4 +3255,62 @@ export async function getDailyCashOnHand(periodLabel: string): Promise<DailyCash
     out.push({ date, total: round2(total), recorded, accounts: current.size });
   }
   return out;
+}
+
+/** Highest transaction id right now (0 when there are none). */
+export async function getLatestTransactionId(): Promise<number> {
+  await requireSession();
+  const r = await db.select({ m: sql<number | null>`MAX(${transactions.id})` }).from(transactions);
+  return Number(r[0]?.m ?? 0);
+}
+
+/**
+ * How many transactions arrived since the user last opened Transactions (see
+ * src/lib/transactions-seen.ts). The first time it runs there is no watermark yet, so it seeds
+ * one at the newest row: starting from "everything you have ever imported is new" would be noise.
+ */
+export async function getNewTransactionCount(): Promise<number> {
+  await requireSession();
+  const [row] = await db.select({ layout: uiLayouts.layout }).from(uiLayouts).where(eq(uiLayouts.layoutKey, TXN_SEEN_KEY));
+  if (!row) {
+    const latest = await getLatestTransactionId();
+    await db.insert(uiLayouts).values({ layoutKey: TXN_SEEN_KEY, layout: { lastSeenId: latest } }).onDuplicateKeyUpdate({ set: { layoutKey: TXN_SEEN_KEY } });
+    return 0;
+  }
+  const lastSeenId = Number((row.layout as { lastSeenId?: unknown } | null)?.lastSeenId) || 0;
+  const r = await db
+    .select({ c: sql<number>`COUNT(*)` })
+    .from(transactions)
+    .where(and(gt(transactions.id, lastSeenId), sql`${transactions.source} <> ${TXN_SEEN_IGNORED_SOURCE}`));
+  return Number(r[0]?.c ?? 0);
+}
+
+/**
+ * The small counts the app shell shows on its nav: bills that need doing this month and
+ * transactions that arrived since the last visit to Transactions. "Past due" mirrors the dashboard's red chip for
+ * bills — unsettled, due day already behind us, and not marked Pending/Autopay Pending (money in
+ * flight) — or explicitly set to "Past Due". Debt-line payments aren't counted here; the
+ * dashboard's projection covers those.
+ */
+export async function getNavCounts(): Promise<{ pastDueBills: number; newTransactions: number }> {
+  await requireSession();
+  const today = todayIso();
+  const day = Number(today.slice(8, 10));
+  const label = today.slice(0, 7);
+  const [rows, statuses, newTransactions] = await Promise.all([
+    db
+      .select({ status: billInstances.status, dueDay: billInstances.dueDay })
+      .from(billInstances)
+      .innerJoin(periods, eq(billInstances.periodId, periods.id))
+      .where(eq(periods.label, label)),
+    db.select({ name: billStatuses.name, isSettled: billStatuses.isSettled }).from(billStatuses),
+    getNewTransactionCount(),
+  ]);
+  const settled = new Set(statuses.filter((s) => s.isSettled).map((s) => s.name));
+  const pastDueBills = rows.filter(
+    (r) =>
+      r.status === "Past Due" ||
+      (!settled.has(r.status) && !/pending/i.test(r.status) && r.dueDay != null && r.dueDay < day),
+  ).length;
+  return { pastDueBills, newTransactions };
 }

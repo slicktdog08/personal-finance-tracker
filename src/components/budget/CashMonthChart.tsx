@@ -18,12 +18,9 @@ type Day =
  * month boundary. Hover/touch snaps to a day; the readout above says measured / carried /
  * projected and what moved the money.
  *
- * A third, thinner line is the FORECAST HISTORY: for each day a projection was recorded, where
- * that day's projection said the month would END. It shares the dollar axis and is plotted against
- * the day the forecast was made, so the drift reads as a shape — flat means the plan is holding,
- * a slide means the month is getting away — and it converges on the dashed line's endpoint as the
- * month runs out. This is the same information the "on the 21st this looked like …" sentence
- * carries, except you can see every day of it at once.
+ * A third, thinner line is the PLAN: the month as budgeted, walked from its opening balance
+ * (`planMonth`). It never moves with what actually happens, so the vertical gap between it and the
+ * solid line IS "above or below plan" on any day — the readout says it in dollars on hover.
  */
 export function CashMonthChart({
   daily,
@@ -47,17 +44,20 @@ export function CashMonthChart({
   const days: Day[] = [...seed, ...actual, ...projected];
   if (days.length < 2) return null;
 
-  // Forecast history: one point per day a projection was recorded, at what it said month-end
-  // would be. Only inside the drawn window, and only once there are two to make a line of.
-  const forecast = (p?.trend?.series ?? []).filter((s) => s.takenOn >= monthStart && s.takenOn <= horizonEnd);
-  const showForecast = forecast.length > 1;
+  // The plan: the viewed month's budgeted path, opening balance first so it starts where the
+  // month did. Only drawn inside the window, and only once there are two points to join.
+  const plan = p?.plan
+    ? [{ date: monthStart, balance: p.plan.start }, ...p.plan.days].filter((d) => d.date >= monthStart && d.date <= horizonEnd)
+    : [];
+  const showPlan = plan.length > 1;
+  const planOn = new Map(plan.map((d) => [d.date, d.balance]));
 
   const width = 640;
   const height = 160;
   const padX = 8;
   const padTop = 14;
   const padBottom = 28;
-  const values = [...days.map((d) => d.balance), ...(showForecast ? forecast.map((s) => s.endBalance) : [])];
+  const values = [...days.map((d) => d.balance), ...(showPlan ? plan.map((d) => d.balance) : [])];
   const min = Math.min(0, ...values);
   const max = Math.max(...values, 1);
   const span = max - min || 1;
@@ -74,11 +74,11 @@ export function CashMonthChart({
   const projLine = joinIdx >= 0 && projected.length ? [days[joinIdx], ...projected] : projected;
   const areaOf = (seg: Day[]) => (seg.length ? `${x(seg[0].date).toFixed(1)},${base} ${seg.map(pt).join(" ")} ${x(seg[seg.length - 1].date).toFixed(1)},${base}` : "");
   const lowProj = p && projected.length ? projected.reduce((m, d) => (d.balance < m.balance ? d : m), projected[0]) : null;
-  const color = "#059669";
-  // Indigo, not a shade of the cash green: it is a different quantity (a forecast made on that
-  // day), so it must not read as more cash history.
-  const forecastColor = "#6366f1";
-  const forecastPts = forecast.map((s) => `${x(s.takenOn).toFixed(1)},${y(s.endBalance).toFixed(1)}`).join(" ");
+  const color = "var(--mp-accent)";
+  // Indigo, not a shade of the cash green: it is a different quantity (what the budget said),
+  // so it must not read as more cash history.
+  const planColor = "var(--mp-money-plan)";
+  const planPts = plan.map((d) => `${x(d.date).toFixed(1)},${y(d.balance).toFixed(1)}`).join(" ");
 
   // Month boundaries + ticks: the 1st and 15th of every month on the axis, labeled with the month.
   const boundaries: string[] = [];
@@ -104,43 +104,53 @@ export function CashMonthChart({
   const prev = idx > 0 ? days[idx - 1] : null;
   const change = prev ? active.balance - prev.balance : null;
   const events = active.kind === "projected" && p ? p.events.filter((e) => e.date === active.date) : [];
-  // What the projection recorded on the hovered day thought month-end would be — the forecast
-  // line's value at that x, so hovering explains the second line as well as the first.
-  const forecastHere = showForecast ? (forecast.find((s) => s.takenOn === active.date) ?? null) : null;
+  // The plan's balance on the hovered day, and how far the solid/dashed line sits from it.
+  const planHere = showPlan ? (planOn.get(active.date) ?? null) : null;
+  const vsPlan = planHere != null ? active.balance - planHere : null;
 
   return (
     <div>
-      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 mb-1 text-sm min-h-6">
-        <span className="font-medium tabular-nums">{formatDate(active.date)}</span>
-        <span className={`text-lg font-semibold tabular-nums ${active.balance < 0 ? "text-red-600" : ""}`}>{formatMoney(active.balance)}</span>
-        {change != null && (
-          <span className={`text-xs tabular-nums ${change >= 0 ? "text-emerald-600" : "text-red-600"}`}>
-            {change >= 0 ? "+" : "−"}
-            {formatMoney(Math.abs(change))} vs prior day
+      {/* Fixed-height readout: the headline row, then up to two clamped lines of detail, so the
+          chart doesn't jump as days with more or fewer events are hovered. The detail is keyed by
+          day and rises in, so scrubbing reads as a smooth change rather than a flicker. */}
+      <div className="mb-1">
+        <div className="flex items-baseline gap-x-3 h-7 text-sm whitespace-nowrap overflow-hidden">
+          <span className="font-medium tabular-nums">{formatDate(active.date)}</span>
+          <span className={`text-lg font-semibold tabular-nums ${active.balance < 0 ? "text-over" : ""}`}>{formatMoney(active.balance)}</span>
+          {change != null && (
+            <span className={`text-xs tabular-nums ${change >= 0 ? "text-income" : "text-over"}`}>
+              {change >= 0 ? "+" : "−"}
+              {formatMoney(Math.abs(change))} vs prior day
+            </span>
+          )}
+        </div>
+        <p key={active.date} className="h-8 text-xs leading-4 line-clamp-2 motion-safe:animate-[rise_.18s_ease-out]">
+          <span className="text-fg-3">
+            {active.kind === "actual" ? (
+              active.recorded ? "balance recorded" : "carried forward"
+            ) : (
+              <>
+                projected
+                {events.length > 0 && ` · ${events.map((e) => `${e.label} ${e.amount >= 0 ? "+" : "−"}${formatMoney(Math.abs(e.amount))}`).join(" · ")}`}
+                {active.spread > 0 && ` · everyday −${formatMoney(active.spread)}`}
+                {lowProj && active.date === lowProj.date && " · projected low"}
+              </>
+            )}
           </span>
-        )}
-        {active.kind === "actual" ? (
-          <span className="text-xs text-neutral-500">{active.recorded ? "balance recorded" : "carried forward"}</span>
-        ) : (
-          <span className="text-xs text-neutral-500 min-w-0 truncate">
-            projected
-            {events.length > 0 && ` · ${events.map((e) => `${e.label} ${e.amount >= 0 ? "+" : "−"}${formatMoney(Math.abs(e.amount))}`).join(" · ")}`}
-            {active.spread > 0 && ` · everyday −${formatMoney(active.spread)}`}
-            {lowProj && active.date === lowProj.date && " · projected low"}
-          </span>
-        )}
-        {forecastHere && (
-          <span className="text-xs tabular-nums" style={{ color: forecastColor }}>
-            · forecast that day: {formatMoney(forecastHere.endBalance)} at month end
-          </span>
-        )}
-        {hover == null && <span className="text-xs text-neutral-400">· hover or touch the chart</span>}
+          {planHere != null && vsPlan != null && (
+            <span className="tabular-nums" style={{ color: planColor }}>
+              {" "}· plan {formatMoney(planHere)} ({vsPlan >= 0 ? "+" : "−"}
+              {formatMoney(Math.abs(vsPlan))} {active.kind === "actual" ? "vs plan" : "projected vs plan"})
+            </span>
+          )}
+          {hover == null && <span className="text-fg-3"> · hover or touch the chart</span>}
+        </p>
       </div>
       <svg
         viewBox={`0 0 ${width} ${height}`}
         className="w-full h-auto touch-none cursor-crosshair"
         role="img"
-        aria-label={`Cash on hand by day: recorded so far, projected into next month${showForecast ? ", with each day's forecast of month-end cash" : ""}`}
+        aria-label={`Cash on hand by day: recorded so far, projected into next month${showPlan ? ", against the month's budgeted path" : ""}`}
         onPointerMove={onMove}
         onPointerDown={onMove}
         onPointerLeave={() => setHover(null)}
@@ -156,35 +166,30 @@ export function CashMonthChart({
           </linearGradient>
         </defs>
         {boundaries.map((b) => (
-          <line key={b} x1={x(b)} x2={x(b)} y1={padTop - 4} y2={height - padBottom + 4} stroke="#a3a3a3" strokeDasharray="2 3" strokeWidth="1" />
+          <line key={b} x1={x(b)} x2={x(b)} y1={padTop - 4} y2={height - padBottom + 4} stroke="var(--mp-border-strong)" strokeDasharray="2 3" strokeWidth="1" />
         ))}
-        {min < 0 && <line x1={padX} x2={width - padX} y1={y(0)} y2={y(0)} stroke="#ef4444" strokeDasharray="4 3" strokeWidth="1" />}
+        {min < 0 && <line x1={padX} x2={width - padX} y1={y(0)} y2={y(0)} stroke="var(--mp-money-over)" strokeDasharray="4 3" strokeWidth="1" />}
         {actualDays.length > 1 && <polygon points={areaOf(actualDays)} fill="url(#cash-month-actual)" />}
         {projLine.length > 1 && <polygon points={areaOf(projLine)} fill="url(#cash-month-proj)" />}
         {actualDays.length > 1 && <polyline points={actualDays.map(pt).join(" ")} fill="none" stroke={color} strokeWidth="2" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />}
         {projLine.length > 1 && (
           <polyline points={projLine.map(pt).join(" ")} fill="none" stroke={color} strokeWidth="2" strokeDasharray="5 4" strokeOpacity="0.8" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
         )}
-        {showForecast && (
-          <>
-            <polyline points={forecastPts} fill="none" stroke={forecastColor} strokeWidth="1.5" strokeOpacity="0.85" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
-            {forecast.map((s) => (
-              <circle key={s.takenOn} cx={x(s.takenOn)} cy={y(s.endBalance)} r="1.8" fill={forecastColor} fillOpacity="0.9" />
-            ))}
-          </>
+        {showPlan && (
+          <polyline points={planPts} fill="none" stroke={planColor} strokeWidth="1.5" strokeOpacity="0.75" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
         )}
         {actualDays.map((d) => (d.kind === "actual" && d.recorded ? <circle key={d.date} cx={x(d.date)} cy={y(d.balance)} r="2.5" fill={color} /> : null))}
         {projected.map((d) =>
           d.kind === "projected" && (d.paycheck || d.outflow) ? (
-            <line key={d.date} x1={x(d.date)} x2={x(d.date)} y1={height - padBottom + 2} y2={height - padBottom + (d.paycheck ? 10 : 7)} stroke={d.paycheck ? "#16a34a" : "#ef4444"} strokeWidth={d.paycheck ? 3 : 2} />
+            <line key={d.date} x1={x(d.date)} x2={x(d.date)} y1={height - padBottom + 2} y2={height - padBottom + (d.paycheck ? 10 : 7)} stroke={d.paycheck ? "var(--mp-money-income)" : "var(--mp-money-over)"} strokeWidth={d.paycheck ? 3 : 2} />
           ) : null,
         )}
-        {lowProj && <circle cx={x(lowProj.date)} cy={y(lowProj.balance)} r="4" fill="#fff" stroke={lowProj.balance < 0 ? "#ef4444" : color} strokeWidth="2" strokeDasharray="2 2" />}
+        {lowProj && <circle cx={x(lowProj.date)} cy={y(lowProj.balance)} r="4" fill="var(--mp-bg-surface)" stroke={lowProj.balance < 0 ? "var(--mp-money-over)" : color} strokeWidth="2" strokeDasharray="2 2" />}
         {joinIdx >= 0 && projected.length > 0 && <circle cx={x(days[joinIdx].date)} cy={y(days[joinIdx].balance)} r="3.5" fill={color} />}
         <line x1={x(active.date)} x2={x(active.date)} y1={padTop} y2={height - padBottom} stroke={color} strokeOpacity="0.45" strokeDasharray="3 3" strokeWidth="1" />
-        <circle cx={x(active.date)} cy={y(active.balance)} r="5" fill="#fff" stroke={color} strokeWidth="2.5" />
+        <circle cx={x(active.date)} cy={y(active.balance)} r="5" fill="var(--mp-bg-surface)" stroke={color} strokeWidth="2.5" />
         {ticks.map((k) => (
-          <text key={k.iso} x={x(k.iso)} y={height - 4} fontSize="10" textAnchor={k.iso === monthStart ? "start" : k.iso === horizonEnd ? "end" : "middle"} fill="#737373">
+          <text key={k.iso} x={x(k.iso)} y={height - 4} fontSize="10" textAnchor={k.iso === monthStart ? "start" : k.iso === horizonEnd ? "end" : "middle"} fill="var(--mp-text-3)">
             {k.label}
           </text>
         ))}

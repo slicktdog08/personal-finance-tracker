@@ -1,8 +1,8 @@
 "use client";
 
 import { useRef, useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
 import { ColorSelect } from "@/components/ColorSelect";
+import { Icon } from "@/components/ds";
 import { RuleBadge } from "@/components/transactions/RuleBadge";
 import { RuleEditor } from "@/components/transactions/RuleEditor";
 import { updateTransactionCategory } from "@/server/actions/transactions";
@@ -30,7 +30,6 @@ export function CategoryCell({
   categoryRuleId?: number | null;
 }) {
   const [pending, start] = useTransition();
-  const router = useRouter();
   const [suggest, setSuggest] = useState<{ pattern: string; count: number; category: string } | null>(
     null,
   );
@@ -82,7 +81,6 @@ export function CategoryCell({
         saveRule: true,
       });
       setSuggest(null);
-      router.refresh(); // bulk action — let the list update
     });
   }
 
@@ -97,12 +95,12 @@ export function CategoryCell({
       : pickable;
 
   return (
-    <div className="flex flex-wrap items-center gap-2">
+    <div className="flex flex-wrap items-center gap-1.5">
       <ColorSelect
         value={curVal ?? ""}
         options={opts}
         allowEmpty
-        placeholder="— uncategorized —"
+        placeholder="Set category"
         disabled={pending}
         onSelect={(name) => onChange(name)}
       />
@@ -111,8 +109,6 @@ export function CategoryCell({
           rule={rule}
           currentCategory={curVal}
           categoryOptions={options}
-          onSaved={() => router.refresh()}
-          onDeleted={() => router.refresh()}
         />
       )}
       {suggest && (
@@ -121,9 +117,10 @@ export function CategoryCell({
             onClick={applyRule}
             disabled={pending}
             title={`Create rule: description contains "${suggest.pattern}" → ${suggest.category} (also saves it for future imports)`}
-            className="text-xs text-blue-600 hover:underline text-left disabled:opacity-50"
+            className="inline-flex items-center gap-1 text-xs font-medium text-accent-text hover:underline text-left disabled:opacity-50"
           >
-            +{suggest.count} like “{suggest.pattern}” →
+            <Icon name="wand-sparkles" size={12} />
+            Apply to {suggest.count} like “{suggest.pattern}”
           </button>
           <button
             ref={editBtnRef}
@@ -132,9 +129,9 @@ export function CategoryCell({
             disabled={pending}
             title="Customize the pattern before saving the rule"
             aria-label="Customize rule"
-            className="text-xs text-neutral-400 hover:text-blue-600 disabled:opacity-50"
+            className="inline-flex text-fg-3 hover:text-accent-text disabled:opacity-50"
           >
-            ✎
+            <Icon name="pencil" size={12} />
           </button>
           <RuleEditor
             open={editingSuggest}
@@ -144,7 +141,6 @@ export function CategoryCell({
             mode={{ kind: "create", pattern: suggest.pattern, category: suggest.category }}
             onSaved={() => {
               setSuggest(null);
-              router.refresh();
             }}
           />
         </span>

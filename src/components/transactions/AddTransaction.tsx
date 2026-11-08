@@ -1,8 +1,9 @@
 "use client";
 
 import { useRef, useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
 import { Sheet } from "@/components/ui/Sheet";
+import { ColorSelect } from "@/components/ColorSelect";
+import { Icon } from "@/components/ds";
 import { createTransaction } from "@/server/actions/transactions";
 import { LIABILITY_ACCOUNT_TYPES, WALLET_ACCOUNT_TYPES } from "@/constants/enums";
 import {
@@ -35,6 +36,7 @@ export function AddTransaction({
   defaultAccountNumber,
   openWithdrawals = [],
   path = "/transactions",
+  defaultDate,
 }: {
   accounts: AccountOption[];
   categoryOptions: CategoryOption[];
@@ -43,13 +45,14 @@ export function AddTransaction({
   /** Cash withdrawals that still hold unspent money — offered when spending from the wallet. */
   openWithdrawals?: OpenWithdrawal[];
   path?: string;
+  /** Date the form starts on (a past month's page starts in that month); today otherwise. */
+  defaultDate?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [pending, start] = useTransition();
-  const router = useRouter();
   const btnRef = useRef<HTMLButtonElement>(null);
 
-  const [date, setDate] = useState(todayIso());
+  const [date, setDate] = useState(defaultDate ?? todayIso());
   const [desc, setDesc] = useState("");
   const [amount, setAmount] = useState("");
   const [direction, setDirection] = useState("Debit");
@@ -66,7 +69,9 @@ export function AddTransaction({
   const [error, setError] = useState("");
 
   const inputCls =
-    "border rounded px-2 py-1 text-sm bg-transparent border-neutral-300 dark:border-neutral-700";
+    "mp-input !h-9";
+
+  const selectCls = "mp-select !h-9";
 
   // Reset to a clean form each time it opens, defaulting the account to whatever
   // the page is currently filtered to.
@@ -119,11 +124,9 @@ export function AddTransaction({
       // in another tab). Keep the form open with the reason rather than losing it silently.
       if (res?.offset && !res.offset.ok) {
         setError(res.offset.error);
-        router.refresh();
         return;
       }
       setOpen(false);
-      router.refresh();
     });
   }
 
@@ -216,9 +219,10 @@ export function AddTransaction({
       <button
         ref={btnRef}
         onClick={toggle}
-        className="px-3 py-1.5 rounded-md bg-neutral-900 text-white dark:bg-white dark:text-neutral-900 text-sm font-medium"
+        className="mp-btn mp-btn--primary"
       >
-        {open ? "Close" : "+ Add transaction"}
+        <Icon name={open ? "x" : "plus"} size={16} />
+        {open ? "Close" : "Add"}
       </button>
 
       <Sheet
@@ -231,7 +235,7 @@ export function AddTransaction({
       >
         <div className="space-y-2">
           <div className="flex flex-col gap-1">
-            <span className="text-xs text-neutral-500">Date</span>
+            <span className="mp-field__label">Date</span>
             <input
               type="date"
               value={date}
@@ -240,7 +244,7 @@ export function AddTransaction({
             />
           </div>
           <div className="flex flex-col gap-1">
-            <span className="text-xs text-neutral-500">Description</span>
+            <span className="mp-field__label">Description</span>
             <input
               value={desc}
               onChange={(e) => setDesc(e.target.value)}
@@ -251,7 +255,7 @@ export function AddTransaction({
           </div>
           <div className="flex gap-2">
             <div className="flex flex-col gap-1 flex-1">
-              <span className="text-xs text-neutral-500">Amount</span>
+              <span className="mp-field__label">Amount</span>
               <input
                 value={amount}
                 onChange={(e) => setAmount(e.target.value)}
@@ -261,11 +265,11 @@ export function AddTransaction({
               />
             </div>
             <div className="flex flex-col gap-1">
-              <span className="text-xs text-neutral-500">Direction</span>
+              <span className="mp-field__label">Direction</span>
               <select
                 value={direction}
                 onChange={(e) => setDirection(e.target.value)}
-                className={inputCls}
+                className={selectCls}
               >
                 <option value="Debit">Debit</option>
                 <option value="Credit">Credit</option>
@@ -273,14 +277,14 @@ export function AddTransaction({
             </div>
           </div>
           <div className="flex flex-col gap-1">
-            <span className="text-xs text-neutral-500">Account</span>
+            <span className="mp-field__label">Account</span>
             <select
               value={acct}
               onChange={(e) => {
                 setAcct(e.target.value);
                 if (!e.target.value) setAdjustBalance(false);
               }}
-              className={inputCls}
+              className={selectCls}
             >
               <option value="">— none —</option>
               {accounts.map((a) => (
@@ -291,31 +295,32 @@ export function AddTransaction({
             </select>
           </div>
           <div className="flex flex-col gap-1">
-            <span className="text-xs text-neutral-500">Category</span>
-            <select value={cat} onChange={(e) => setCat(e.target.value)} className={inputCls}>
-              <option value="">— category —</option>
-              {categoryOptions.filter((c) => c.active).map((c) => (
-                <option key={c.name} value={c.name}>
-                  {c.emoji ? `${c.emoji} ` : ""}
-                  {c.name}
-                </option>
-              ))}
-            </select>
+            <span className="mp-field__label">Category</span>
+            <div>
+              <ColorSelect
+                value={cat}
+                options={categoryOptions.filter((c) => c.active)}
+                allowEmpty
+                placeholder="Set category"
+                onSelect={setCat}
+              />
+            </div>
           </div>
           <div className="flex flex-col gap-1">
-            <span className="text-xs text-neutral-500">Notes</span>
+            <span className="mp-field__label">Notes</span>
             <textarea
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
               rows={2}
               placeholder="What was this actually for?"
-              className={inputCls + " w-full resize-y"}
+              className="mp-input !h-auto py-2 leading-snug resize-y"
             />
           </div>
           {showOffset && (
-            <div className="rounded-md border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 p-2 space-y-2">
-              <div className="text-xs font-medium text-amber-900 dark:text-amber-200">
-                💵 Offset cash withdrawals
+            <div className="rounded-panel bg-sunken p-3 space-y-2">
+              <div className="flex items-center gap-1.5 text-xs font-semibold text-fg">
+                <Icon name="banknote" size={14} />
+                Offset cash withdrawals
               </div>
               {resolved.map((x, i) => (
                 <div key={x.w ? x.w.id : `pick-${i}`} className="space-y-1">
@@ -330,7 +335,7 @@ export function AddTransaction({
                           return i === 0 && !v ? [{ wid: "", amt: "" }] : next;
                         });
                       }}
-                      className={inputCls + " flex-1 min-w-0"}
+                      className={selectCls + " flex-1 min-w-0"}
                     >
                       {i === 0 && (
                         <option value="">— don&apos;t offset (cash from elsewhere) —</option>
@@ -347,16 +352,17 @@ export function AddTransaction({
                     {i > 0 && (
                       <button
                         onClick={() => editRows((next) => next.filter((_, j) => j !== i))}
-                        className="shrink-0 px-1.5 py-1 text-xs text-red-600 hover:underline"
+                        className="inline-flex shrink-0 px-1.5 py-1 text-fg-3 hover:text-over"
                         title="Stop drawing from this withdrawal"
+                        aria-label="Stop drawing from this withdrawal"
                       >
-                        ✕
+                        <Icon name="x" size={14} />
                       </button>
                     )}
                   </div>
                   {x.w && (
                     <div className="flex items-center gap-2">
-                      <span className="text-xs text-neutral-600 dark:text-neutral-300">
+                      <span className="text-xs text-fg-2">
                         Draw from it
                       </span>
                       <input
@@ -377,13 +383,13 @@ export function AddTransaction({
               {canAddRow && (
                 <button
                   onClick={addOffsetRow}
-                  className="text-xs font-medium text-amber-800 dark:text-amber-300 hover:underline"
+                  className="text-xs font-medium text-accent-text hover:underline"
                 >
-                  + Draw the other {formatMoney(shortfall)} from another withdrawal
+                  Draw the other {formatMoney(shortfall)} from another withdrawal
                 </button>
               )}
               {offsetting ? (
-                <p className="text-[11px] leading-snug text-amber-900/80 dark:text-amber-200/80">
+                <p className="text-[11px] leading-snug text-fg-2">
                   {shortfall > 0 ? (
                     <>
                       Offsetting {formatMoney(totalOffset)} — the other {formatMoney(shortfall)}{" "}
@@ -403,7 +409,7 @@ export function AddTransaction({
                   )}
                 </p>
               ) : (
-                <p className="text-[11px] leading-snug text-amber-900/80 dark:text-amber-200/80">
+                <p className="text-[11px] leading-snug text-fg-2">
                   Left un-offset, this is spending on top of the withdrawals — right only if the
                   cash came from somewhere the app doesn&apos;t know about.
                 </p>
@@ -411,18 +417,18 @@ export function AddTransaction({
             </div>
           )}
           {error && (
-            <p className="text-xs text-red-600 dark:text-red-400">{error}</p>
+            <p className="text-xs text-over">{error}</p>
           )}
           <label className="flex items-start gap-2 pt-1 cursor-pointer select-none">
             <input
               type="checkbox"
               checked={isPending}
               onChange={(e) => setIsPending(e.target.checked)}
-              className="mt-0.5 h-4 w-4 accent-amber-600"
+              className="mt-0.5 h-4 w-4 accent-accent"
             />
-            <span className="text-xs text-neutral-600 dark:text-neutral-300">
+            <span className="text-xs text-fg-2">
               Pending — not posted by the bank yet
-              <span className="block text-neutral-400">
+              <span className="block text-fg-3">
                 When the statement row is imported, it&apos;s matched to this one (amount can
                 differ, e.g. a tip) so you can merge instead of duplicating.
               </span>
@@ -434,11 +440,11 @@ export function AddTransaction({
               checked={adjustBalance}
               disabled={!acct}
               onChange={(e) => setAdjustBalance(e.target.checked)}
-              className="mt-0.5 h-4 w-4 accent-blue-600 disabled:opacity-40 disabled:cursor-not-allowed"
+              className="mt-0.5 h-4 w-4 accent-accent disabled:opacity-40 disabled:cursor-not-allowed"
             />
-            <span className="text-xs text-neutral-600 dark:text-neutral-300">
+            <span className="text-xs text-fg-2">
               Apply to account balance
-              <span className="block text-neutral-400">
+              <span className="block text-fg-3">
                 {acct
                   ? `Records a ledger entry — ${
                       addsToBalance ? "adds to" : "subtracts from"
@@ -450,14 +456,14 @@ export function AddTransaction({
           <div className="flex justify-end gap-2 pt-1">
             <button
               onClick={() => setOpen(false)}
-              className="px-3 py-1.5 text-sm text-neutral-500 hover:underline"
+              className="mp-btn mp-btn--ghost mp-btn--sm"
             >
               Cancel
             </button>
             <button
               onClick={submit}
               disabled={pending}
-              className="px-3 py-1.5 rounded-md bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 disabled:opacity-50"
+              className="mp-btn mp-btn--primary mp-btn--sm"
             >
               {pending ? "Adding…" : "Add"}
             </button>

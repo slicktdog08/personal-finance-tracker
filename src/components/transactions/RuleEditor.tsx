@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useTransition, type RefObject } from "react";
 import { Sheet } from "@/components/ui/Sheet";
+import { ColorSelect } from "@/components/ColorSelect";
 import {
   previewCategorizeMatch,
   bulkCategorizeByMatch,
@@ -202,7 +203,9 @@ export function RuleEditor({
   }
 
   const inputCls =
-    "border rounded px-2 py-1 text-sm bg-transparent border-neutral-300 dark:border-neutral-700 w-full";
+    "mp-input !h-9";
+
+  const selectCls = "mp-select !h-9";
   const pickable = categoryOptions.filter((c) => c.active || c.name === draft.category);
 
   return (
@@ -216,31 +219,31 @@ export function RuleEditor({
     >
       <div className="space-y-3 text-left text-sm">
         {note && (
-          <p className="rounded-md bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900 px-2 py-1.5 text-xs text-amber-800 dark:text-amber-200">
+          <p className="rounded-panel bg-warn-soft px-3 py-2 text-xs text-warn">
             {note}
           </p>
         )}
 
         <div className="grid grid-cols-2 gap-2">
           <label className="flex flex-col gap-1">
-            <span className="text-xs text-neutral-500">Match on</span>
+            <span className="mp-field__label">Match on</span>
             <select
               value={draft.field}
               onChange={(e) => setDraft((d) => ({ ...d, field: e.target.value as RuleInput["field"] }))}
-              className={inputCls}
+              className={selectCls}
             >
               <option value="description">Description</option>
               <option value="raw_category">Bank category</option>
             </select>
           </label>
           <label className="flex flex-col gap-1">
-            <span className="text-xs text-neutral-500">Type</span>
+            <span className="mp-field__label">Type</span>
             <select
               value={draft.matchType}
               onChange={(e) =>
                 setDraft((d) => ({ ...d, matchType: e.target.value as RuleInput["matchType"] }))
               }
-              className={inputCls}
+              className={selectCls}
             >
               <option value="contains">contains</option>
               <option value="equals">equals</option>
@@ -250,7 +253,7 @@ export function RuleEditor({
         </div>
 
         <label className="flex flex-col gap-1">
-          <span className="text-xs text-neutral-500">Pattern</span>
+          <span className="mp-field__label">Pattern</span>
           <input
             value={draft.pattern}
             onChange={(e) => setDraft((d) => ({ ...d, pattern: e.target.value }))}
@@ -260,36 +263,31 @@ export function RuleEditor({
           />
         </label>
 
-        <label className="flex flex-col gap-1">
-          <span className="text-xs text-neutral-500">Set category to</span>
-          <select
-            value={draft.category}
-            onChange={(e) => setDraft((d) => ({ ...d, category: e.target.value }))}
-            className={inputCls}
-          >
-            <option value="">— pick —</option>
-            {pickable.map((c) => (
-              <option key={c.name} value={c.name}>
-                {c.emoji ? `${c.emoji} ` : ""}
-                {c.name}
-              </option>
-            ))}
-          </select>
-        </label>
+        <div className="flex flex-col gap-1">
+          <span className="mp-field__label">Set category to</span>
+          <div>
+            <ColorSelect
+              value={draft.category}
+              options={pickable}
+              placeholder="Pick category"
+              onSelect={(v) => setDraft((d) => ({ ...d, category: v }))}
+            />
+          </div>
+        </div>
 
-        <div className="rounded-md bg-neutral-100 dark:bg-neutral-900 px-2 py-1.5 text-xs space-y-1">
+        <div className="rounded-panel bg-sunken px-3 py-2 text-xs space-y-1">
           {!pattern ? (
-            <span className="text-neutral-500">Enter a pattern to see what it would match.</span>
+            <span className="text-fg-3">Enter a pattern to see what it would match.</span>
           ) : (
             <>
-              <div className="text-neutral-700 dark:text-neutral-300">
+              <div className="text-fg">
                 {shownPreview ? (
                   <>
                     <span className="font-medium">{shownPreview.count.toLocaleString()}</span> uncategorized
                     transaction{shownPreview.count === 1 ? "" : "s"} match
                   </>
                 ) : (
-                  <span className="text-neutral-500">Counting matches…</span>
+                  <span className="text-fg-3">Counting matches…</span>
                 )}
                 {extra > 0 && (
                   <>
@@ -299,7 +297,7 @@ export function RuleEditor({
                 )}
               </div>
               {shownPreview && shownPreview.samples.length > 0 && (
-                <ul className="text-neutral-500 space-y-0.5">
+                <ul className="text-fg-3 space-y-0.5">
                   {shownPreview.samples.slice(0, 3).map((s, i) => (
                     <li key={i} className="truncate">
                       {s}
@@ -308,7 +306,7 @@ export function RuleEditor({
                 </ul>
               )}
               {mode.kind === "edit" && usage != null && (
-                <div className="text-neutral-500">
+                <div className="text-fg-3">
                   Currently set the category on <span className="font-medium">{usage}</span> transaction
                   {usage === 1 ? "" : "s"}.
                 </div>
@@ -333,17 +331,17 @@ export function RuleEditor({
           </label>
         )}
         {mode.kind === "create" && (
-          <p className="text-[11px] text-neutral-400">
+          <p className="text-[11px] text-fg-3">
             Saves the rule for future imports and categorizes the uncategorized transactions it
             matches now. Already-categorized rows are left alone.
           </p>
         )}
 
-        {error && <p className="text-xs text-red-600">{error}</p>}
+        {error && <p className="text-xs text-over">{error}</p>}
 
         {confirmDelete && mode.kind === "edit" ? (
-          <div className="rounded-md border border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950/30 p-2 space-y-2 text-xs">
-            <div className="text-red-800 dark:text-red-200">
+          <div className="rounded-panel bg-danger-soft p-3 space-y-2 text-xs">
+            <div className="text-danger">
               Delete the rule “{describeRuleMatch(mode.rule)} → {mode.rule.category}”? Future imports
               will no longer auto-categorize these.
             </div>
@@ -363,7 +361,7 @@ export function RuleEditor({
               <button
                 type="button"
                 onClick={() => setConfirmDelete(false)}
-                className="px-2 py-1 text-neutral-500 hover:underline"
+                className="mp-btn mp-btn--ghost mp-btn--sm"
               >
                 Keep it
               </button>
@@ -371,7 +369,7 @@ export function RuleEditor({
                 type="button"
                 onClick={doDelete}
                 disabled={pending}
-                className="px-3 py-1 rounded-md bg-red-600 text-white font-medium hover:bg-red-700 disabled:opacity-50"
+                className="mp-btn mp-btn--danger mp-btn--sm"
               >
                 {pending ? "Deleting…" : "Delete rule"}
               </button>
@@ -383,7 +381,7 @@ export function RuleEditor({
               <button
                 type="button"
                 onClick={() => setConfirmDelete(true)}
-                className="text-xs text-red-600 hover:underline"
+                className="text-xs font-medium text-over hover:underline"
               >
                 Delete rule…
               </button>
@@ -392,7 +390,7 @@ export function RuleEditor({
               <button
                 type="button"
                 onClick={onClose}
-                className="px-3 py-1.5 text-sm text-neutral-500 hover:underline"
+                className="mp-btn mp-btn--ghost mp-btn--sm"
               >
                 Cancel
               </button>
@@ -400,7 +398,7 @@ export function RuleEditor({
                 type="button"
                 onClick={save}
                 disabled={!canSave}
-                className="px-3 py-1.5 rounded-md bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 disabled:opacity-50"
+                className="mp-btn mp-btn--primary mp-btn--sm"
               >
                 {pending
                   ? "Saving…"

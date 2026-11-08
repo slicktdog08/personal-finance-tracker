@@ -28,6 +28,12 @@ import { dateToYearMonth } from "@/server/lib/period";
 import { DEFAULT_DEPOSIT_WINDOW_DAYS, reconcilePaydays, type ObservedDeposit, type PaydayMatch } from "@/server/lib/payday-reconcile";
 
 const DAY_MS = 86_400_000;
+/**
+ * Days of a month that have to elapse before its observed spending rate is trusted on its own.
+ * Below this the rate is blended with the budget's own rate (see `paceDaily`), because a couple
+ * of days is too small a sample to extrapolate a month from.
+ */
+const PACE_TRUST_DAYS = 7;
 const addDays = (iso: string, n: number) => utcToIso(isoToUtc(iso) + n * DAY_MS);
 
 export type CashEventKind = "paycheck" | "bill" | "debt" | "pending";
@@ -72,8 +78,10 @@ export interface ProjectionLine {
   planned: number;
   actual: number;
   accountId: number | null;
-  /** Debt lines: paid to the debt / new charges on it this month (actual = paid − charged). */
-  paid?: number;
+  /**
+   * Debt lines: new charges on the card this month. `actual` is already the payoff net of them,
+   * so a "paid" bill mark (gross) has to be netted the same way before it counts as covered.
+   */
   charged?: number;
 }
 
@@ -138,9 +146,29 @@ export interface MonthResult {
   end: string;
   endBalance: number;
   low: { date: string; balance: number };
+  /** What the walk actually drained per day, and over the month: observed pace once there is
+   *  history to measure, else the envelope rate. */
   spreadTotal: number;
   spreadDaily: number;
   spreadDays: number;
+  /** The other bookend: the budget's unspent remainder, and where the month lands if every
+   *  last dollar of it goes out before month end. */
+  envelopeTotal: number;
+  envelopeDaily: number;
+  envelopeEndBalance: number;
+  /**
+   * The pace measurement itself, so the UI can show its working. `observedSpend` is EVERYDAY
+   * spending only — `categoryActual` minus `paidBillsInLines` — because a bill is a monthly
+   * event and extrapolating one as a daily rate is how rent got projected seven times.
+   */
+  observedSpend: number;
+  categoryActual: number;
+  paidBillsInLines: number;
+  elapsedDays: number;
+  /** False when the month had no spending to measure, so `spread*` fell back to the envelope. */
+  pacedFromHistory: boolean;
+  /** How much of `spreadDaily` is observed pace vs. the budget's rate: 0 → all plan, 1 → all pace. */
+  paceWeight: number;
   assumed: boolean;
   debtPayments: number;
   /** Per scheduled payday: what was expected, what landed, what's still coming. */
@@ -149,6 +177,13 @@ export interface MonthResult {
   unexpectedIncome: number;
   /** Total by which over-plan lines exceeded their envelopes — credited against the rest. */
   overspend: number;
+  /**
+   * Bills that found no budget line to draw from. Each leaves cash with nothing planned against
+   * it, so it is the one case where a bill really is extra outflow — and the one worth shouting
+   * about, because the usual cause is a missing `bills.category`, not a genuinely unplanned bill.
+   */
+  unbudgetedBills: { name: string; amount: number; date: string }[];
+  unbudgetedBillTotal: number;
 }
 
 export interface CashProjection {
@@ -174,6 +209,13 @@ export interface CashProjection {
   /** Index into `months` that the flat figures above describe. */
   focusIndex: number;
   /**
+   * The focus month if the budget is spent to the last dollar instead of at observed pace — the
+   * conservative bookend, kept beside the projection rather than replacing it. `daily` climbs as
+   * the month closes (it is "what's left ÷ days left"), which is exactly why it isn't the line
+   * being drawn.
+   */
+  envelope: { total: number; daily: number; endBalance: number; low: { date: string; balance: number } };
+  /**
    * The same three landmarks with reserved cash taken out — what's actually free to spend. A low
    * point of $4,148 reads very differently when $4,134 of it is the emergency fund.
    */
@@ -190,28 +232,19 @@ export interface CashProjection {
     interest: number; // one month at today's balances
     payments: number; // this month's planned debt payments
   };
-  /** Filled in by the caller from stored snapshots — how today's projection compares to earlier ones. */
-  trend?: ProjectionTrend | null;
-}
-
-export interface ProjectionPoint {
-  takenOn: string;
-  endBalance: number;
-  horizonBalance: number;
-  spreadTotal: number;
-}
-
-export interface ProjectionTrend {
-  /** The earliest snapshot this month and the most recent one at least a week old (may be the same). */
-  first: ProjectionPoint | null;
-  weekAgo: ProjectionPoint | null;
-  count: number;
   /**
-   * Every snapshot for the month, ascending — "what the forecast for month-end said, day by day".
-   * Drawn as its own line so the drift is visible as a shape instead of a single sentence about
-   * one earlier day. It converges on the projection's own endpoint as the month runs out.
+   * The focus month as budgeted, fixed — filled in by the caller (see `planMonth`). The
+   * projection above moves every day by design; this doesn't, so "cash today − plan today" is a
+   * real above/below-plan reading.
    */
-  series: ProjectionPoint[];
+  plan?: CashPlan | null;
+}
+
+/** The month walked from its opening balance on nothing but the budget. */
+export interface CashPlan {
+  start: number; // cash the day before the month began
+  days: { date: string; balance: number }[]; // every day of the month
+  endBalance: number;
 }
 
 export function projectCash(input: CashProjectionInput): CashProjection {
@@ -260,30 +293,40 @@ export function projectCash(input: CashProjectionInput): CashProjection {
     }
 
     // Bills: every unpaid one leaves in full on its due day; a covering line's remaining shrinks.
+    const unbudgetedBills: { name: string; amount: number; date: string }[] = [];
+    let paidBillsInLines = 0;
     const debtBillByAccount = new Map<number, ProjectionBill>();
     for (const b of seg.bills) {
       if (b.accountId != null) {
         debtBillByAccount.set(b.accountId, b);
         continue;
       }
-      if (b.paid || b.amount <= 0) continue;
+      if (b.amount <= 0) continue;
+      if (b.paid) {
+        // Already paid, so it is NOT a future event — but its money IS inside the covering line's
+        // `actual`, and `actual` is what the pace rate is measured from. A bill is a once-a-month
+        // event, not a daily habit: leaving rent in the measurement made 4 days of October read
+        // as $487/day and projected rent seven more times. Tracked here so pace can take it out.
+        if (b.lineId != null && remaining.has(b.lineId)) paidBillsInLines = round2(paidBillsInLines + b.amount);
+        continue;
+      }
       const due = dueDate(b.dueDay);
       const date = schedule(due, seg.end);
       if (date <= asOf) continue;
       events.push({ date, label: b.name, amount: -round2(b.amount), kind: "bill", overdue: due != null && due <= asOf });
       if (b.lineId != null && remaining.has(b.lineId)) remaining.set(b.lineId, round2(remaining.get(b.lineId)! - b.amount));
+      // No covering line: this bill leaves cash with nothing planned against it. Collected rather
+      // than absorbed — a bill silently missing its envelope is what made a zero-based 2026-10
+      // project a $1,575.24 loss, and silence is what let it go unnoticed.
+      else unbudgetedBills.push({ name: b.name, amount: round2(b.amount), date });
     }
 
     // Debt lines: one payment of what the plan still owes, honoring linked payments and paid marks.
-    // The plan is PAYDOWN, so charges already on the card this month are owed on top of it: their
-    // envelopes counted them as spent, but the cash only leaves when the card is paid.
     let debtPayments = 0;
     for (const l of seg.lines) {
       if (l.kind !== "debt" || l.accountId == null) continue;
       const bill = debtBillByAccount.get(l.accountId);
-      const charged = l.charged ?? 0;
-      const paid = l.paid ?? l.actual + charged;
-      const covered = Math.max(paid, bill && bill.paid ? bill.amount : 0) - charged;
+      const covered = Math.max(l.actual, bill && bill.paid ? bill.amount - Math.max(0, l.charged ?? 0) : 0);
       const owed = Math.max(0, round2(l.planned - covered));
       if (owed <= 0) continue;
       const due = bill && !bill.paid ? dueDate(bill.dueDay) : null;
@@ -311,65 +354,143 @@ export function projectCash(input: CashProjectionInput): CashProjection {
     // Subtracting the negatives (rather than negating their sum) keeps this a clean positive 0
     // when nothing is over — `-0` would render as "−$0.00".
     const overspend = round2([...remaining.values()].reduce((s, v) => (v < 0 ? s - v : s), 0));
-    const spreadTotal = Math.max(0, round2([...remaining.values()].reduce((s, v) => s + v, 0)));
+    const envelopeTotal = Math.max(0, round2([...remaining.values()].reduce((s, v) => s + v, 0)));
     const from = seg.start > asOf ? addDays(seg.start, -1) : asOf; // day before the first walked day
     const spreadDays = Math.max(0, daysBetween(from, seg.end));
-    const spreadDaily = spreadDays > 0 ? spreadTotal / spreadDays : 0;
-    return { seg, spreadTotal, spreadDays, spreadDaily, debtPayments: round2(debtPayments), pay, overspend };
+    const envelopeDaily = spreadDays > 0 ? envelopeTotal / spreadDays : 0;
+
+    // PACE: what this month has actually been spending per day, carried forward.
+    //
+    // The envelope rate above answers "what if the budget is spent to the last dollar", and it
+    // has one badly-behaved property: it divides whatever is LEFT by the days remaining, so the
+    // rate climbs as the month closes and the final day absorbs the entire unspent remainder.
+    // On 2026-09-29 that put $275.09 — every leftover dollar in the month — on the 30th alone,
+    // more than twice the month's own average. That is arithmetic, not a forecast.
+    //
+    // So the walk runs on observed pace instead: spend so far ÷ days so far. Pace can exceed the
+    // envelope (running hot means the budget gets blown, and the projection should say so), so it
+    // is deliberately NOT capped. The envelope figures stay on the result as the other bookend.
+    // Everyday spending so far: category actuals MINUS the bills already paid out of them. A
+    // category line's `actual` is every transaction in that category, bill payments included, so
+    // measuring a daily rate off it raw extrapolates each paid bill across the whole month.
+    const categoryActual = round2(seg.lines.filter((l) => l.kind === "category").reduce((s, l) => s + l.actual, 0));
+    const observedSpend = Math.max(0, round2(categoryActual - paidBillsInLines));
+    const elapsed = Math.max(0, Math.min(daysBetween(seg.start, asOf) + 1, daysBetween(seg.start, seg.end) + 1));
+    // A future month has no actuals to measure, so it falls back to its own envelope rate.
+    const hasPace = elapsed > 0 && observedSpend > 0;
+    const rawPace = hasPace ? observedSpend / elapsed : envelopeDaily;
+    // Early in a month a "rate" measured over two or three days is noise, not a trend: one $300
+    // grocery run on the 1st reads as $300/day and projects a $9,300 month. So pace is blended
+    // toward the plan until there is a week behind it — full envelope rate on day 0, fully paced
+    // from day PACE_TRUST_DAYS on, straight-line between. The blend also keeps the projection from
+    // stepping discontinuously on whichever day the switch would otherwise happen.
+    const w = Math.min(1, elapsed / PACE_TRUST_DAYS);
+    const paceDaily = hasPace ? w * rawPace + (1 - w) * envelopeDaily : envelopeDaily;
+    const paceTotal = round2(paceDaily * spreadDays);
+    return {
+      seg,
+      spreadDays,
+      envelopeTotal,
+      envelopeDaily,
+      observedSpend,
+      categoryActual,
+      paidBillsInLines,
+      elapsed,
+      hasPace,
+      paceDaily,
+      paceTotal,
+      debtPayments: round2(debtPayments),
+      pay,
+      overspend,
+      unbudgetedBills,
+    };
   });
   events.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.amount - b.amount));
 
-  // Walk the days. The running balance stays exact; only the reported figure is rounded.
-  const days: CashProjection["days"] = [];
-  let exact = input.cashNow;
-  let low = { date: asOf, balance: input.cashNow };
-  let lowThisMonth = { date: asOf, balance: input.cashNow };
   const byDate = new Map<string, CashEvent[]>();
   for (const e of events) byDate.set(e.date, [...(byDate.get(e.date) ?? []), e]);
-  // `low` starts empty: a month's low must come from its OWN days. Seeding it with today's cash
-  // made every later month report `{ asOf, cashNow }` — a date outside the month — whenever it
-  // never dipped below today. Filled in for real below, or defaulted after the walk.
-  const monthResults: (Omit<MonthResult, "low"> & { low: MonthResult["low"] | null })[] = segInfo.map((si) => ({
+  const focus = Math.min(Math.max(input.focusIndex ?? 0, 0), segments.length - 1);
+
+  /**
+   * Walk the days at a given everyday-spend rate per segment. Run twice — once on observed pace
+   * (the projection) and once on the envelope rate (the "if the budget is spent to the last
+   * dollar" bookend) — because the two scenarios differ ONLY in that rate. Running the real walk
+   * for both, rather than algebraically adjusting the first result, keeps the low point's DATE
+   * honest: a bigger daily drain can move which day is lowest, not just how low it is.
+   *
+   * The running balance stays exact; only the reported figure is rounded.
+   */
+  const walk = (rateOf: (segIdx: number) => number) => {
+    const days: CashProjection["days"] = [];
+    let exact = input.cashNow;
+    let low = { date: asOf, balance: input.cashNow };
+    let lowFocus = { date: asOf, balance: input.cashNow };
+    const monthEnd = segInfo.map(() => input.cashNow);
+    const monthLow: ({ date: string; balance: number } | null)[] = segInfo.map(() => null);
+    for (let i = 1; i <= nDays; i++) {
+      const date = addDays(asOf, i);
+      const k = segInfo.findIndex((si) => date >= si.seg.start && date <= si.seg.end);
+      // A day can fall outside every segment when the anchor precedes the first one. Clamp to the
+      // NEAREST segment, not blindly to the last: `findIndex`'s −1 used to hand the leftover days
+      // of the anchor month next November's daily burn rate.
+      const idx = k >= 0 ? k : date < segInfo[0].seg.start ? 0 : segInfo.length - 1;
+      const todays = byDate.get(date) ?? [];
+      for (const e of todays) exact += e.amount;
+      // Only drain a segment's everyday spending on days that really belong to it.
+      const rate = k >= 0 ? rateOf(idx) : 0;
+      exact -= rate;
+      const bal = round2(exact);
+      days.push({
+        date,
+        balance: bal,
+        paycheck: todays.some((e) => e.kind === "paycheck"),
+        outflow: todays.some((e) => e.kind !== "paycheck"),
+        spread: round2(rate),
+      });
+      if (bal < low.balance) low = { date, balance: bal };
+      if (k >= 0 && (monthLow[idx] == null || bal < monthLow[idx]!.balance)) monthLow[idx] = { date, balance: bal };
+      if (date === segInfo[idx].seg.end) monthEnd[idx] = bal;
+      if (idx === focus && k >= 0 && bal < lowFocus.balance) lowFocus = { date, balance: bal };
+    }
+    // A month with no walked days of its own (already over) falls back to the anchor.
+    const lows = monthLow.map((l) => l ?? { date: asOf, balance: input.cashNow });
+    // For a focus month in the future, today's cash is not a candidate for ITS low point.
+    return { days, low, lowFocus: focus > 0 ? lows[focus] : lowFocus, monthEnd, monthLow: lows };
+  };
+
+  const paced = walk((i) => segInfo[i].paceDaily);
+  const spent = walk((i) => segInfo[i].envelopeDaily);
+  const days = paced.days;
+  const low = paced.low;
+  const lowThisMonth = paced.lowFocus;
+  const months: MonthResult[] = segInfo.map((si, i) => ({
     label: si.seg.label,
     start: si.seg.start,
     end: si.seg.end,
-    endBalance: input.cashNow,
-    low: null,
-    spreadTotal: si.spreadTotal,
-    spreadDaily: round2(si.spreadDaily),
+    endBalance: paced.monthEnd[i],
+    low: paced.monthLow[i],
+    // `spread*` is what the walk ACTUALLY drained — pace for a month with history behind it.
+    spreadTotal: si.paceTotal,
+    spreadDaily: round2(si.paceDaily),
     spreadDays: si.spreadDays,
+    // …and the envelope bookend beside it, so "if I spend the whole budget" stays answerable.
+    envelopeTotal: si.envelopeTotal,
+    envelopeDaily: round2(si.envelopeDaily),
+    envelopeEndBalance: spent.monthEnd[i],
+    observedSpend: si.observedSpend,
+    categoryActual: si.categoryActual,
+    paidBillsInLines: si.paidBillsInLines,
+    elapsedDays: si.elapsed,
+    pacedFromHistory: si.hasPace,
+    paceWeight: round2(si.hasPace ? Math.min(1, si.elapsed / PACE_TRUST_DAYS) : 0),
     assumed: !!si.seg.assumed,
     debtPayments: si.debtPayments,
     paydays: si.pay.matches,
     unexpectedIncome: round2(si.pay.unmatched.reduce((s, d) => s + d.amount, 0)),
     overspend: si.overspend,
+    unbudgetedBills: si.unbudgetedBills,
+    unbudgetedBillTotal: round2(si.unbudgetedBills.reduce((t, b) => t + b.amount, 0)),
   }));
-  const focus = Math.min(Math.max(input.focusIndex ?? 0, 0), segments.length - 1);
-  for (let i = 1; i <= nDays; i++) {
-    const date = addDays(asOf, i);
-    const k = segInfo.findIndex((si) => date >= si.seg.start && date <= si.seg.end);
-    // A day can fall outside every segment when the anchor precedes the first one. Clamp to the
-    // NEAREST segment, not blindly to the last: `findIndex`'s −1 used to hand the leftover days
-    // of the anchor month next November's daily burn rate.
-    const idx = k >= 0 ? k : date < segInfo[0].seg.start ? 0 : segInfo.length - 1;
-    const si = segInfo[idx];
-    const todays = byDate.get(date) ?? [];
-    for (const e of todays) exact += e.amount;
-    // Only drain a segment's everyday spending on days that really belong to it.
-    if (k >= 0) exact -= si.spreadDaily;
-    const bal = round2(exact);
-    days.push({ date, balance: bal, paycheck: todays.some((e) => e.kind === "paycheck"), outflow: todays.some((e) => e.kind !== "paycheck"), spread: k >= 0 ? round2(si.spreadDaily) : 0 });
-    if (bal < low.balance) low = { date, balance: bal };
-    const mr = monthResults[idx];
-    if (k >= 0 && (mr.low == null || bal < mr.low.balance)) mr.low = { date, balance: bal };
-    if (date === mr.end) mr.endBalance = bal;
-    if (idx === focus && k >= 0 && bal < lowThisMonth.balance) lowThisMonth = { date, balance: bal };
-  }
-  // A month with no walked days of its own (already over) falls back to the anchor.
-  for (const mr of monthResults) mr.low ??= { date: asOf, balance: input.cashNow };
-  const months = monthResults as MonthResult[];
-  // For a focus month in the future, today's cash is not a candidate for ITS low point.
-  if (focus > 0) lowThisMonth = months[focus].low;
   // A month that ends before the walk starts (already over) keeps the anchor balance.
   const sum = (k: CashEventKind) => round2(events.filter((e) => e.kind === k).reduce((s, e) => s + Math.abs(e.amount), 0));
 
@@ -423,6 +544,13 @@ export function projectCash(input: CashProjectionInput): CashProjection {
     spreadDays: mf.spreadDays,
     paydays: mf.paydays,
     focusIndex: focus,
+    envelope: {
+      total: mf.envelopeTotal,
+      daily: mf.envelopeDaily,
+      endBalance: mf.envelopeEndBalance,
+      // Horizon-wide, to pair with `low` rather than with `lowThisMonth`.
+      low: spent.low,
+    },
     spendable: {
       reserved: round2(reserved),
       now: round2(input.cashNow - reserved),
@@ -441,6 +569,37 @@ export function projectCash(input: CashProjectionInput): CashProjection {
       interest: round2(interest),
       payments: round2(thisMonthPayments),
     },
-    trend: null,
+    plan: null,
   };
+}
+
+/**
+ * The month as it was BUDGETED, walked from the balance it opened with: every payday arrives in
+ * full on its date, every bill and debt payment leaves on its due day, and each envelope drains
+ * evenly across the whole month. Nothing that happened is consulted — no actuals, no paid marks,
+ * no matched deposits, no pending — so the line only moves if the budget itself is edited.
+ *
+ * That is the point. The projection re-forecasts from today's balance and today's pace, so a
+ * history of its month-end figure mixes "you spent money" with "the model changed its mind" (a
+ * deposit not yet matched to its payday dropped one day's forecast by $6,600). Comparing the
+ * recorded balance against this fixed path answers "am I ahead of or behind plan" directly.
+ *
+ * Timing shows up as a gap: a bill paid five days early reads as below plan until its due day.
+ */
+export function planMonth(seg: MonthSegment, startCash: number): CashPlan {
+  const r = projectCash({
+    asOf: addDays(seg.start, -1),
+    cashNow: startCash,
+    segments: [
+      {
+        ...seg,
+        observedDeposits: [],
+        pending: [],
+        bills: seg.bills.map((b) => ({ ...b, paid: false })),
+        lines: seg.lines.map((l) => ({ ...l, actual: 0 })),
+      },
+    ],
+    debts: [],
+  });
+  return { start: startCash, days: r.days.map((d) => ({ date: d.date, balance: d.balance })), endBalance: r.endBalance };
 }

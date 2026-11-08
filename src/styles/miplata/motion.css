@@ -1,0 +1,118 @@
+/* MiPlata motion — feedback for the time the app spends waiting: the launch splash, the
+   navigation bar and spinner, pressed-and-pending nav items, the route skeletons and the page
+   fade-in. None of it changes layout. globals.css shortens every duration to 1ms under
+   prefers-reduced-motion; the looping animations below opt out explicitly instead. */
+
+/* ── Launch splash (src/components/ds/LaunchSplash.tsx) ── */
+/* Shown once per browser session: the root layout's pre-paint script sets data-splash="off"
+   on <html> before first paint on later loads. */
+html[data-splash="off"] .mp-splash{display:none}
+/* Everything that moves here is transform/opacity on its own compositor layer (will-change), so
+   the choreography stays smooth even while the main thread is busy hydrating the app behind it.
+   No filters are animated: the coin's glow is a static box-shadow on a layer of its own. */
+.mp-splash{position:fixed;inset:0;z-index:100;display:flex;flex-direction:column;align-items:center;justify-content:center;background:var(--mp-bg-app);will-change:opacity;animation:mp-splash-failsafe .4s ease-out 7s forwards}
+/* If JS never hydrates to dismiss it, it gets out of the way on its own. */
+@keyframes mp-splash-failsafe{to{opacity:0;visibility:hidden}}
+.mp-splash__stage{display:flex;flex-direction:column;align-items:center;gap:24px}
+.mp-splash__word{will-change:transform,opacity;animation:mp-rise-in .55s var(--mp-ease-out) .6s both}
+/* Only ever seen on a slow load: the stage is already drawn by the time this fades in. */
+.mp-splash__wait{position:absolute;bottom:calc(14% + env(safe-area-inset-bottom));color:var(--mp-text-3);animation:mp-fade-in .4s ease-out 1.7s both}
+
+/* The coin lands with a small spin and settle, then draws itself: rim first, the ₥ hand-written
+   in one stroke, the bar, and the glint last. A highlight sweeps the face while it waits. */
+.mp-splash__coin{position:relative;display:grid;place-items:center;width:104px;height:104px;will-change:transform,opacity;animation:mp-coin-in .75s var(--mp-ease-out) both}
+/* The glow: a round layer the size of the coin face (r=44 of the 96 viewBox) sitting behind the SVG. */
+.mp-splash__coin::before{content:"";position:absolute;width:95px;height:95px;border-radius:50%;box-shadow:0 14px 28px color-mix(in oklch,var(--mp-accent) 38%,transparent)}
+.mp-splash__svg{position:relative;width:104px;height:104px;overflow:visible}
+@keyframes mp-coin-in{from{opacity:0;transform:scale(.5) rotate(-18deg)}55%{opacity:1;transform:scale(1.07) rotate(3deg)}to{opacity:1;transform:scale(1) rotate(0)}}
+
+/* Exit — the hand-off to the app: the wordmark drops away, the coin is tossed up and off the top
+   with a little spin, accelerating like a thrown coin, and the backdrop clears underneath it to
+   reveal the finished screen. The leaving rules replace each element's `animation`, so the entry
+   keyframes (already complete) hand over cleanly from their final frame. */
+.mp-splash[data-phase="leaving"]{pointer-events:none;animation:mp-splash-out .42s var(--mp-ease-in) .14s both}
+/* Opacity alone keeps this a compositor-only animation. With visibility in the keyframes too the
+   browser may run the fade on the main thread, which is busy hydrating at exactly this moment.
+   The layer already ignores the pointer, and LaunchSplash unmounts it once the fade is over. */
+@keyframes mp-splash-out{to{opacity:0}}
+/* The looping highlights repaint the coin every frame; hold them still for the toss. */
+.mp-splash[data-phase="leaving"] :is(.mp-splash__shine,.mp-splash__glint){animation-play-state:paused}
+.mp-splash[data-phase="leaving"] .mp-splash__coin{animation:mp-coin-up .62s cubic-bezier(.5,0,.75,.2) both}
+@keyframes mp-coin-up{0%{transform:translateY(0) scale(1) rotate(0)}18%{transform:translateY(14px) scale(.94) rotate(-4deg)}70%{opacity:1}100%{transform:translateY(-80vh) scale(.55) rotate(18deg);opacity:0}}
+.mp-splash[data-phase="leaving"] .mp-splash__word{animation:mp-word-out .28s var(--mp-ease-in) both}
+@keyframes mp-word-out{to{opacity:0;transform:translateY(14px)}}
+.mp-splash[data-phase="leaving"] .mp-splash__wait{animation:mp-word-out .2s var(--mp-ease-in) both}
+/* Strokes carry pathLength="1". The gap is longer than the path and the start offset overshoots
+   it, so a round cap never pokes out before its stroke begins. */
+.mp-splash__rim,.mp-splash__glyph,.mp-splash__bar,.mp-splash__glint{stroke-dasharray:1 2;stroke-dashoffset:1.08}
+.mp-splash__rim{transform-box:fill-box;transform-origin:center;transform:rotate(-90deg);animation:mp-draw .9s var(--mp-ease-out) .3s forwards}
+.mp-splash__glyph{animation:mp-draw .85s var(--mp-ease-out) .45s forwards}
+.mp-splash__bar{animation:mp-draw .4s var(--mp-ease-out) .95s forwards}
+.mp-splash__glint{animation:mp-draw .35s var(--mp-ease-out) 1.15s forwards,mp-glint-pulse 2.4s ease-in-out 1.7s infinite}
+@keyframes mp-draw{to{stroke-dashoffset:0}}
+@keyframes mp-glint-pulse{50%{opacity:.4}}
+.mp-splash__shine{transform-box:fill-box;transform-origin:center;transform:translateX(-80px) skewX(-18deg);animation:mp-shine 2.4s cubic-bezier(.4,0,.2,1) 1.2s infinite}
+@keyframes mp-shine{0%{transform:translateX(-80px) skewX(-18deg)}45%,100%{transform:translateX(130px) skewX(-18deg)}}
+@media (prefers-reduced-motion:reduce){
+  .mp-splash__shine,.mp-splash__glint{animation:none}
+  .mp-splash__rim,.mp-splash__glyph,.mp-splash__bar,.mp-splash__glint{stroke-dasharray:none;stroke-dashoffset:0}
+}
+
+@keyframes mp-fade-in{from{opacity:0}to{opacity:1}}
+@keyframes mp-rise-in{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
+
+/* ── Activity indicator (iOS-style eight-spoke spinner, currentColor) ── */
+.mp-activity{position:relative;display:inline-block;flex-shrink:0;vertical-align:middle}
+.mp-activity__spoke{position:absolute;left:50%;top:0;width:9%;height:30%;border-radius:999px;background:currentColor;transform-origin:50% 166.67%;animation:mp-activity-fade .8s linear infinite}
+@keyframes mp-activity-fade{from{opacity:1}to{opacity:.15}}
+@media (prefers-reduced-motion:reduce){.mp-activity__spoke{animation:none}}
+
+/* ── Navigation progress (src/components/ds/NavProgress.tsx) ── */
+.mp-navbar{position:fixed;top:0;left:0;right:0;z-index:80;height:3px;border-radius:0 3px 3px 0;transform-origin:left;transform:scaleX(0);opacity:0;background:linear-gradient(90deg,color-mix(in oklch,var(--mp-accent) 70%,transparent),var(--mp-accent));pointer-events:none;will-change:transform,opacity}
+.mp-navbar::after{content:"";position:absolute;right:0;top:0;bottom:0;width:72px;border-radius:inherit;box-shadow:0 0 12px 1px var(--mp-accent)}
+.mp-navspinner{position:fixed;inset:0;z-index:80;display:grid;place-items:center;pointer-events:none}
+.mp-navspinner__pill{display:grid;place-items:center;width:64px;height:64px;border-radius:18px;color:var(--mp-text-2);background:color-mix(in oklch,var(--mp-bg-raised) 86%,transparent);border:1px solid var(--mp-border-1);box-shadow:var(--mp-shadow-3);backdrop-filter:blur(16px) saturate(1.4);-webkit-backdrop-filter:blur(16px) saturate(1.4);animation:mp-pill-in .22s var(--mp-ease-out) both}
+@keyframes mp-pill-in{from{opacity:0;transform:scale(.8)}}
+
+/* ── Pressed-and-pending navigation ── */
+/* <LinkPending> drops a zero-size marker inside a Link. It carries data-pending while the
+   navigation is in flight (useLinkStatus), so the item you tapped reads as chosen at once even
+   before the route commits; the icon pulses until it does. */
+.mp-linkpending{display:inline-block;width:0;height:0;overflow:hidden}
+.mp-navitem,.mp-tab,.mp-subtabs>a,.mp-menuitem{-webkit-tap-highlight-color:transparent}
+.mp-navitem:active,.mp-menuitem:active{background:var(--mp-bg-active)}
+.mp-navitem:has(.mp-linkpending[data-pending]),.mp-menuitem:has(.mp-linkpending[data-pending]){background:var(--mp-bg-active);color:var(--mp-text-1)}
+.mp-tab:has(.mp-linkpending[data-pending]) .mp-tab__icon{background:var(--mp-bg-hover)}
+.mp-subtabs>a:has(.mp-linkpending[data-pending]){color:var(--mp-text-1)}
+.mp-navitem:has(.mp-linkpending[data-pending]) .mp-icon,
+.mp-tab:has(.mp-linkpending[data-pending]) .mp-icon,
+.mp-menuitem:has(.mp-linkpending[data-pending]) .mp-icon,
+.mp-subtabs>a:has(.mp-linkpending[data-pending]),
+.mp-monthnav[data-pending] .mp-monthnav__label{animation:mp-pending-pulse 1.3s var(--mp-ease-std) .15s infinite}
+@keyframes mp-pending-pulse{50%{opacity:.5}}
+@media (prefers-reduced-motion:reduce){
+  .mp-navitem:has(.mp-linkpending[data-pending]) .mp-icon,
+  .mp-tab:has(.mp-linkpending[data-pending]) .mp-icon,
+  .mp-menuitem:has(.mp-linkpending[data-pending]) .mp-icon,
+  .mp-subtabs>a:has(.mp-linkpending[data-pending]),
+  .mp-monthnav[data-pending] .mp-monthnav__label{animation:none;opacity:.6}
+}
+
+/* ── Route skeletons (src/components/ds/PageSkeleton.tsx) ── */
+/* A short delay so a skeleton that is replaced within a frame or two never flashes. Blocks rise
+   in one after another (--i from PageSkeleton), and their shimmer is offset by the same index so
+   the highlight sweeps the screen as one wave instead of every block blinking in step. */
+.mp-pageskel{animation:mp-fade-in .25s ease-out 80ms both}
+.mp-pageskel__block{animation:mp-rise-in .45s var(--mp-ease-out) both;animation-delay:calc(80ms + var(--i,0) * 45ms)}
+.mp-pageskel__row{animation:mp-rise-in .4s var(--mp-ease-out) both;animation-delay:calc(140ms + var(--i,0) * 35ms)}
+.mp-pageskel__block .mp-skel{animation-delay:calc(var(--i,0) * -110ms)}
+.mp-pageskel__row .mp-skel{animation-delay:calc(var(--i,0) * -90ms)}
+
+/* ── Page entry (the routed content box in AppShell) ── */
+/* A new screen fades in when its element is inserted: once for the route skeleton (its own rule
+   above), once for the content that replaces it. Deliberately not a document view transition —
+   those snapshot the whole page and draw it in a layer above everything else, which put page
+   content over the tab bar, open sheets and the launch splash for the length of every
+   navigation, and replayed on every save. Opacity only: a transform here would re-anchor
+   position:fixed descendants (the budget dock) to this box while it ran. */
+.mp-page>:not(.mp-pageskel){animation:mp-fade-in 180ms var(--mp-ease-out) backwards}

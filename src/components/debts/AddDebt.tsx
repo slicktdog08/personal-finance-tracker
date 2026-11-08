@@ -1,8 +1,9 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
 import { createLiabilityAccount } from "@/server/actions/accounts";
+import { Button, Field, Input, Segmented } from "@/components/ds";
+import { Sheet } from "@/components/ui/Sheet";
 
 // `existingBills` = names of recurring bills, offered as type-ahead suggestions so a new
 // liability can adopt a bill's name (and link to it for payment attribution) — or just type a
@@ -13,77 +14,81 @@ export function AddDebt({ existingBills }: { existingBills: string[] }) {
   const [type, setType] = useState<"Credit" | "Loan">("Credit");
   const [err, setErr] = useState<string | null>(null);
   const [pending, start] = useTransition();
-  const router = useRouter();
 
-  const inputCls =
-    "border rounded px-2 py-1 text-sm bg-transparent border-neutral-300 dark:border-neutral-700";
-
-  if (!open) {
-    return (
-      <button
-        onClick={() => setOpen(true)}
-        className="px-3 py-1.5 rounded-md bg-blue-600 text-white text-sm font-medium hover:bg-blue-700"
-      >
-        + Add debt
-      </button>
-    );
-  }
+  const close = () => {
+    setOpen(false);
+    setName("");
+    setErr(null);
+  };
+  const save = () =>
+    start(async () => {
+      const r = await createLiabilityAccount(name, type);
+      if (!r.ok) {
+        setErr(r.error ?? "Failed");
+        return;
+      }
+      close();
+    });
 
   return (
-    <div className="flex flex-wrap items-center gap-2">
-      <input
-        list="debt-bill-names"
-        value={name}
-        onChange={(e) => {
-          setName(e.target.value);
-          setErr(null);
-        }}
-        placeholder="name (e.g. Car Loan) or pick a bill"
-        autoFocus
-        className={inputCls + " min-w-64"}
-      />
-      <datalist id="debt-bill-names">
-        {existingBills.map((b) => (
-          <option key={b} value={b} />
-        ))}
-      </datalist>
-      <select
-        value={type}
-        onChange={(e) => setType(e.target.value as "Credit" | "Loan")}
-        className={inputCls}
-      >
-        <option value="Credit">Credit card</option>
-        <option value="Loan">Loan</option>
-      </select>
-      <button
-        onClick={() =>
-          start(async () => {
-            const r = await createLiabilityAccount(name, type);
-            if (!r.ok) {
-              setErr(r.error ?? "Failed");
-              return;
-            }
-            setName("");
-            setOpen(false);
-            router.refresh();
-          })
+    <>
+      <Button icon="plus" onClick={() => setOpen(true)}>
+        Add debt
+      </Button>
+      <Sheet
+        open={open}
+        onClose={close}
+        title="Add debt"
+        footer={
+          <div className="mt-4 flex justify-end gap-2">
+            <Button variant="secondary" onClick={close}>
+              Cancel
+            </Button>
+            <Button icon="plus" onClick={save} loading={pending} disabled={!name.trim()}>
+              Add debt
+            </Button>
+          </div>
         }
-        disabled={pending || !name.trim()}
-        className="px-3 py-1.5 rounded-md bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 disabled:opacity-50"
       >
-        Save
-      </button>
-      <button
-        onClick={() => {
-          setOpen(false);
-          setName("");
-          setErr(null);
-        }}
-        className="text-sm text-neutral-500 hover:underline"
-      >
-        Cancel
-      </button>
-      {err && <span className="text-xs text-red-600">{err}</span>}
-    </div>
+        <form
+          className="grid gap-3"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (name.trim()) save();
+          }}
+        >
+          <Field label="Name" hint="Pick a bill to link its payments, or type a new name." error={err}>
+            <Input
+              list="debt-bill-names"
+              value={name}
+              onChange={(e) => {
+                setName(e.target.value);
+                setErr(null);
+              }}
+              placeholder="Car loan"
+              autoFocus
+              invalid={!!err}
+            />
+            <datalist id="debt-bill-names">
+              {existingBills.map((b) => (
+                <option key={b} value={b} />
+              ))}
+            </datalist>
+          </Field>
+          <Field label="Type">
+            <Segmented<"Credit" | "Loan">
+              block
+              label="Type"
+              value={type}
+              onChange={setType}
+              options={[
+                { value: "Credit", label: "Credit card" },
+                { value: "Loan", label: "Loan" },
+              ]}
+            />
+          </Field>
+        </form>
+      </Sheet>
+    </>
   );
 }

@@ -3,6 +3,8 @@ import { CashManager } from "@/components/cash/CashManager";
 import { getCashOverview, getPeriods, getWalletAccounts } from "@/server/queries";
 import { prettyPeriod, defaultPeriod } from "@/server/lib/period";
 import { todayIso } from "@/server/lib/pay-schedule";
+import Link from "next/link";
+import { Notice, PageHeader } from "@/components/ds";
 
 export const dynamic = "force-dynamic";
 
@@ -17,7 +19,7 @@ export default async function CashPage({ searchParams }: { searchParams: Promise
   try {
     [periods, wallets] = await Promise.all([getPeriods(), getWalletAccounts()]);
   } catch (e) {
-    return <SetupNotice error={e instanceof Error ? e.message : String(e)} />;
+    return <SetupNotice error={e} />;
   }
 
   // Default to the current month rather than all of history — cash reconciliation is something
@@ -27,25 +29,21 @@ export default async function CashPage({ searchParams }: { searchParams: Promise
   const overview = await getCashOverview(selected || undefined);
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight">Cash</h1>
-        <p className="text-sm text-neutral-500 max-w-3xl">
-          Money you took out of the bank and money you spent from your pocket are the same
-          money. Log a purchase against the withdrawal that funded it and it stops being counted
-          twice — whatever a withdrawal can&apos;t explain stays on the books as spending, because
-          that cash really did go somewhere.
-        </p>
-      </div>
+    <div className="space-y-4">
+      {/* The kit titles every Activity view "Activity"; the sub-tab names the view. */}
+      <PageHeader title="Activity" />
+      <Notice tone="info">
+        Cash you took out of the bank and cash you spent from your pocket are the same money.
+        Log a purchase against the withdrawal that funded it and it stops being counted twice.
+        Whatever a withdrawal can&apos;t explain stays on the books as spending, because that
+        cash really did go somewhere.
+      </Notice>
       {wallets.length === 0 ? (
-        <div className="rounded-lg border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 p-4 text-sm">
-          <p className="font-medium">No cash wallet yet.</p>
-          <p className="text-neutral-600 dark:text-neutral-300 mt-1">
-            On <a className="underline" href="/accounts">Accounts</a>, set the account you record
-            cash spending on (the 9999 &ldquo;Cash&rdquo; one) to type <strong>Cash</strong>. Its
-            purchases then become offsettable against ATM withdrawals.
-          </p>
-        </div>
+        <Notice tone="warn" title="No cash wallet yet">
+          On <Link className="font-medium text-accent-text underline" href="/accounts">Accounts</Link>,
+          set the account you record cash spending on (the 9999 &ldquo;Cash&rdquo; one) to type{" "}
+          <strong>Cash</strong>. Its purchases then become offsettable against ATM withdrawals.
+        </Notice>
       ) : (
         <CashManager
           overview={overview}

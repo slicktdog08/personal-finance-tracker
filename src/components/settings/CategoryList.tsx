@@ -1,11 +1,10 @@
 "use client";
 
-import { useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
+import { useRef, useState, useTransition } from "react";
 import { SettingTile } from "./SettingTile";
+import { AddItemRow } from "./AddItemRow";
 import { useDragReorder } from "./useDragReorder";
-import { EmojiPicker } from "@/components/EmojiPicker";
-import { PencilIcon } from "@/components/icons";
+import { Badge, Button, Card, IconButton, Input, Select } from "@/components/ds";
 import {
   reorderCategories,
   updateCategoryColor,
@@ -26,13 +25,10 @@ export interface CategoryItem {
 }
 
 export function CategoryList({ categories }: { categories: CategoryItem[] }) {
-  const router = useRouter();
   const [pending, start] = useTransition();
-  const refresh = () => router.refresh();
   const run = (fn: () => Promise<unknown>) =>
     start(async () => {
       await fn();
-      refresh();
     });
 
   const { order, activeId, tileProps, handleProps, move } = useDragReorder(categories, (ids) =>
@@ -42,14 +38,12 @@ export function CategoryList({ categories }: { categories: CategoryItem[] }) {
   const [newName, setNewName] = useState("");
   const [newColor, setNewColor] = useState("#6366f1");
   const [newEmoji, setNewEmoji] = useState<string | null>(null);
+  const addRef = useRef<HTMLInputElement>(null);
 
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editName, setEditName] = useState("");
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const [reassignTo, setReassignTo] = useState<string>("");
-
-  const inputCls =
-    "border rounded px-2 py-1 text-sm bg-transparent border-neutral-300 dark:border-neutral-700";
 
   function add() {
     const n = newName.trim();
@@ -62,7 +56,6 @@ export function CategoryList({ categories }: { categories: CategoryItem[] }) {
       }
       setNewName("");
       setNewEmoji(null);
-      refresh();
     });
   }
 
@@ -74,7 +67,6 @@ export function CategoryList({ categories }: { categories: CategoryItem[] }) {
         return;
       }
       setEditingId(null);
-      refresh();
     });
   }
 
@@ -87,12 +79,19 @@ export function CategoryList({ categories }: { categories: CategoryItem[] }) {
       }
       setDeletingId(null);
       setReassignTo("");
-      refresh();
     });
   }
 
   return (
-    <div className="space-y-2">
+    <Card
+      title="Categories"
+      meta="colors show on every badge"
+      action={
+        <Button size="sm" icon="plus" onClick={() => addRef.current?.focus()}>
+          Add
+        </Button>
+      }
+    >
       {order.map((c, i) => {
         const others = order.filter((o) => o.id !== c.id);
         const renameInvalid = !editName.trim() || editName.trim() === c.name;
@@ -103,6 +102,7 @@ export function CategoryList({ categories }: { categories: CategoryItem[] }) {
             name={c.name}
             color={c.color}
             emoji={c.emoji}
+            icon="tag"
             disabled={pending}
             dragging={activeId === c.id}
             muted={!c.active}
@@ -114,7 +114,7 @@ export function CategoryList({ categories }: { categories: CategoryItem[] }) {
             onEmoji={(e) => run(() => updateCategoryEmoji(c.id, e))}
             nameSlot={
               isEditing ? (
-                <input
+                <Input
                   value={editName}
                   onChange={(e) => setEditName(e.target.value)}
                   onKeyDown={(e) => {
@@ -122,179 +122,123 @@ export function CategoryList({ categories }: { categories: CategoryItem[] }) {
                     if (e.key === "Escape") setEditingId(null);
                   }}
                   aria-label={`Rename ${c.name}`}
-                  className="bg-white/90 text-neutral-900 rounded px-1.5 py-0.5 text-sm w-44"
+                  className="!h-8 w-44 max-w-full"
                   autoFocus
                 />
-              ) : (
-                <span className="font-medium truncate">{c.name}</span>
-              )
+              ) : undefined
             }
             badge={
               <>
-                {!c.active && (
-                  <span className="shrink-0 text-[11px] font-semibold uppercase tracking-wide px-2 py-0.5 rounded-full bg-black/25">
-                    disabled
-                  </span>
-                )}
-                <span className="shrink-0 text-[11px] font-medium px-2 py-0.5 rounded-full bg-black/15">
-                  {c.count} txns
+                {!c.active && <Badge label="Disabled" variant="outline" dot={false} size="sm" />}
+                <span className="shrink-0 text-xs tabular-nums text-fg-3">
+                  {c.count} txn{c.count === 1 ? "" : "s"}
                 </span>
               </>
             }
             headerActions={
               isEditing ? (
-                <>
-                  <button
-                    onClick={() => saveRename(c.id)}
-                    disabled={pending || renameInvalid}
-                    className="shrink-0 text-xs font-medium px-2 py-1 rounded-md bg-black/15 hover:bg-black/25 disabled:opacity-50"
-                  >
-                    Save
-                  </button>
-                  <button
-                    onClick={() => setEditingId(null)}
-                    disabled={pending}
-                    className="shrink-0 text-xs px-1.5 py-1 rounded hover:bg-black/15 disabled:opacity-50"
-                  >
+                <span className="flex shrink-0 items-center gap-1">
+                  <Button size="sm" onClick={() => saveRename(c.id)} disabled={pending || renameInvalid}>
+                    Save name
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => setEditingId(null)} disabled={pending}>
                     Cancel
-                  </button>
-                </>
+                  </Button>
+                </span>
               ) : (
-                <>
-                  <button
+                <span className="flex shrink-0 items-center">
+                  <IconButton
+                    icon="pencil-line"
+                    size="sm"
+                    label={`Rename ${c.name}`}
                     onClick={() => {
                       setEditingId(c.id);
                       setEditName(c.name);
                     }}
                     disabled={pending}
-                    title="Rename"
-                    aria-label={`Rename ${c.name}`}
-                    className="shrink-0 p-1 rounded hover:bg-black/15 disabled:opacity-50"
-                  >
-                    <PencilIcon />
-                  </button>
-                  <button
+                  />
+                  <IconButton
+                    icon={c.active ? "eye-off" : "eye"}
+                    size="sm"
+                    label={
+                      c.active
+                        ? `Disable ${c.name}: hide it from category pickers for new transactions (existing ones keep it)`
+                        : `Enable ${c.name}: show it in category pickers again`
+                    }
                     onClick={() => run(() => setCategoryActive(c.id, !c.active))}
                     disabled={pending}
-                    title={
-                      c.active
-                        ? "Hide from category pickers for new transactions (existing ones keep it)"
-                        : "Show in category pickers again"
-                    }
-                    className="shrink-0 text-xs font-medium px-2 py-1 rounded-md bg-black/15 hover:bg-black/25 disabled:opacity-50"
-                  >
-                    {c.active ? "Disable" : "Enable"}
-                  </button>
-                  <button
+                  />
+                  <IconButton
+                    icon="trash-2"
+                    size="sm"
+                    label={`Delete ${c.name}`}
                     onClick={() => {
                       setDeletingId(deletingId === c.id ? null : c.id);
                       setReassignTo(others[0]?.name ?? "");
                     }}
                     disabled={pending}
-                    title="Delete"
-                    className="shrink-0 text-xs font-medium px-2 py-1 rounded-md bg-black/15 hover:bg-red-600/80 hover:text-white disabled:opacity-50"
-                  >
-                    Delete
-                  </button>
-                </>
+                  />
+                </span>
               )
             }
             belowSlot={
               deletingId === c.id ? (
-                <div className="rounded-b-xl bg-amber-50 dark:bg-amber-950/40 text-neutral-900 dark:text-neutral-100 border-t border-amber-200 dark:border-amber-900 px-3 py-2.5 flex flex-wrap items-center gap-2">
+                <div className="mb-2.5 flex flex-wrap items-center gap-2 rounded-panel bg-warn-soft px-3 py-2.5 text-sm text-fg">
                   {c.count > 0 ? (
                     others.length > 0 ? (
                       <>
-                        <span className="text-sm">
-                          {c.count} transaction{c.count === 1 ? " is" : "s are"} mapped to this
-                          category — reassign to:
+                        <span>
+                          {c.count} transaction{c.count === 1 ? " is" : "s are"} in this category. Move {c.count === 1 ? "it" : "them"} to:
                         </span>
-                        <select
+                        <Select
                           value={reassignTo}
                           onChange={(e) => setReassignTo(e.target.value)}
                           disabled={pending}
                           aria-label="Reassign transactions to category"
-                          className={inputCls}
-                        >
-                          {others.map((o) => (
-                            <option key={o.id} value={o.name}>
-                              {o.emoji ? `${o.emoji} ` : ""}
-                              {o.name}
-                            </option>
-                          ))}
-                        </select>
-                        <button
-                          onClick={() => confirmDelete(c.id)}
-                          disabled={pending || !reassignTo}
-                          className="text-xs px-3 py-1 rounded bg-red-600 text-white font-medium disabled:opacity-50"
-                        >
-                          Delete &amp; reassign
-                        </button>
+                          className="!h-8 w-auto max-w-full"
+                          options={others.map((o) => ({ value: o.name, label: `${o.emoji ? `${o.emoji} ` : ""}${o.name}` }))}
+                        />
+                        <Button size="sm" variant="danger" onClick={() => confirmDelete(c.id)} disabled={pending || !reassignTo}>
+                          Delete and reassign
+                        </Button>
                       </>
                     ) : (
-                      <span className="text-sm">
-                        {c.count} transaction{c.count === 1 ? " is" : "s are"} mapped to this
-                        category and there is no other category to move them to. Add one first —
-                        or just disable this category instead.
+                      <span>
+                        {c.count} transaction{c.count === 1 ? " is" : "s are"} in this category and there is no other category to
+                        move them to. Add one first, or disable this category instead.
                       </span>
                     )
                   ) : (
                     <>
-                      <span className="text-sm">No transactions use this category.</span>
-                      <button
-                        onClick={() => confirmDelete(c.id)}
-                        disabled={pending}
-                        className="text-xs px-3 py-1 rounded bg-red-600 text-white font-medium disabled:opacity-50"
-                      >
-                        Delete
-                      </button>
+                      <span>No transactions use this category.</span>
+                      <Button size="sm" variant="danger" onClick={() => confirmDelete(c.id)} disabled={pending}>
+                        Delete category
+                      </Button>
                     </>
                   )}
-                  <button
-                    onClick={() => setDeletingId(null)}
-                    disabled={pending}
-                    className="text-xs text-neutral-500 hover:underline disabled:opacity-50"
-                  >
+                  <Button size="sm" variant="ghost" onClick={() => setDeletingId(null)} disabled={pending}>
                     Cancel
-                  </button>
+                  </Button>
                 </div>
               ) : null
             }
           />
         );
       })}
-      {order.length === 0 && <p className="text-sm text-neutral-500">No categories yet.</p>}
+      {order.length === 0 && <p className="py-3 text-sm text-fg-3">No categories yet.</p>}
 
-      {/* Add new category */}
-      <div className="flex flex-wrap items-center gap-2 pt-3 mt-1 border-t border-neutral-200 dark:border-neutral-800">
-        <input
-          type="color"
-          value={newColor}
-          onChange={(e) => setNewColor(e.target.value)}
-          aria-label="New category color"
-          className="w-9 h-9 rounded border-0 bg-transparent"
-        />
-        <EmojiPicker
-          value={newEmoji}
-          onSelect={setNewEmoji}
-          title="Pick an emoji for the new category"
-        />
-        <input
-          value={newName}
-          onChange={(e) => setNewName(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && add()}
-          placeholder="new category name"
-          aria-label="New category name"
-          className={inputCls + " flex-1 min-w-40"}
-        />
-        <button
-          onClick={add}
-          disabled={pending || !newName.trim()}
-          className="px-3 py-1.5 rounded-md bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 disabled:opacity-50"
-        >
-          Add
-        </button>
-      </div>
-    </div>
+      <AddItemRow
+        inputRef={addRef}
+        noun="category"
+        name={newName}
+        onName={setNewName}
+        color={newColor}
+        onColor={setNewColor}
+        emoji={newEmoji}
+        onEmoji={setNewEmoji}
+        onAdd={add}
+        pending={pending}
+      />
+    </Card>
   );
 }

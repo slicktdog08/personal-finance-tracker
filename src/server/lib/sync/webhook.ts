@@ -21,7 +21,7 @@ export async function handleWebhook(providerId: string, rawBody: string, headers
     return { status: 404, body: { ok: false, reason: "unknown provider" }, work: null };
   }
   const provider = await getProvider(providerId);
-  const event = provider.verifyWebhook(rawBody, headers);
+  const event = await provider.verifyWebhook(rawBody, headers);
   if (!event) return { status: 401, body: { ok: false, reason: "bad signature" }, work: null };
 
   await stampWebhook();

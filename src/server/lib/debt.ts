@@ -42,3 +42,19 @@ export function monthlyInterestStr(
 ): number | null {
   return monthlyInterest(toNum(balance), toNum(apr));
 }
+
+// How much of a month's payments to a card actually paid the debt down. Paying back what you
+// charged to the card that same month only rebalances it — the money already counted as spending
+// in the categories the purchases landed in — so only payments beyond the new charges are payoff.
+// Refunds net against the charges. Interest is NOT a charge here: the plan's payment already
+// covers it and the payoff projection models it separately.
+//
+//   rebalance = min(paid, charged)     payoff = max(0, paid − charged)
+export function splitCardPayments(
+  paid: number,
+  charged: number,
+): { rebalance: number; payoff: number } {
+  const c = Math.max(0, charged);
+  const round2 = (n: number) => Math.round(n * 100) / 100;
+  return { rebalance: round2(Math.min(paid, c)), payoff: round2(Math.max(0, paid - c)) };
+}

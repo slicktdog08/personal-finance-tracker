@@ -47,6 +47,11 @@ export const bills = mysqlTable(
     defaultAmount: decimal("default_amount", { precision: 10, scale: 2 }),
     defaultDueDay: tinyint("default_due_day"),
     defaultPaymentType: varchar("default_payment_type", { length: 32 }),
+    // Which budget envelope this bill draws from, so the cash projection can net the bill against
+    // the category line that already plans for it. Authoritative when set; when null the
+    // projection falls back to guessing from the bill's linked transactions, which a new bill
+    // has none of. See planning/features/budget.md.
+    category: varchar("category", { length: 48 }),
     isDebt: boolean("is_debt").notNull().default(false),
     active: boolean("active").notNull().default(true),
     notes: text("notes"),
@@ -582,6 +587,17 @@ export const projectionSnapshots = mysqlTable(
   },
   (t) => [uniqueIndex("uq_proj_snap").on(t.periodId, t.takenOn)],
 );
+
+// Saved UI arrangements, one row per page (`layout_key` = "dashboard"). The JSON is a list of
+// { id, w, h } (src/lib/dashboard-layout.ts) and is normalized on every read, so widgets added or
+// removed in code never need a migration of the stored copy. Single-user app — no user column.
+export const uiLayouts = mysqlTable("ui_layouts", {
+  layoutKey: varchar("layout_key", { length: 48 }).primaryKey(),
+  layout: json("layout").notNull(),
+  updatedAt: timestamp("updated_at")
+    .default(sql`CURRENT_TIMESTAMP`)
+    .onUpdateNow(),
+});
 
 // Which hand-written drizzle/*.sql files have been applied. Created and written only by
 // scripts/apply-sql.ts (the Jenkins APPLY_SQL stage runs it with --pending on every deploy);

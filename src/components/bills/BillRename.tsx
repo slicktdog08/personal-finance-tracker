@@ -1,57 +1,52 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
+import { Button, Input } from "@/components/ds";
 import { updateBill } from "@/server/actions/bills";
 
 export function BillRename({ id, name }: { id: number; name: string }) {
   const [editing, setEditing] = useState(false);
   const [val, setVal] = useState(name);
   const [pending, start] = useTransition();
-  const router = useRouter();
 
   if (!editing) {
     return (
-      <button
+      <Button
+        variant="secondary"
+        size="sm"
+        icon="pencil"
         onClick={() => {
           setVal(name);
           setEditing(true);
         }}
-        className="text-sm text-blue-600 hover:underline"
       >
         Rename
-      </button>
+      </Button>
     );
   }
 
+  const save = () =>
+    start(async () => {
+      const n = val.trim();
+      if (n) await updateBill(id, { name: n });
+      setEditing(false);
+    });
+
   return (
-    <span className="inline-flex items-center gap-2">
-      <input
-        value={val}
-        onChange={(e) => setVal(e.target.value)}
-        className="border rounded px-2 py-1 text-sm bg-transparent border-neutral-300 dark:border-neutral-700"
-        autoFocus
-      />
-      <button
-        onClick={() =>
-          start(async () => {
-            const n = val.trim();
-            if (n) await updateBill(id, { name: n });
-            setEditing(false);
-            router.refresh();
-          })
-        }
-        disabled={pending || !val.trim()}
-        className="px-2 py-1 rounded bg-blue-600 text-white text-xs font-medium hover:bg-blue-700 disabled:opacity-50"
-      >
+    <form
+      className="flex flex-wrap items-center gap-2"
+      onSubmit={(e) => {
+        e.preventDefault();
+        save();
+      }}
+    >
+      <Input value={val} onChange={(e) => setVal(e.target.value)} aria-label="Bill name" autoFocus className="w-56" />
+      <Button type="submit" size="sm" loading={pending} disabled={!val.trim()}>
         Save
-      </button>
-      <button
-        onClick={() => setEditing(false)}
-        className="text-xs text-neutral-500 hover:underline"
-      >
+      </Button>
+      <Button size="sm" variant="ghost" onClick={() => setEditing(false)}>
         Cancel
-      </button>
-    </span>
+      </Button>
+    </form>
   );
 }

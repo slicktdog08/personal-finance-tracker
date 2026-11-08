@@ -1,10 +1,8 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
 import { saveSyncSettings } from "@/server/actions/sync";
-
-const inputCls = "border rounded px-2 py-1 text-sm bg-transparent border-neutral-300 dark:border-neutral-700 w-20";
+import { Button, Card, Field, Icon, Input, Switch } from "@/components/ds";
 
 export interface AdvancedSyncSettingsProps {
   settings: {
@@ -17,7 +15,6 @@ export interface AdvancedSyncSettingsProps {
 }
 
 export function AdvancedSyncSettings({ settings }: AdvancedSyncSettingsProps) {
-  const router = useRouter();
   const [busy, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
@@ -43,62 +40,58 @@ export function AdvancedSyncSettings({ settings }: AdvancedSyncSettingsProps) {
         return;
       }
       setSaved(true);
-      router.refresh();
     });
   };
 
+  const toggle = (label: string, hint: string, checked: boolean, set: (v: boolean) => void) => (
+    <Switch
+      label={
+        <span className="text-sm">
+          {label} <span className="block text-xs text-fg-3">{hint}</span>
+        </span>
+      }
+      checked={checked}
+      onChange={(e) => set(e.target.checked)}
+      className="items-start"
+    />
+  );
+
   return (
-    <div className="rounded-xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-5 space-y-4 text-sm">
-      <div className="grid gap-4 sm:grid-cols-2">
-        <label className="space-y-1">
-          <div className="font-medium">Re-query window (days)</div>
-          <div className="text-xs text-neutral-500">
-            Each run re-reads this many days so pending charges that post on a different date are caught (7–10 is
-            typical).
-          </div>
-          <input type="number" min={3} max={90} value={windowDays} onChange={(e) => setWindowDays(e.target.value)} className={inputCls} />
-        </label>
-        <label className="space-y-1">
-          <div className="font-medium">Pending expiry (days)</div>
-          <div className="text-xs text-neutral-500">
-            A pending charge the bank stops reporting for this long is dropped (it was declined or re-issued under a
-            new id). Notes and hand-set categories move to the posted twin when one is found.
-          </div>
-          <input type="number" min={1} max={30} value={expiryDays} onChange={(e) => setExpiryDays(e.target.value)} className={inputCls} />
-        </label>
+    <Card title="Advanced" meta="saved together">
+      <div className="space-y-5 text-sm">
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field
+            label="Re-query window (days)"
+            htmlFor="sync-window"
+            hint="Each run re-reads this many days so pending charges that post on a different date are caught (7–10 is typical)."
+          >
+            <Input id="sync-window" type="number" min={3} max={90} value={windowDays} onChange={(e) => setWindowDays(e.target.value)} className="max-w-28" />
+          </Field>
+          <Field
+            label="Pending expiry (days)"
+            htmlFor="sync-expiry"
+            hint="A pending charge the bank stops reporting for this long is dropped (it was declined or re-issued under a new id). Notes and hand-set categories move to the posted twin when one is found."
+          >
+            <Input id="sync-expiry" type="number" min={1} max={30} value={expiryDays} onChange={(e) => setExpiryDays(e.target.value)} className="max-w-28" />
+          </Field>
+        </div>
+        <div className="grid gap-3 sm:grid-cols-3">
+          {toggle("Record balances", "One snapshot per account per day", recordBalances, setRecordBalances)}
+          {toggle("Apply category rules", "Never overwrites a hand-set category", autoCategorize, setAutoCategorize)}
+          {toggle("Accept provider webhooks", "Sync when the bank has news", webhookEnabled, setWebhookEnabled)}
+        </div>
+        <div className="flex flex-wrap items-center gap-3">
+          <Button onClick={submit} loading={busy} icon="check">
+            Save settings
+          </Button>
+          {saved && (
+            <span className="inline-flex items-center gap-1 text-xs text-income">
+              <Icon name="circle-check" size={14} /> Saved
+            </span>
+          )}
+          {error && <span className="text-xs text-over">{error}</span>}
+        </div>
       </div>
-      <div className="grid gap-2 sm:grid-cols-3">
-        <label className="flex items-center gap-2">
-          <input type="checkbox" checked={recordBalances} onChange={(e) => setRecordBalances(e.target.checked)} className="h-4 w-4" />
-          <span>
-            Record balances <span className="text-xs text-neutral-500">(one snapshot per account per day)</span>
-          </span>
-        </label>
-        <label className="flex items-center gap-2">
-          <input type="checkbox" checked={autoCategorize} onChange={(e) => setAutoCategorize(e.target.checked)} className="h-4 w-4" />
-          <span>
-            Apply category rules <span className="text-xs text-neutral-500">(never overwrites a hand-set category)</span>
-          </span>
-        </label>
-        <label className="flex items-center gap-2">
-          <input type="checkbox" checked={webhookEnabled} onChange={(e) => setWebhookEnabled(e.target.checked)} className="h-4 w-4" />
-          <span>
-            Accept provider webhooks <span className="text-xs text-neutral-500">(sync when the bank has news)</span>
-          </span>
-        </label>
-      </div>
-      <div className="flex items-center gap-3">
-        <button
-          type="button"
-          onClick={submit}
-          disabled={busy}
-          className="rounded-lg bg-blue-600 text-white px-4 py-2 text-sm font-medium hover:bg-blue-700 disabled:opacity-50"
-        >
-          Save
-        </button>
-        {saved && <span className="text-emerald-600 text-xs">Saved.</span>}
-        {error && <span className="text-rose-600 text-xs">{error}</span>}
-      </div>
-    </div>
+    </Card>
   );
 }

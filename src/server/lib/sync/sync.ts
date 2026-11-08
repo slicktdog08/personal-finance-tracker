@@ -64,6 +64,8 @@ export interface EnrollmentRunDetail {
   status: "ok" | "error" | "skipped";
   error: string | null;
   accounts: AccountRunDetail[];
+  // Dry runs only: the provider's raw response (SyncProvider.debugResponse).
+  providerResponse?: unknown;
 }
 
 export interface SyncRunSummary {
@@ -163,12 +165,12 @@ export async function completeEnrollment(input: NewEnrollment): Promise<{ enroll
     .from(syncEnrollments)
     .where(and(eq(syncEnrollments.provider, input.provider), eq(syncEnrollments.enrollmentId, input.enrollmentId)))
     .limit(1);
-  await upsertExternalAccounts(row, external);
+  await upsertExternalAccounts(row, external, provider.unlistedMeansClosed ?? true);
   const list = await db.select().from(syncAccounts).where(eq(syncAccounts.enrollmentId, row.id));
   return { enrollmentDbId: row.id, accounts: list };
 }
 
-async function upsertExternalAccounts(enrollment: SyncEnrollment, external: ProviderAccount[]): Promise<void> {
+async function upsertExternalAccounts(enrollment: SyncEnrollment, external: ProviderAccount[], unlistedMeansClosed: boolean): Promise<void> {
   const existing = await db.select().from(syncAccounts).where(eq(syncAccounts.enrollmentId, enrollment.id));
   const byExt = new Map(existing.map((a) => [a.externalAccountId, a]));
   const locals = await db.select().from(accounts);
@@ -222,7 +224,8 @@ async function upsertExternalAccounts(enrollment: SyncEnrollment, external: Prov
     });
   }
   // Accounts the provider no longer lists are marked closed (never deleted: their
-  // transactions stay).
+  // transactions stay) — unless the provider drops accounts for transient reasons.
+  if (!unlistedMeansClosed) return;
   const seen = new Set(external.map((a) => a.externalId));
   for (const cur of existing) {
     if (!seen.has(cur.externalAccountId) && cur.externalStatus !== "closed") {
@@ -343,9 +346,11 @@ export async function runSync(opts: RunOptions): Promise<SyncRunSummary> {
         log(`${enr.institutionName ?? enr.enrollmentId}: skipped (${enr.status})`);
         continue;
       }
+      let provider: SyncProvider | null = null;
+      let token: string | null = null;
       try {
-        const provider = await getProvider(enr.provider);
-        const token = decryptToken(enr.accessTokenEnc);
+        provider = await getProvider(enr.provider);
+        token = decryptToken(enr.accessTokenEnc);
         const ctx: RunContext = { provider, token, settings, rules, periodMap, today, dryRun, log };
         await syncEnrollment(enr, ctx, detail);
         if (!dryRun) {
@@ -364,6 +369,14 @@ export async function runSync(opts: RunOptions): Promise<SyncRunSummary> {
             set.disconnectReason = e.code;
           }
           await db.update(syncEnrollments).set(set).where(eq(syncEnrollments.id, enr.id));
+        }
+      }
+      // Captured after errors too — a failing run is when the raw response matters most.
+      if (dryRun && provider?.debugResponse && token) {
+        try {
+          detail.providerResponse = provider.debugResponse(token);
+        } catch {
+          // diagnostics only
         }
       }
       for (const a of detail.accounts) {
@@ -418,7 +431,7 @@ interface RunContext {
 async function syncEnrollment(enr: SyncEnrollment, ctx: RunContext, detail: EnrollmentRunDetail): Promise<void> {
   // Refresh the account list first: catches renamed/closed accounts and newly shared ones.
   const external = await ctx.provider.listAccounts(ctx.token);
-  if (!ctx.dryRun) await upsertExternalAccounts(enr, external);
+  if (!ctx.dryRun) await upsertExternalAccounts(enr, external, ctx.provider.unlistedMeansClosed ?? true);
   const extType = new Map(external.map((a) => [a.externalId, a.type]));
 
   const list = await db.select().from(syncAccounts).where(eq(syncAccounts.enrollmentId, enr.id));
@@ -446,6 +459,10 @@ async function syncEnrollment(enr: SyncEnrollment, ctx: RunContext, detail: Enro
     }
     if (!sa.enabled) {
       d.skipped = "disabled";
+      continue;
+    }
+    if (!extType.has(sa.externalAccountId) && ctx.provider.unlistedMeansClosed === false) {
+      d.skipped = "not returned by the provider this run";
       continue;
     }
     if (sa.externalStatus === "closed" || !extType.has(sa.externalAccountId)) {
@@ -726,15 +743,17 @@ async function applyPlan(plan: ReconcilePlan, providerId: string, accountId: num
 
 async function recordBalance(sa: SyncAccount, accountId: number, ctx: RunContext): Promise<AccountRunDetail["balance"]> {
   const [local] = await db.select({ type: accounts.accountType }).from(accounts).where(eq(accounts.id, accountId)).limit(1);
-  const b = await ctx.provider.getBalances(ctx.token, sa.externalAccountId);
   const isCash = CASH_TYPES.has(local?.type ?? "");
+  const b = await ctx.provider.getBalances(ctx.token, { externalId: sa.externalAccountId, type: isCash ? "depository" : "credit" });
   // D7: cash → available (what can actually be spent); credit/loan → ledger (amount owed).
   const field: "available" | "ledger" = isCash ? (b.available != null ? "available" : "ledger") : b.ledger != null ? "ledger" : "available";
   const value = b[field];
   if (value == null) return { recorded: false, value: null, field: null };
   if (ctx.dryRun) return { recorded: false, value, field };
 
-  const note = `Synced from ${ctx.provider.id} (${field})`;
+  // A cash account recorded from the ledger means the bank sent no usable available balance
+  // (e.g. Capital One's "0.00" placeholder) — say so, or the snapshot reads like a bug.
+  const note = isCash && field === "ledger" ? `Synced from ${ctx.provider.id} (balance; bank reported no available balance)` : `Synced from ${ctx.provider.id} (${field})`;
   const [existing] = await db
     .select({ id: accountBalances.id, note: accountBalances.note })
     .from(accountBalances)

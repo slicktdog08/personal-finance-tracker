@@ -1,12 +1,13 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
-import { formatMoney, toNum } from "@/server/lib/money";
-import { formatDate } from "@/server/lib/period";
+import { toNum } from "@/server/lib/money";
+import { formatDate, shortMonthLabel } from "@/server/lib/period";
 import { monthlyInterest, annualInterest, payoffProgress } from "@/server/lib/debt";
-import { ACCOUNT_TYPES, CREDIT_ACCOUNT_TYPES } from "@/constants/enums";
+import { ACCOUNT_TYPES, CREDIT_ACCOUNT_TYPES, SNOWBALL_MIN_APR } from "@/constants/enums";
 import { addAccountBalance, deleteAccountBalance, updateAccount } from "@/server/actions/accounts";
+import { Badge, Button, Card, DataTable, Field, Icon, IconButton, Input, Money, ProgressBar, Select, StatTile, cx } from "@/components/ds";
+import { Sheet } from "@/components/ui/Sheet";
 
 export interface DebtLedgerRow {
   id: number;
@@ -35,12 +36,21 @@ export interface DebtInfo {
   asOf: string | null;
 }
 
-const inputCls =
-  "border rounded px-2 py-1 text-sm bg-transparent border-neutral-300 dark:border-neutral-700";
+/** Where this debt sits in the payoff order (computed on the server from the chosen strategy). */
+export interface DebtRank {
+  /** 1-based position among the high-interest debts; null = parked at its minimum (or paid off). */
+  rank: number | null;
+  /** The debt the extra lands on (this month's budget target, else rank 1). */
+  isTarget: boolean;
+  /** YYYY-MM the projection pays it off, if it does. */
+  paidOffOn: string | null;
+}
+
 const num = (s: string) => {
   const n = Number(s.replace(/[$,%\s]/g, ""));
-  return Number.isNaN(n) ? null : n;
+  return s.trim() === "" || Number.isNaN(n) ? null : n;
 };
+const todayLocal = () => new Date().toISOString().slice(0, 10);
 
 export function DebtCard({
   debt,
@@ -48,32 +58,21 @@ export function DebtCard({
   payments,
   txnCount,
   lastTxn,
+  order = { rank: null, isTarget: false, paidOffOn: null },
 }: {
   debt: DebtInfo;
   ledger: DebtLedgerRow[];
   payments: { count: number; total: number } | null;
   txnCount: number;
   lastTxn: string | null;
+  order?: DebtRank;
 }) {
   const [pending, start] = useTransition();
-  const router = useRouter();
-  const refresh = () => router.refresh();
+  const [recording, setRecording] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [expanded, setExpanded] = useState(false);
 
-  const [type, setType] = useState(debt.accountType);
-  const isCredit = CREDIT_ACCOUNT_TYPES.includes(type);
-
-  const [bal, setBal] = useState("");
-  const [asOf, setAsOf] = useState(() => new Date().toISOString().slice(0, 10));
-  const [note, setNote] = useState("");
-  // Pre-fill APR / min / limit from the last known values so a balance update doesn't require
-  // re-typing values that rarely change (freshest non-null wins).
-  const lastApr = ledger.find((r) => r.apr != null)?.apr ?? "";
-  const lastMin = ledger.find((r) => r.minPayment != null)?.minPayment ?? "";
-  const lastLimit = ledger.find((r) => r.creditLimit != null)?.creditLimit ?? "";
-  const [apr, setApr] = useState(lastApr);
-  const [minPay, setMinPay] = useState(lastMin);
-  const [lim, setLim] = useState(lastLimit);
-
+  const isCredit = CREDIT_ACCOUNT_TYPES.includes(debt.accountType);
   const curBalance = toNum(debt.balance);
   const curApr = toNum(debt.apr);
   const curLimit = toNum(debt.creditLimit);
@@ -83,301 +82,293 @@ export function DebtCard({
   const yInt = annualInterest(curBalance, curApr);
   const progress = payoffProgress(original, curBalance);
   const available = isCredit && curBalance != null && curLimit != null ? curLimit - curBalance : null;
-  const utilization =
-    isCredit && curBalance != null && curLimit != null && curLimit > 0
-      ? (curBalance / curLimit) * 100
-      : null;
+  const utilization = isCredit && curBalance != null && curLimit != null && curLimit > 0 ? (curBalance / curLimit) * 100 : null;
   const paidOff = curBalance != null && curBalance <= 0;
+  const parked = !paidOff && curBalance != null && order.rank == null;
+  const name = debt.label || `••${debt.accountNumber}`;
 
-  function record() {
-    const n = num(bal);
-    if (n == null || !asOf) return;
-    start(async () => {
-      await addAccountBalance(
-        debt.id,
-        n,
-        asOf,
-        note || null,
-        isCredit ? num(lim) : null,
-        num(apr),
-        num(minPay),
-      );
-      setBal("");
-      setNote("");
-      refresh();
-    });
-  }
+  // History rows with the change from the snapshot before each one (ledger is newest first).
+  const rows = ledger.map((r, i) => {
+    const prev = ledger[i + 1];
+    const change = prev ? Number(r.balance) - Number(prev.balance) : null;
+    return { ...r, change };
+  });
 
-  function saveStatic(patch: Parameters<typeof updateAccount>[1]) {
-    start(async () => {
-      await updateAccount(debt.id, patch);
-      refresh();
-    });
-  }
+  const sub = [debt.institution, debt.accountType].filter(Boolean).join(" · ");
+  const status = paidOff ? null : parked ? `stays on minimum (under ${SNOWBALL_MIN_APR}% APR)` : order.isTarget ? "getting the extra" : null;
 
   return (
-    <div className="rounded-lg border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-4 space-y-3">
-      {/* Header — full account management (this is the card/loan's only home now) */}
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="font-mono text-sm px-2 py-1 rounded bg-neutral-100 dark:bg-neutral-800">
-          ••{debt.accountNumber}
-        </span>
-        <input
-          defaultValue={debt.label ?? ""}
-          placeholder="label (e.g. Example Card)"
-          onBlur={(e) => e.target.value !== (debt.label ?? "") && saveStatic({ label: e.target.value })}
-          className={inputCls + " flex-1 min-w-40 font-semibold"}
-        />
-        <input
-          defaultValue={debt.institution ?? ""}
-          placeholder="institution"
-          onBlur={(e) =>
-            e.target.value !== (debt.institution ?? "") && saveStatic({ institution: e.target.value })
-          }
-          className={inputCls + " w-32"}
-        />
-        <select
-          value={type}
-          onChange={(e) => {
-            setType(e.target.value);
-            saveStatic({ accountType: e.target.value });
-          }}
-          className={inputCls}
-          title="Change type. Switch to Checking/Savings to move this to Accounts."
-        >
-          {ACCOUNT_TYPES.map((t) => (
-            <option key={t} value={t}>
-              {t}
-            </option>
-          ))}
-        </select>
-        {paidOff && (
-          <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300">
-            🎉 Paid off
+    <Card>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-3">
+          <span
+            className={cx(
+              "grid h-7 w-7 shrink-0 place-items-center rounded-full text-[13px] font-semibold",
+              order.isTarget ? "bg-accent text-accent-ink" : paidOff ? "bg-accent-soft text-accent-text" : "bg-sunken text-fg-2",
+            )}
+            aria-label={paidOff ? "Paid off" : order.rank != null ? `Payoff order ${order.rank}` : "Not in payoff order"}
+          >
+            {paidOff ? <Icon name="check" size={14} /> : (order.rank ?? "–")}
           </span>
-        )}
-        <span className="text-xs text-neutral-500">
-          {txnCount} txns{" · "}
-          {lastTxn ? `last ${formatDate(lastTxn)}` : "no transactions"}
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-semibold">{name}</span>
+              {paidOff && <Badge label="Paid off" color="var(--mp-money-income)" icon="check" size="sm" />}
+            </div>
+            <div className="text-xs text-fg-3">
+              {sub}
+              {sub && " · "}
+              <span className="font-mono">··{debt.accountNumber}</span>
+              {status && ` · ${status}`}
+            </div>
+          </div>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <Button size="sm" variant="secondary" icon="pencil-line" onClick={() => setRecording(true)}>
+            Record balance
+          </Button>
+          <IconButton size="sm" icon="settings" label="Edit details" onClick={() => setEditing(true)} />
+          <IconButton size="sm" icon={expanded ? "chevron-up" : "chevron-down"} label={expanded ? "Hide history" : "Show history"} aria-expanded={expanded} onClick={() => setExpanded((x) => !x)} />
+        </div>
+      </div>
+
+      <div className="mp-grid mp-grid--keep2 mt-4" style={{ "--cols": 4, gap: 14 } as React.CSSProperties}>
+        <StatTile label="Owed" value={curBalance != null ? curBalance : "—"} kind="owed" sub={debt.asOf ? `as of ${formatDate(debt.asOf)}` : "no balance recorded"} />
+        <StatTile size="sm" label="APR" value={curApr != null ? `${curApr.toFixed(2)}%` : "—"} />
+        <StatTile size="sm" label="Interest / mo" value={mInt != null ? mInt : "—"} sub={yInt != null ? <><Money value={yInt} kind="neutral" /> / yr</> : undefined} />
+        <StatTile size="sm" label="Min payment" value={curMin != null ? curMin : "—"} sub={order.paidOffOn ? `Paid off ${shortMonthLabel(order.paidOffOn)}` : undefined} />
+      </div>
+
+      {/* Utilization for cards (fills toward rose as you use more), payoff for loans. */}
+      {isCredit && utilization != null && curLimit != null ? (
+        <ProgressBar
+          className="mt-3.5"
+          value={Math.max(0, curBalance ?? 0)}
+          max={curLimit}
+          color={utilization > 90 ? "var(--mp-money-over)" : "var(--mp-money-owed)"}
+          label="Credit limit used"
+          legendLeft={
+            <>
+              {Math.round(utilization)}% of <Money value={curLimit} kind="neutral" whole /> limit used
+            </>
+          }
+          legendRight={
+            available != null && (
+              <>
+                <Money value={available} kind="neutral" /> available
+              </>
+            )
+          }
+        />
+      ) : progress && original != null ? (
+        <ProgressBar
+          className="mt-3.5"
+          value={Math.max(0, original - (curBalance ?? original))}
+          max={original}
+          color="var(--mp-money-income)"
+          label="Paid off"
+          legendLeft={`${progress.pct.toFixed(0)}% paid off`}
+          legendRight={
+            <>
+              of <Money value={original} kind="neutral" whole /> {isCredit ? "starting balance" : "original"}
+            </>
+          }
+        />
+      ) : null}
+
+      <div className="mt-3 flex flex-wrap gap-x-3 gap-y-1 text-xs text-fg-3">
+        <span>
+          {txnCount} transaction{txnCount === 1 ? "" : "s"} · {lastTxn ? `last ${formatDate(lastTxn)}` : "no transactions"}
         </span>
         {payments && payments.count > 0 && (
-          <span className="text-xs text-neutral-500" title="Transactions linked to this account's bill">
-            · {formatMoney(payments.total)} paid
+          <span title="Transactions linked to this account's bill">
+            <Money value={payments.total} kind="neutral" /> paid
           </span>
         )}
-      </div>
-
-      {/* Headline: balance owed + payoff progress */}
-      <div className="rounded-md border border-dashed border-neutral-300 dark:border-neutral-700 p-3 space-y-3">
-        <div className="flex flex-wrap items-baseline justify-between gap-3">
-          <div>
-            <div className="text-[10px] uppercase tracking-wide text-neutral-500">Balance owed</div>
-            <div className="text-2xl font-bold tabular-nums text-orange-700 dark:text-orange-400">
-              {curBalance != null ? formatMoney(curBalance) : "—"}
-            </div>
-            <div className="mt-0.5 text-xs text-neutral-500">
-              {isCredit && curLimit != null && <>of {formatMoney(curLimit)} limit</>}
-              {!isCredit && original != null && <>of {formatMoney(original)} original</>}
-              {progress && <> · {progress.pct.toFixed(0)}% paid off</>}
-              {utilization != null && <> · {utilization.toFixed(0)}% utilized</>}
-              {debt.asOf && <> · as of {formatDate(debt.asOf)}</>}
-            </div>
-          </div>
-
-          {/* Interest cost — the motivational bit */}
-          {mInt != null && (
-            <div className="rounded-md bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900 px-3 py-1.5 text-right">
-              <div className="text-lg font-bold tabular-nums text-amber-700 dark:text-amber-400">
-                {formatMoney(mInt)}
-                <span className="text-xs font-normal text-neutral-500"> / mo interest</span>
-              </div>
-              <div className="text-[11px] text-neutral-500">
-                {yInt != null && <>{formatMoney(yInt)}/yr</>}
-                {curApr != null && <> · {curApr}% APR</>}
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* Progress bar: utilization for cards (fills red as you use more), payoff for loans */}
-        {isCredit && utilization != null ? (
-          <div className="h-2 w-full overflow-hidden rounded bg-neutral-200 dark:bg-neutral-800">
-            <div
-              className={`h-full ${
-                utilization >= 80 ? "bg-red-500" : utilization >= 50 ? "bg-amber-500" : "bg-emerald-500"
-              }`}
-              style={{ width: `${Math.min(100, Math.max(2, utilization))}%` }}
-            />
-          </div>
-        ) : progress ? (
-          <div className="h-2 w-full overflow-hidden rounded bg-neutral-200 dark:bg-neutral-800">
-            <div
-              className="h-full bg-emerald-500"
-              style={{ width: `${Math.min(100, Math.max(2, progress.pct))}%` }}
-            />
-          </div>
-        ) : null}
-
-        {(curMin != null || available != null || debt.openedOn) && (
-          <div className="text-xs text-neutral-500 flex flex-wrap gap-x-4">
-            {curMin != null && <span>Min payment {formatMoney(curMin)}/mo</span>}
-            {available != null && <span>{formatMoney(available)} available</span>}
-            {debt.openedOn && <span>Opened {formatDate(debt.openedOn)}</span>}
-          </div>
+        {isCredit && progress && original != null && (
+          <span>
+            {progress.pct.toFixed(0)}% paid off of <Money value={original} kind="neutral" whole /> starting balance
+          </span>
         )}
+        {debt.openedOn && <span>Opened {formatDate(debt.openedOn)}</span>}
       </div>
 
-      {/* Static facts: original principal + opened date */}
-      <div className="flex flex-wrap items-end gap-3">
-        <div>
-          <label className="block text-[10px] uppercase tracking-wide text-neutral-500">
-            {isCredit ? "Starting balance" : "Original principal"}
-          </label>
-          <input
-            defaultValue={debt.originalPrincipal ?? ""}
-            placeholder="e.g. 12000"
-            inputMode="decimal"
-            onBlur={(e) => {
-              const v = e.target.value.trim();
-              const next = v === "" ? null : num(v);
-              if ((debt.originalPrincipal ?? "") !== v) saveStatic({ originalPrincipal: next });
+      {expanded && (
+        <div className="mt-3.5 border-t border-line pt-1">
+          <DataTable
+            dense
+            rows={rows}
+            empty={<p className="px-1 py-3 text-sm text-fg-3">No balances recorded yet. Record one to start the history.</p>}
+            columns={[
+              { key: "asOf", header: "Date", render: (r) => formatDate(r.asOf) },
+              { key: "balance", header: "Balance", num: true, render: (r) => <Money value={r.balance} kind="owed" /> },
+              {
+                key: "change",
+                header: "Change",
+                num: true,
+                render: (r) => (r.change ? <Money value={r.change} kind={r.change < 0 ? "income" : "over"} sign="always" /> : <span className="text-fg-3">—</span>),
+              },
+              ...(isCredit ? [{ key: "creditLimit", header: "Limit", num: true, render: (r: (typeof rows)[number]) => (r.creditLimit != null ? <Money value={r.creditLimit} kind="neutral" /> : "—") }] : []),
+              { key: "apr", header: "APR", num: true, render: (r) => (r.apr != null ? `${r.apr}%` : "—") },
+              { key: "minPayment", header: "Min", num: true, render: (r) => (r.minPayment != null ? <Money value={r.minPayment} kind="neutral" /> : "—") },
+              { key: "note", header: "Note", render: (r) => <span className="text-fg-3">{r.note || "—"}</span> },
+              {
+                key: "del",
+                header: "",
+                shrink: true,
+                render: (r) => <IconButton size="sm" icon="trash-2" label="Delete this balance" disabled={pending} onClick={() => start(async () => { await deleteAccountBalance(r.id); })} />,
+              },
+            ]}
+            mobile={{
+              title: (r) => formatDate(r.asOf),
+              sub: (r) => [r.apr != null ? `${r.apr}% APR` : null, r.note].filter(Boolean).join(" · ") || null,
+              amount: (r) => <Money value={r.balance} kind="owed" />,
+              meta: (r) => (
+                <span className="inline-flex items-center gap-1">
+                  {r.change ? <Money value={r.change} kind={r.change < 0 ? "income" : "over"} sign="always" /> : null}
+                  <IconButton size="sm" icon="trash-2" label="Delete this balance" disabled={pending} onClick={() => start(async () => { await deleteAccountBalance(r.id); })} />
+                </span>
+              ),
             }}
-            className={inputCls + " w-32"}
           />
-        </div>
-        <div>
-          <label className="block text-[10px] uppercase tracking-wide text-neutral-500">Opened</label>
-          <input
-            type="date"
-            defaultValue={debt.openedOn ?? ""}
-            onBlur={(e) => {
-              if ((debt.openedOn ?? "") !== e.target.value)
-                saveStatic({ openedOn: e.target.value || null });
-            }}
-            className={inputCls}
-          />
-        </div>
-      </div>
-
-      {/* Record a new balance snapshot */}
-      <div className="rounded-md border border-dashed border-neutral-300 dark:border-neutral-700 p-3 space-y-2">
-        <div className="text-[10px] uppercase tracking-wide text-neutral-500">Update balance</div>
-        <div className="flex flex-wrap items-end gap-2">
-          <div>
-            <label className="block text-[10px] text-neutral-500">Balance</label>
-            <input
-              value={bal}
-              onChange={(e) => setBal(e.target.value)}
-              placeholder="balance"
-              inputMode="decimal"
-              className={inputCls + " w-28"}
-            />
-          </div>
-          {isCredit && (
-            <div>
-              <label className="block text-[10px] text-neutral-500">Limit</label>
-              <input
-                value={lim}
-                onChange={(e) => setLim(e.target.value)}
-                placeholder="limit"
-                inputMode="decimal"
-                className={inputCls + " w-24"}
-              />
-            </div>
-          )}
-          <div>
-            <label className="block text-[10px] text-neutral-500">APR %</label>
-            <input
-              value={apr}
-              onChange={(e) => setApr(e.target.value)}
-              placeholder="APR"
-              inputMode="decimal"
-              className={inputCls + " w-20"}
-            />
-          </div>
-          <div>
-            <label className="block text-[10px] text-neutral-500">Min pay</label>
-            <input
-              value={minPay}
-              onChange={(e) => setMinPay(e.target.value)}
-              placeholder="min"
-              inputMode="decimal"
-              className={inputCls + " w-20"}
-            />
-          </div>
-          <input
-            type="date"
-            value={asOf}
-            onChange={(e) => setAsOf(e.target.value)}
-            className={inputCls}
-          />
-          <input
-            value={note}
-            onChange={(e) => setNote(e.target.value)}
-            placeholder="note (optional)"
-            className={inputCls + " flex-1 min-w-32"}
-          />
-          <button
-            onClick={record}
-            disabled={pending || !bal.trim()}
-            className="px-3 py-1.5 rounded-md bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 disabled:opacity-50"
-          >
-            Record
-          </button>
-        </div>
-      </div>
-
-      {/* History */}
-      {ledger.length > 0 && (
-        <div className="max-h-56 overflow-y-auto overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="text-[10px] uppercase tracking-wide text-neutral-500 text-left">
-                <th className="py-1 font-medium">Date</th>
-                <th className="py-1 font-medium text-right">Balance</th>
-                {isCredit && <th className="py-1 font-medium text-right pl-3">Limit</th>}
-                <th className="py-1 font-medium text-right pl-3">APR</th>
-                <th className="py-1 font-medium text-right pl-3">Min</th>
-                <th className="py-1 font-medium pl-3">Note</th>
-                <th />
-              </tr>
-            </thead>
-            <tbody>
-              {ledger.map((r) => (
-                <tr key={r.id} className="border-t border-neutral-100 dark:border-neutral-800">
-                  <td className="py-1 tabular-nums">{formatDate(r.asOf)}</td>
-                  <td className="py-1 text-right tabular-nums font-medium">{formatMoney(r.balance)}</td>
-                  {isCredit && (
-                    <td className="py-1 text-right tabular-nums pl-3 text-neutral-500">
-                      {r.creditLimit != null ? formatMoney(r.creditLimit) : "—"}
-                    </td>
-                  )}
-                  <td className="py-1 text-right tabular-nums pl-3 text-neutral-500">
-                    {r.apr != null ? `${r.apr}%` : "—"}
-                  </td>
-                  <td className="py-1 text-right tabular-nums pl-3 text-neutral-500">
-                    {r.minPayment != null ? formatMoney(r.minPayment) : "—"}
-                  </td>
-                  <td className="py-1 pl-3 text-neutral-500 truncate max-w-40">{r.note ?? ""}</td>
-                  <td className="py-1 text-right">
-                    <button
-                      onClick={() =>
-                        start(async () => {
-                          await deleteAccountBalance(r.id);
-                          refresh();
-                        })
-                      }
-                      className="text-xs text-red-600 hover:underline"
-                    >
-                      ✕
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
         </div>
       )}
-    </div>
+
+      {recording && <RecordSheet debt={debt} ledger={ledger} isCredit={isCredit} onClose={() => setRecording(false)} />}
+      {editing && <EditSheet debt={debt} onClose={() => setEditing(false)} />}
+    </Card>
+  );
+}
+
+/** Record a new balance snapshot. APR / min / limit pre-fill from the freshest known values. */
+function RecordSheet({ debt, ledger, isCredit, onClose }: { debt: DebtInfo; ledger: DebtLedgerRow[]; isCredit: boolean; onClose: () => void }) {
+  const [pending, start] = useTransition();
+  const [bal, setBal] = useState("");
+  const [asOf, setAsOf] = useState(todayLocal);
+  const [note, setNote] = useState("");
+  const [apr, setApr] = useState(ledger.find((r) => r.apr != null)?.apr ?? "");
+  const [minPay, setMinPay] = useState(ledger.find((r) => r.minPayment != null)?.minPayment ?? "");
+  const [lim, setLim] = useState(ledger.find((r) => r.creditLimit != null)?.creditLimit ?? "");
+  const n = num(bal);
+  const save = () => {
+    if (n == null || !asOf) return;
+    start(async () => {
+      await addAccountBalance(debt.id, n, asOf, note || null, isCredit ? num(lim) : null, num(apr), num(minPay));
+      onClose();
+    });
+  };
+  return (
+    <Sheet
+      open
+      onClose={onClose}
+      title="Record balance"
+      footer={
+        <div className="mt-4 flex justify-end gap-2">
+          <Button variant="secondary" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button onClick={save} loading={pending} disabled={n == null || !asOf}>
+            Save balance
+          </Button>
+        </div>
+      }
+    >
+      <p className="mb-3 text-sm text-fg-3">
+        {debt.label || "Account"} <span className="font-mono">··{debt.accountNumber}</span>
+      </p>
+      <form
+        className="grid grid-cols-2 gap-3"
+        onSubmit={(e) => {
+          e.preventDefault();
+          save();
+        }}
+      >
+        <Field label="Balance owed">
+          <Input money autoFocus value={bal} onChange={(e) => setBal(e.target.value)} placeholder={debt.balance ?? "0.00"} />
+        </Field>
+        <Field label="As of">
+          <Input type="date" value={asOf} onChange={(e) => setAsOf(e.target.value)} />
+        </Field>
+        {isCredit && (
+          <Field label="Credit limit">
+            <Input money value={lim} onChange={(e) => setLim(e.target.value)} placeholder="Limit" />
+          </Field>
+        )}
+        <Field label="APR %">
+          <Input money value={apr} onChange={(e) => setApr(e.target.value)} placeholder="APR" />
+        </Field>
+        <Field label="Min payment">
+          <Input money value={minPay} onChange={(e) => setMinPay(e.target.value)} placeholder="Min" />
+        </Field>
+        <Field label="Note" className="col-span-2">
+          <Input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Optional" />
+        </Field>
+        <button type="submit" hidden />
+      </form>
+    </Sheet>
+  );
+}
+
+/** The card/loan's identity and static facts — this is the account's only edit surface. */
+function EditSheet({ debt, onClose }: { debt: DebtInfo; onClose: () => void }) {
+  const [pending, start] = useTransition();
+  const [label, setLabel] = useState(debt.label ?? "");
+  const [institution, setInstitution] = useState(debt.institution ?? "");
+  const [type, setType] = useState(debt.accountType);
+  const [principal, setPrincipal] = useState(debt.originalPrincipal ?? "");
+  const [opened, setOpened] = useState(debt.openedOn ?? "");
+  const credit = CREDIT_ACCOUNT_TYPES.includes(type);
+  const save = () =>
+    start(async () => {
+      const patch: Parameters<typeof updateAccount>[1] = {};
+      if (label !== (debt.label ?? "")) patch.label = label;
+      if (institution !== (debt.institution ?? "")) patch.institution = institution;
+      if (type !== debt.accountType) patch.accountType = type;
+      if (principal.trim() !== (debt.originalPrincipal ?? "")) patch.originalPrincipal = principal.trim() === "" ? null : num(principal);
+      if (opened !== (debt.openedOn ?? "")) patch.openedOn = opened || null;
+      if (Object.keys(patch).length) await updateAccount(debt.id, patch);
+      onClose();
+    });
+  return (
+    <Sheet
+      open
+      onClose={onClose}
+      title="Edit debt"
+      footer={
+        <div className="mt-4 flex justify-end gap-2">
+          <Button variant="secondary" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button onClick={save} loading={pending}>
+            Save changes
+          </Button>
+        </div>
+      }
+    >
+      <form
+        className="grid grid-cols-2 gap-3"
+        onSubmit={(e) => {
+          e.preventDefault();
+          save();
+        }}
+      >
+        <Field label="Name" className="col-span-2">
+          <Input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Example Card" />
+        </Field>
+        <Field label="Institution">
+          <Input value={institution} onChange={(e) => setInstitution(e.target.value)} placeholder="Chase" />
+        </Field>
+        <Field label="Type" hint={type !== "Credit" && type !== "Loan" ? "Moves this to Accounts." : undefined}>
+          <Select value={type} onChange={(e) => setType(e.target.value)} options={[...ACCOUNT_TYPES]} />
+        </Field>
+        <Field label={credit ? "Starting balance" : "Original principal"}>
+          <Input money value={principal} onChange={(e) => setPrincipal(e.target.value)} placeholder="12000" />
+        </Field>
+        <Field label="Opened">
+          <Input type="date" value={opened} onChange={(e) => setOpened(e.target.value)} />
+        </Field>
+        <button type="submit" hidden />
+      </form>
+    </Sheet>
   );
 }

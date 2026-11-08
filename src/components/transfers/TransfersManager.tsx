@@ -4,13 +4,31 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { formatMoney } from "@/server/lib/money";
 import { formatDate } from "@/server/lib/period";
-import type { TransfersData, TxnLite } from "@/server/lib/transfers";
+import type { LinkedPair, TransfersData, TxnLite } from "@/server/lib/transfers";
 import {
   linkTransfer,
   unlinkTransfer,
   unmarkTransfer,
   dismissSuggestion,
 } from "@/server/actions/transfers";
+import {
+  Button,
+  Card,
+  DataTable,
+  EmptyState,
+  Glyph,
+  IconButton,
+  Money,
+  Notice,
+  Select,
+} from "@/components/ds";
+
+// Which side money left from and which it landed on. A linked pair is stored as a/b with no
+// order, so read it off the directions (falling back to the stored order for odd data).
+function fromTo(p: { a: TxnLite; b: TxnLite }): { from: TxnLite; to: TxnLite } {
+  if (p.a.direction === "Credit" && p.b.direction !== "Credit") return { from: p.b, to: p.a };
+  return { from: p.a, to: p.b };
+}
 
 export function TransfersManager({
   data,
@@ -32,118 +50,100 @@ export function TransfersManager({
   const run = (fn: () => Promise<void>) =>
     start(async () => {
       await fn();
-      router.refresh();
     });
 
-  const selectCls =
-    "border rounded px-2 py-1 text-sm bg-transparent border-neutral-300 dark:border-neutral-700";
+  const linkedRows = data.linked.map((p, i) => ({ id: i, pair: p, ...fromTo(p) }));
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       {/* Month filter */}
-      <div className="flex items-center gap-2">
-        <label className="text-sm text-neutral-500">Month</label>
-        <select
+      <div className="flex flex-wrap items-center gap-2">
+        <Select
+          aria-label="Month"
           value={selected}
           onChange={(e) =>
             router.push(e.target.value ? `/transfers?period=${e.target.value}` : "/transfers")
           }
-          className={selectCls}
-        >
-          <option value="">All months</option>
-          {periods.map((p) => (
-            <option key={p.label} value={p.label}>
-              {p.pretty}
-            </option>
-          ))}
-        </select>
-        {selected && (
-          <span className="text-xs text-neutral-500">showing transfers touching {selected}</span>
-        )}
+          options={[{ value: "", label: "All months" }, ...periods.map((p) => ({ value: p.label, label: p.pretty }))]}
+          className="!w-auto min-w-44"
+        />
+        {selected && <span className="text-xs text-fg-3">Transfers touching {selected}</span>}
       </div>
 
       {/* Suggested matches */}
-      <Section
-        title="Suggested transfers"
-        count={data.suggestions.length}
-        hint="Same amount, opposite direction, different accounts, within a few days. Hover a row to read full descriptions."
-      >
+      <Card title="Suggested transfers" meta={String(data.suggestions.length)}>
+        <p className="mb-2 text-xs text-fg-3">
+          Same amount, opposite direction, different accounts, within a few days. Hover a row to
+          read the full descriptions.
+        </p>
         {data.suggestions.length === 0 ? (
-          <Empty>No unflagged transfer-like pairs found.</Empty>
+          <EmptyState compact icon="repeat" title="No transfer-like pairs to confirm" />
         ) : (
-          <div className="space-y-2">
+          <ul className="divide-y divide-line">
             {data.suggestions.map((s, i) => (
-              <div
-                key={i}
-                className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border border-neutral-200 dark:border-neutral-800 px-3 py-2"
-              >
-                <TxnLine t={s.debit} />
-                <span className="text-neutral-400 shrink-0">⇄</span>
-                <TxnLine t={s.credit} />
-                <span className="text-xs text-neutral-500 shrink-0">
-                  {s.daysApart === 0 ? "same day" : `${s.daysApart}d apart`}
-                </span>
-                <div className="ml-auto flex items-center gap-2 shrink-0">
-                  <button
+              <li key={i} className="flex flex-wrap items-center gap-x-3 gap-y-2 py-2.5">
+                <Pair from={s.debit} to={s.credit} note={s.daysApart === 0 ? "same day" : `${s.daysApart} days apart`} />
+                <div className="ml-auto flex shrink-0 items-center gap-1">
+                  <Button
+                    size="sm"
+                    variant="ghost"
                     onClick={() => run(() => dismissSuggestion(s.debit.id, s.credit.id))}
                     disabled={pending}
-                    className="text-xs text-neutral-500 hover:underline disabled:opacity-50"
                     title="Hide this suggestion permanently"
                   >
                     Dismiss
-                  </button>
-                  <button
+                  </Button>
+                  <Button
+                    size="sm"
+                    icon="check"
                     onClick={() => run(() => linkTransfer(s.debit.id, s.credit.id))}
                     disabled={pending}
-                    className="px-3 py-1 rounded-md bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 disabled:opacity-50"
                   >
                     Confirm transfer
-                  </button>
+                  </Button>
                 </div>
-              </div>
+              </li>
             ))}
-          </div>
+          </ul>
         )}
-      </Section>
+      </Card>
 
       {/* Flagged but unmatched */}
-      <Section
-        title="Flagged transfers needing a match"
-        count={data.unmatched.length}
-        hint="Transactions you categorized as Transfer that aren't linked to their other side yet."
-      >
+      <Card title="Flagged transfers needing a match" meta={String(data.unmatched.length)}>
+        <p className="mb-2 text-xs text-fg-3">
+          Transactions you categorized as Transfer that aren&apos;t linked to their other side yet.
+        </p>
         {data.unmatched.length === 0 ? (
-          <Empty>Nothing flagged and unmatched.</Empty>
+          <EmptyState compact icon="link" title="Nothing flagged and unmatched" />
         ) : (
-          <div className="space-y-2">
+          <ul className="divide-y divide-line">
             {data.unmatched.map((u) => {
               const selId = sel[u.txn.id] ?? u.candidates[0]?.id;
               const selCand = u.candidates.find((c) => c.id === selId);
               return (
-                <div
-                  key={u.txn.id}
-                  className="rounded-md border border-neutral-200 dark:border-neutral-800 px-3 py-2 space-y-2"
-                >
+                <li key={u.txn.id} className="space-y-2 py-2.5">
                   <div className="flex flex-wrap items-center gap-3">
-                    <TxnLine t={u.txn} />
-                    <button
+                    <Single t={u.txn} />
+                    <Button
+                      size="sm"
+                      variant="ghost"
                       onClick={() => run(() => unmarkTransfer(u.txn.id))}
                       disabled={pending}
-                      className="ml-auto shrink-0 text-xs text-neutral-500 hover:underline disabled:opacity-50"
+                      className="ml-auto shrink-0"
                     >
                       Not a transfer
-                    </button>
+                    </Button>
                   </div>
                   {u.candidates.length === 0 ? (
-                    <div className="text-xs text-amber-600">
-                      No matching counterpart found in imported data (the other side may not be
-                      imported). It still won&apos;t count as income/spending.
-                    </div>
+                    <Notice tone="warn">
+                      No matching counterpart in your imported data — the other side may not be
+                      imported yet. It still won&apos;t count as income or spending.
+                    </Notice>
                   ) : (
                     <div className="flex flex-wrap items-center gap-2">
-                      <span className="text-xs text-neutral-500 shrink-0">Link to:</span>
-                      <select
-                        value={selId}
+                      <Select
+                        aria-label="Link to"
+                        value={String(selId ?? "")}
                         onChange={(e) => setSel((m) => ({ ...m, [u.txn.id]: Number(e.target.value) }))}
                         disabled={pending}
                         title={
@@ -153,107 +153,135 @@ export function TransfersManager({
                               )} · ${selCand.description}`
                             : undefined
                         }
-                        className={`${selectCls} flex-1 min-w-0 sm:min-w-[26rem]`}
-                      >
-                        {u.candidates.map((c) => (
-                          <option key={c.id} value={c.id}>
-                            {c.account} · {formatDate(c.date)} · {formatMoney(c.amount)} ·{" "}
-                            {c.description}
-                          </option>
-                        ))}
-                      </select>
-                      <button
+                        options={u.candidates.map((c) => ({
+                          value: String(c.id),
+                          label: `${c.account} · ${formatDate(c.date)} · ${formatMoney(c.amount)} · ${c.description}`,
+                        }))}
+                        className="!h-9 min-w-0 flex-1 sm:min-w-[22rem]"
+                      />
+                      <Button
+                        size="sm"
+                        icon="link"
                         onClick={() => run(() => linkTransfer(u.txn.id, selId))}
                         disabled={pending || !selId}
-                        className="shrink-0 px-3 py-1 rounded-md bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 disabled:opacity-50"
+                        className="shrink-0"
                       >
                         Link
-                      </button>
+                      </Button>
                     </div>
                   )}
-                </div>
+                </li>
               );
             })}
-          </div>
+          </ul>
         )}
-      </Section>
+      </Card>
 
-      {/* Linked */}
-      <Section title="Linked transfers" count={data.linked.length}>
-        {data.linked.length === 0 ? (
-          <Empty>No linked transfers yet.</Empty>
+      {/* Linked — the kit's transfers table */}
+      <Card title="Linked transfers" meta={String(data.linked.length)} padded={false}>
+        <div className="px-5 pb-1 pt-3 max-md:px-3.5">
+          <Notice tone="info">
+            Moves between your own accounts. They&apos;re kept out of spending and income.
+          </Notice>
+        </div>
+        {linkedRows.length === 0 ? (
+          <EmptyState compact icon="repeat" title="No linked transfers yet" />
         ) : (
-          <div className="space-y-2">
-            {data.linked.map((p, i) => (
-              <div
-                key={i}
-                className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border border-green-200 dark:border-green-900 bg-green-50/40 dark:bg-green-950/20 px-3 py-2"
-              >
-                <TxnLine t={p.a} />
-                <span className="text-neutral-400 shrink-0">⇄</span>
-                <TxnLine t={p.b} />
-                <button
-                  onClick={() => run(() => unlinkTransfer(p.a.id))}
-                  disabled={pending}
-                  className="ml-auto shrink-0 text-xs text-red-600 hover:underline disabled:opacity-50"
-                >
-                  Unlink
-                </button>
-              </div>
-            ))}
-          </div>
+          <DataTable
+            rows={linkedRows}
+            columns={[
+              { key: "date", header: "Date", shrink: true, render: (r) => <span className="tabular-nums text-fg-2">{formatDate(r.from.date)}</span> },
+              { key: "from", header: "From", render: (r) => <Side t={r.from} /> },
+              { key: "arrow", header: "", shrink: true, render: () => <span className="text-fg-3">→</span> },
+              { key: "to", header: "To", render: (r) => <Side t={r.to} /> },
+              { key: "amt", header: "Amount", num: true, render: (r) => <Money value={r.from.amount} kind="neutral" /> },
+              { key: "act", header: "", shrink: true, render: (r) => <UnlinkButton pair={r.pair} disabled={pending} onUnlink={(id) => run(() => unlinkTransfer(id))} /> },
+            ]}
+            mobile={{
+              lead: () => <Glyph icon="repeat" />,
+              title: (r) => `${r.from.account} → ${r.to.account}`,
+              sub: (r) => (
+                <>
+                  {formatDate(r.from.date)}
+                  <UnlinkButton pair={r.pair} disabled={pending} onUnlink={(id) => run(() => unlinkTransfer(id))} />
+                </>
+              ),
+              amount: (r) => <Money value={r.from.amount} kind="neutral" />,
+            }}
+          />
         )}
-      </Section>
+      </Card>
     </div>
   );
 }
 
-function TxnLine({ t }: { t: TxnLite }) {
-  const credit = t.direction === "Credit";
-  const full = `${t.direction} ${formatMoney(t.amount)} · ${t.account} · ${formatDate(t.date)} · ${t.description}`;
-  return (
-    <span className="inline-flex items-center gap-2 text-sm min-w-0 flex-1 basis-72" title={full}>
-      <span
-        className={`shrink-0 px-1.5 py-0.5 rounded text-xs font-medium ${
-          credit
-            ? "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200"
-            : "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200"
-        }`}
-      >
-        {credit ? "+" : "−"}
-        {formatMoney(t.amount)}
-      </span>
-      <span className="text-neutral-500 shrink-0">{t.account}</span>
-      <span className="text-neutral-400 tabular-nums shrink-0">{formatDate(t.date)}</span>
-      <span className="truncate min-w-0">{t.description}</span>
-    </span>
-  );
-}
-
-function Section({
-  title,
-  count,
-  hint,
-  children,
+function UnlinkButton({
+  pair,
+  disabled,
+  onUnlink,
 }: {
-  title: string;
-  count: number;
-  hint?: string;
-  children: React.ReactNode;
+  pair: LinkedPair;
+  disabled: boolean;
+  onUnlink: (id: number) => void;
 }) {
   return (
-    <section className="rounded-lg border border-neutral-200 dark:border-neutral-800 p-5 space-y-3">
-      <div>
-        <h2 className="font-semibold">
-          {title} <span className="text-neutral-400 font-normal">({count})</span>
-        </h2>
-        {hint && <p className="text-xs text-neutral-500">{hint}</p>}
-      </div>
-      {children}
-    </section>
+    <IconButton
+      icon="unlink"
+      label="Unlink this transfer"
+      size="sm"
+      disabled={disabled}
+      onClick={() => onUnlink(pair.a.id)}
+      className="hover:!text-over"
+    />
   );
 }
 
-function Empty({ children }: { children: React.ReactNode }) {
-  return <p className="text-sm text-neutral-500">{children}</p>;
+/** One side of a linked transfer: the account, with the bank's description under it. */
+function Side({ t }: { t: TxnLite }) {
+  return (
+    <div className="min-w-0" title={`${t.account} · ${formatDate(t.date)} · ${t.description}`}>
+      <div className="truncate">{t.account}</div>
+      <div className="max-w-[18rem] truncate text-xs text-fg-3">{t.description}</div>
+    </div>
+  );
+}
+
+/** A suggested pair: From → To, amount, and how far apart the two sides landed. */
+function Pair({ from, to, note }: { from: TxnLite; to: TxnLite; note: string }) {
+  const full = (t: TxnLite) =>
+    `${t.direction} ${formatMoney(t.amount)} · ${t.account} · ${formatDate(t.date)} · ${t.description}`;
+  return (
+    <div className="flex min-w-0 flex-1 basis-72 items-center gap-3" title={`${full(from)}\n${full(to)}`}>
+      <Glyph icon="repeat" />
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-sm font-medium">
+          {from.account} <span className="text-fg-3">→</span> {to.account}
+        </div>
+        <div className="truncate text-xs text-fg-3">
+          {formatDate(from.date)} · {note} · {from.description}
+        </div>
+      </div>
+      <Money value={from.amount} kind="neutral" className="shrink-0 font-medium" />
+    </div>
+  );
+}
+
+/** A single flagged transaction waiting for its other side. */
+function Single({ t }: { t: TxnLite }) {
+  const credit = t.direction === "Credit";
+  return (
+    <div
+      className="flex min-w-0 flex-1 basis-72 items-center gap-3"
+      title={`${t.direction} ${formatMoney(t.amount)} · ${t.account} · ${formatDate(t.date)} · ${t.description}`}
+    >
+      <Glyph icon={credit ? "arrow-down-right" : "arrow-up-right"} />
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-sm font-medium">{t.description}</div>
+        <div className="truncate text-xs text-fg-3">
+          {t.account} · {formatDate(t.date)}
+        </div>
+      </div>
+      <Money value={credit ? t.amount : -t.amount} className="shrink-0 font-medium" />
+    </div>
+  );
 }
