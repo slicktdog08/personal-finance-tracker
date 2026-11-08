@@ -763,6 +763,23 @@ export async function setTransactionPending(
   return { ok: true };
 }
 
+// "Keep both": the suggested posted row is a different charge. Remembers the pair so it isn't
+// offered again; the pending row stays pending (still waiting for its real twin, or for the bank
+// to post it — a bank-synced row can't be un-pended by hand).
+export async function keepPendingSeparate(
+  pendingId: number,
+  postedId: number,
+  path: string,
+): Promise<{ ok: boolean; error?: string }> {
+  await requireSession();
+  if (!Number.isInteger(pendingId) || !Number.isInteger(postedId)) return { ok: false, error: "Invalid transaction." };
+  const { dismissPendingPair } = await import("@/server/pending");
+  await dismissPendingPair(pendingId, postedId);
+  revalidatePath(path);
+  revalidatePath("/transactions");
+  return { ok: true };
+}
+
 // The statement row for a pending charge has arrived as its own transaction: fold the
 // hand-entered one into it so the charge counts once. The posted row keeps the bank's
 // details and inherits the user's category, notes and links. See src/server/pending.ts.

@@ -1,11 +1,14 @@
-import Link from "next/link";
-import { ArrowLeftIcon } from "@/components/icons";
+import { Badge, Card, Notice } from "@/components/ds";
+import { SettingsHeader } from "@/components/settings/SettingsHeader";
 import { SetupNotice } from "@/components/SetupNotice";
 import { SyncStatusCard } from "@/components/settings/sync/SyncStatusCard";
 import { EnrollmentList } from "@/components/settings/sync/EnrollmentList";
 import { SyncRunHistory } from "@/components/settings/sync/SyncRunHistory";
 import { AdvancedSyncSettings } from "@/components/settings/sync/AdvancedSyncSettings";
+import { LinkSimplefin } from "@/components/settings/sync/LinkSimplefin";
+import { PlaidLinkButton } from "@/components/settings/sync/PlaidLink";
 import { getConnectConfig } from "@/server/actions/sync";
+import { schedulerAllowed } from "@/server/sync/scheduler-gate";
 import { getSyncSettings } from "@/server/lib/sync/settings";
 import { listEnrollmentsWithAccounts, listRecentRuns, pendingSummary } from "@/server/lib/sync/sync";
 import { getAccounts } from "@/server/queries";
@@ -26,23 +29,18 @@ export default async function SyncSettingsPage({ searchParams }: { searchParams:
     ]);
     data = { settings, enrollments, runs, accounts, connect, pending };
   } catch (e) {
-    return <SetupNotice error={e instanceof Error ? e.message : String(e)} />;
+    return <SetupNotice error={e} />;
   }
   const { settings, enrollments, runs, accounts, connect, pending } = data;
   const lastRun = runs[0] ?? null;
 
   return (
     <div className="space-y-6">
-      <div className="space-y-2">
-        <Link href="/settings" className="inline-flex items-center gap-1 text-sm text-neutral-500 hover:text-blue-600">
-          <ArrowLeftIcon /> Settings
-        </Link>
-        <h1 className="text-2xl font-bold tracking-tight">Bank Sync 🏦</h1>
-        <p className="text-sm text-neutral-500">
-          Link a bank once and transactions and balances pull themselves on a schedule. Pending
-          card charges show up the same day and settle in place when they post.
-        </p>
-      </div>
+      <SettingsHeader
+        reorder={false}
+        title="Bank sync"
+        description="Link your banks once and transactions and balances pull themselves on a schedule. Pending card charges show up when the bank reports them and settle in place when they post."
+      />
 
       <SyncStatusCard
         settings={{
@@ -66,31 +64,58 @@ export default async function SyncSettingsPage({ searchParams }: { searchParams:
           }
         }
         pending={pending}
-        schedulerEnv={process.env.SYNC_SCHEDULER === "1"}
+        schedulerEnv={schedulerAllowed()}
         activeEnrollments={enrollments.filter((e) => e.status === "active").length}
       />
 
       <section className="space-y-3">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h2 className="font-semibold text-lg">Linked banks</h2>
-            <p className="text-sm text-neutral-500">
-              One entry per bank login. Map each account the bank exposes to the account it feeds here.
-            </p>
-          </div>
+        <div>
+          <h2 className="font-display text-lg font-semibold">Linked banks</h2>
+          <p className="text-sm text-fg-2">
+            One entry per bank login. Map each account the bank exposes to the account it feeds here.
+          </p>
         </div>
+        {connect.ready && connect.providers.includes("simplefin") && (
+          <Card title="Link with SimpleFIN" meta="paste a Setup Token">
+            <LinkSimplefin envToken={connect.simplefinEnvToken} />
+          </Card>
+        )}
+        {connect.ready && connect.plaid && (
+          <Card
+            title="Link with Plaid"
+            meta="sign in to your bank"
+            action={<Badge label={connect.plaid.env} color={connect.plaid.env === "sandbox" ? "#f59e0b" : "#10b981"} size="sm" />}
+          >
+            <div className="space-y-2">
+              <p className="text-sm text-fg-2">
+                Sign in to your bank in Plaid&apos;s window; the accounts you share appear below for mapping. Plaid refreshes
+                several times a day and tells this app when there&apos;s something new.
+              </p>
+              {connect.plaid.env === "sandbox" ? (
+                <Notice tone="warn">
+                  Sandbox: fake banks only (sign in as <code className="font-mono">user_good</code> /{" "}
+                  <code className="font-mono">pass_good</code>). Don&apos;t map sandbox accounts to real ones.
+                </Notice>
+              ) : (
+                <p className="text-xs text-fg-3">Each bank you link uses one of the plan&apos;s Items; removing it doesn&apos;t give the slot back.</p>
+              )}
+              <PlaidLinkButton />
+            </div>
+          </Card>
+        )}
         {!connect.ready && (
-          <div className="rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-800 p-3 text-sm text-amber-800 dark:text-amber-300">
-            <div className="font-medium">Linking a bank isn&apos;t available:</div>
-            <ul className="list-disc list-inside mt-1">
+          <Notice tone="warn" title="Linking a bank isn't available">
+            <ul className="mt-1 list-inside list-disc">
               {connect.problems.map((p) => (
                 <li key={p}>{p}</li>
               ))}
             </ul>
-            <div className="mt-1 text-xs">
-              See <code className="font-mono">planning/features/bank-sync.md</code> for how a provider plugs in.
-            </div>
-          </div>
+            {!connect.providers.length && (
+              <div className="mt-1 text-xs">
+                See <code className="font-mono">planning/features/bank-sync.md</code> for how a provider plugs in.
+              </div>
+            )}
+          </Notice>
         )}
         <EnrollmentList
           enrollments={enrollments.map((e) => ({
@@ -130,7 +155,7 @@ export default async function SyncSettingsPage({ searchParams }: { searchParams:
       </section>
 
       <section className="space-y-3">
-        <h2 className="font-semibold text-lg">Run history</h2>
+        <h2 className="font-display text-lg font-semibold">Run history</h2>
         <SyncRunHistory
           runs={runs.map((r) => ({
             id: r.id,
@@ -152,8 +177,7 @@ export default async function SyncSettingsPage({ searchParams }: { searchParams:
         />
       </section>
 
-      <section className="space-y-3">
-        <h2 className="font-semibold text-lg">Advanced</h2>
+      <section>
         <AdvancedSyncSettings
           settings={{
             syncWindowDays: settings.syncWindowDays,

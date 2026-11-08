@@ -8,7 +8,6 @@ import {
   commitPdfStatements,
 } from "@/server/actions/pdf-import";
 import type { ParsedStatement, CommitStatementInput, PdfCommitResult } from "@/server/lib/pdf/types";
-import { formatMoney } from "@/server/lib/money";
 import { formatDate } from "@/server/lib/period";
 import type { CategoryOption } from "@/server/queries";
 import type { CategoryRule } from "@/server/lib/categorize";
@@ -21,6 +20,10 @@ import {
   clearRuleFromRows,
   upsertRuleInList,
 } from "@/components/import/rule-helpers";
+import { Badge, Button, Card, Checkbox, EmptyState, Input, Money, Notice, Select, buttonClass } from "@/components/ds";
+import { ImportSteps } from "@/components/import/ImportSteps";
+import { reviewMeta } from "@/components/import/ImportWizard";
+import Link from "next/link";
 
 interface Account {
   id: number;
@@ -79,9 +82,6 @@ export function PdfImportWizard({
         : "Rule removed.",
     );
   }
-
-  const inputCls =
-    "border rounded px-2 py-1 text-sm bg-transparent border-neutral-300 dark:border-neutral-700";
 
   async function onFiles(files: File[]) {
     if (!files.length) return;
@@ -268,27 +268,21 @@ export function PdfImportWizard({
   }
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h2 className="text-lg font-semibold">Import from PDF statements</h2>
-        <p className="text-sm text-neutral-500">
-          For accounts that only give you PDF statements. Upload one or more at once — text is
-          extracted directly (no OCR), transactions and the statement balance are captured.
-        </p>
-      </div>
+    <div className="space-y-5">
+      <ImportSteps steps={["Upload", "Review", "Done"]} current={["upload", "review", "done"].indexOf(phase)} />
 
-      {error && (
-        <div className="rounded border border-red-300 bg-red-50 dark:bg-red-950/30 p-3 text-sm text-red-700 dark:text-red-300">
-          {error}
-        </div>
-      )}
+      {error && <Notice tone="danger">{error}</Notice>}
       {ruleMsg && (
-        <div className="rounded border border-green-300 bg-green-50 dark:bg-green-950/30 p-3 text-sm text-green-700 dark:text-green-300 flex items-start justify-between gap-2">
-          <span>{ruleMsg}</span>
-          <button onClick={() => setRuleMsg(null)} className="text-xs hover:underline">
-            dismiss
-          </button>
-        </div>
+        <Notice
+          tone="ok"
+          action={
+            <Button size="sm" variant="ghost" onClick={() => setRuleMsg(null)}>
+              Dismiss
+            </Button>
+          }
+        >
+          {ruleMsg}
+        </Notice>
       )}
 
       {phase === "upload" && (
@@ -298,113 +292,108 @@ export function PdfImportWizard({
           disabled={pending}
           pending={pending}
           pendingLabel="Extracting…"
-          title="Drag &amp; drop PDF statements, or"
-          hint="Recognized formats are parsed automatically; unrecognized ones are flagged so a parser can be added."
+          title="Drop PDF statements here"
+          hint="For accounts that only give you PDFs. Upload several at once; text is read directly (no OCR). Recognized formats parse automatically, others are flagged so a parser can be added."
           onFiles={onFiles}
         />
       )}
 
       {phase === "review" && (
         <div className="space-y-5">
-          <p className="text-xs text-neutral-500">
-            Tip: set a category, and use <span className="text-neutral-400">+ note</span> under a
-            description to add a comment — both save with the transaction when you import.
+          <p className="text-xs text-fg-3">
+            Set a category, and use <span className="text-fg-2">+ note</span> under a description to add a comment; both save
+            with the transaction when you import.
           </p>
           {stmts.map((s, i) => (
-            <div
+            <Card
               key={i}
-              className="rounded-lg border border-neutral-200 dark:border-neutral-800 p-4 space-y-3"
+              padded={false}
+              title={`Review · ${s.filename}`}
+              meta={
+                s.detected
+                  ? `${reviewMeta(s.newCount, s.duplicateCount, s.finalizeCount ?? 0, s.errorCount)} · ${s.pageCount} page${s.pageCount === 1 ? "" : "s"}`
+                  : `${s.pageCount} page${s.pageCount === 1 ? "" : "s"}`
+              }
+              action={
+                <Badge
+                  label={s.detected ? s.parserLabel : "Unrecognized format"}
+                  color={s.detected ? "#0ea5e9" : "#eab308"}
+                  size="sm"
+                />
+              }
             >
-              <div className="flex items-center justify-between flex-wrap gap-2">
-                <div className="font-medium">
-                  {s.filename}{" "}
-                  <span
-                    className={`ml-2 text-xs px-2 py-0.5 rounded-full ${
-                      s.detected
-                        ? "bg-blue-100 text-blue-800"
-                        : "bg-amber-100 text-amber-800"
-                    }`}
-                  >
-                    {s.detected ? s.parserLabel : "Unrecognized format"}
-                  </span>
-                </div>
-                <div className="text-xs text-neutral-500">
-                  {s.pageCount} page{s.pageCount === 1 ? "" : "s"}
-                </div>
-              </div>
-
               {!s.detected ? (
-                <div className="space-y-2">
-                  <p className="text-sm text-amber-600">
-                    No parser matched this statement. Adding one is ~40 lines (see
-                    src/server/lib/pdf/parsers). First lines extracted:
-                  </p>
-                  <pre className="text-xs bg-neutral-100 dark:bg-neutral-900 rounded p-2 overflow-x-auto whitespace-pre-wrap">
-                    {s.sampleLines.join("\n")}
-                  </pre>
+                <div className="space-y-2 px-5 pb-5 max-md:px-3.5">
+                  <Notice tone="warn">
+                    No parser matched this statement. Adding one is about 40 lines (see src/server/lib/pdf/parsers). First lines
+                    extracted:
+                  </Notice>
+                  <pre className="overflow-x-auto whitespace-pre-wrap rounded-panel bg-sunken p-2.5 text-xs">{s.sampleLines.join("\n")}</pre>
                 </div>
               ) : (
                 <>
                   {/* Account + period + balance */}
-                  <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4 text-sm">
-                    <label className="flex flex-col gap-1">
-                      <span className="text-xs text-neutral-500">Account *</span>
+                  <div className="grid gap-4 px-5 pb-4 text-sm max-md:px-3.5 sm:grid-cols-2 lg:grid-cols-3">
+                    <div className="mp-field">
+                      <span className="mp-field__label">
+                        Account <span className="text-over">*</span>
+                      </span>
                       <div className="flex items-center gap-2">
-                        <select
+                        <Select
+                          aria-label="Account"
                           value={accounts.some((a) => a.accountNumber === s.accountNumber) ? s.accountNumber : ""}
                           onChange={(e) => changeAccount(i, e.target.value)}
-                          className={inputCls}
-                        >
-                          <option value="">— pick / type —</option>
-                          {accounts.map((a) => (
-                            <option key={a.id} value={a.accountNumber}>
-                              {a.label ? `${a.label} (${a.accountNumber})` : `••${a.accountNumber}`}
-                            </option>
-                          ))}
-                        </select>
-                        <input
+                          className="min-w-0 flex-1"
+                          options={[
+                            { value: "", label: "Pick or type…" },
+                            ...accounts.map((a) => ({
+                              value: a.accountNumber,
+                              label: a.label ? `${a.label} (${a.accountNumber})` : `••${a.accountNumber}`,
+                            })),
+                          ]}
+                        />
+                        <Input
+                          aria-label="Account last four"
                           value={accounts.some((a) => a.accountNumber === s.accountNumber) ? "" : s.accountNumber}
                           onChange={(e) => changeAccount(i, e.target.value)}
-                          placeholder="last-4"
-                          className={inputCls + " w-24"}
+                          placeholder="Last 4"
+                          className="w-24 shrink-0"
                         />
                       </div>
                       {s.institution && (
-                        <span className="text-xs text-neutral-400">
-                          detected: {s.institution}
+                        <span className="mp-field__hint">
+                          Detected: {s.institution}
                           {s.accountType ? ` · ${s.accountType}` : ""}
                         </span>
                       )}
-                    </label>
+                    </div>
 
-                    <div className="flex flex-col gap-1">
-                      <span className="text-xs text-neutral-500">Statement period</span>
+                    <div className="mp-field">
+                      <span className="mp-field__label">Statement period</span>
                       <span className="tabular-nums">
-                        {s.periodStart ? formatDate(s.periodStart) : "?"} —{" "}
-                        {s.periodEnd ? formatDate(s.periodEnd) : "?"}
+                        {s.periodStart ? formatDate(s.periodStart) : "?"} – {s.periodEnd ? formatDate(s.periodEnd) : "?"}
                       </span>
-                      <span className="text-xs text-neutral-400">
-                        opening {formatMoney(s.openingBalance)} · closing{" "}
-                        {formatMoney(s.closingBalance)}
+                      <span className="mp-field__hint">
+                        Opening {s.openingBalance != null ? <Money value={s.openingBalance} kind="neutral" /> : "—"} · closing{" "}
+                        {s.closingBalance != null ? <Money value={s.closingBalance} kind="neutral" /> : "—"}
                       </span>
                     </div>
 
                     {s.balanceSuggestions.length > 0 && (
-                      <div className="flex flex-col gap-1.5">
-                        <span className="text-xs text-neutral-500">Record balance snapshots</span>
+                      <div className="mp-field">
+                        <span className="mp-field__label">Record balance snapshots</span>
                         {s.balanceSuggestions.map((bal, k) => (
-                          <div key={bal.kind} className="flex items-center gap-2">
-                            <label className="flex items-center gap-1 text-xs text-neutral-500 w-20 shrink-0">
-                              <input
-                                type="checkbox"
-                                checked={recordBal[i]?.[k] ?? false}
-                                onChange={(e) => toggleBalance(i, k, e.target.checked)}
-                              />
-                              {bal.kind === "opening" ? "Opening" : "Closing"}
-                            </label>
-                            <input
+                          <div key={bal.kind} className="flex flex-wrap items-center gap-2">
+                            <Checkbox
+                              label={bal.kind === "opening" ? "Opening" : "Closing"}
+                              checked={recordBal[i]?.[k] ?? false}
+                              onChange={(e) => toggleBalance(i, k, e.target.checked)}
+                              className="w-24 shrink-0 text-xs"
+                            />
+                            <Input
                               type="number"
                               step="0.01"
+                              aria-label={`${bal.kind} balance`}
                               value={bal.balance}
                               onChange={(e) => {
                                 const v = e.target.value;
@@ -413,30 +402,20 @@ export function PdfImportWizard({
                                 if (Number.isFinite(n)) patchBalance(i, k, { balance: n });
                               }}
                               disabled={!recordBal[i]?.[k]}
-                              className={inputCls + " w-24"}
+                              className="!h-9 w-28"
                             />
-                            <input
+                            <Input
                               type="date"
+                              aria-label={`${bal.kind} balance date`}
                               value={bal.asOf}
                               onChange={(e) => patchBalance(i, k, { asOf: e.target.value })}
                               disabled={!recordBal[i]?.[k]}
-                              className={inputCls}
+                              className="!h-9 w-40"
                             />
                           </div>
                         ))}
                       </div>
                     )}
-                  </div>
-
-                  <div className="text-sm">
-                    {s.total} rows · <span className="text-green-700">{s.newCount} new</span> ·{" "}
-                    <span className="text-yellow-700">{s.duplicateCount} duplicates</span> ·{" "}
-                    {s.finalizeCount ? (
-                      <>
-                        <span className="text-blue-700">{s.finalizeCount} settle pending</span> ·{" "}
-                      </>
-                    ) : null}
-                    <span className="text-red-700">{s.errorCount} errors</span>
                   </div>
 
                   {s.rows.length > 0 && (
@@ -455,9 +434,11 @@ export function PdfImportWizard({
                   )}
 
                   {s.notes.length > 0 && (
-                    <details className="text-xs text-neutral-500">
-                      <summary className="cursor-pointer">{s.notes.length} parser note(s)</summary>
-                      <ul className="list-disc pl-5 mt-1 space-y-0.5">
+                    <details className="border-t border-line px-5 py-3 text-xs text-fg-3 max-md:px-3.5">
+                      <summary className="cursor-pointer">
+                        {s.notes.length} parser note{s.notes.length === 1 ? "" : "s"}
+                      </summary>
+                      <ul className="mt-1 list-disc space-y-0.5 pl-5">
                         {s.notes.map((n, ni) => (
                           <li key={ni}>{n}</li>
                         ))}
@@ -466,61 +447,57 @@ export function PdfImportWizard({
                   )}
                 </>
               )}
-            </div>
+            </Card>
           ))}
 
-          <div className="flex items-center gap-3 flex-wrap">
-            <button onClick={reset} className="px-3 py-1.5 text-sm text-neutral-500 hover:underline">
-              ← Start over
-            </button>
-            <button
+          <div className="flex flex-wrap items-center gap-3">
+            <Button variant="ghost" icon="arrow-left" onClick={reset}>
+              Start over
+            </Button>
+            <Button
+              icon="check"
+              loading={pending}
               onClick={commit}
               disabled={pending || (totalNew === 0 && totalSettles === 0 && totalBalances === 0) || missingAccount}
-              className="px-4 py-2 rounded-md bg-green-600 text-white text-sm font-medium hover:bg-green-700 disabled:opacity-50"
             >
               {pending
                 ? "Importing…"
                 : `Import ${totalNew} new${totalSettles ? ` · settle ${totalSettles} pending` : ""}${totalBalances ? ` · ${totalBalances} balance${totalBalances === 1 ? "" : "s"}` : ""}`}
-            </button>
-            {missingAccount && (
-              <span className="text-xs text-amber-600">Pick an account for every statement.</span>
-            )}
+            </Button>
+            {missingAccount && <span className="text-xs text-warn">Pick an account for every statement.</span>}
           </div>
         </div>
       )}
 
       {phase === "done" && result && (
-        <div className="space-y-4">
-          <div className="rounded-lg border border-green-300 bg-green-50 dark:bg-green-950/30 p-4">
-            <div className="font-semibold text-green-800 dark:text-green-200">Import complete</div>
-            <div className="text-sm text-green-700 dark:text-green-300 mt-1">
-              {result.statements} statement{result.statements === 1 ? "" : "s"} · inserted{" "}
-              {result.inserted}
-              {result.finalized ? ` · settled ${result.finalized} pending` : ""} · skipped {result.duplicates} duplicates ·{" "}
-              {result.errors} errors ·{" "}
-              {result.balancesRecorded} balance snapshot
-              {result.balancesRecorded === 1 ? "" : "s"} recorded
-              {result.merged
-                ? ` · merged ${result.merged} into pending transaction${result.merged === 1 ? "" : "s"}`
-                : ""}
-              .
-            </div>
-            <div className="flex gap-3 mt-2 text-sm">
-              <a href="/transactions" className="text-blue-600 hover:underline">
-                View transactions →
-              </a>
-              <a href="/accounts" className="text-blue-600 hover:underline">
-                View balances →
-              </a>
-            </div>
-          </div>
-          <button
-            onClick={reset}
-            className="px-4 py-2 rounded-md bg-blue-600 text-white text-sm font-medium hover:bg-blue-700"
-          >
-            Import more PDFs
-          </button>
-        </div>
+        <Card padded={false}>
+          <EmptyState
+            icon="circle-check"
+            title="Import complete. Listo."
+            body={
+              <>
+                {result.statements} statement{result.statements === 1 ? "" : "s"} · inserted {result.inserted}
+                {result.finalized ? ` · settled ${result.finalized} pending` : ""} · skipped {result.duplicates} duplicates ·{" "}
+                {result.errors} errors · {result.balancesRecorded} balance snapshot
+                {result.balancesRecorded === 1 ? "" : "s"} recorded
+                {result.merged ? ` · merged ${result.merged} into pending transaction${result.merged === 1 ? "" : "s"}` : ""}.
+              </>
+            }
+            action={
+              <div className="flex flex-wrap justify-center gap-2">
+                <Link href="/transactions" className={buttonClass({ variant: "secondary" })}>
+                  View transactions
+                </Link>
+                <Link href="/accounts" className={buttonClass({ variant: "secondary" })}>
+                  View balances
+                </Link>
+                <Button icon="upload" onClick={reset}>
+                  Import more PDFs
+                </Button>
+              </div>
+            }
+          />
+        </Card>
       )}
     </div>
   );

@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
 import {
   previewCategorizeMatch,
   bulkCategorizeByMatch,
@@ -13,6 +12,21 @@ import type { Suggestion } from "@/server/lib/suggest";
 import type { CategoryOption } from "@/server/queries";
 import { describeRuleMatch, type CategoryRule } from "@/server/lib/categorize";
 import { RuleEditor } from "@/components/transactions/RuleEditor";
+import { ColorSelect } from "@/components/ColorSelect";
+import {
+  Badge,
+  Button,
+  Card,
+  Checkbox,
+  EmptyState,
+  Field,
+  Glyph,
+  IconButton,
+  Input,
+  ListRow,
+  Notice,
+  Select,
+} from "@/components/ds";
 
 export function MassCategorize({
   uncategorized,
@@ -25,7 +39,6 @@ export function MassCategorize({
   suggestions: Suggestion[];
   rules: CategoryRule[];
 }) {
-  const router = useRouter();
   const [pending, start] = useTransition();
   const [editing, setEditing] = useState<CategoryRule | null>(null);
   const [ruleMsg, setRuleMsg] = useState<string | null>(null);
@@ -33,6 +46,10 @@ export function MassCategorize({
     Object.fromEntries(suggestions.map((s) => [s.pattern, s.suggestedCategory ?? ""])),
   );
   const [donePatterns, setDonePatterns] = useState<Set<string>>(new Set());
+
+  const active = categoryOptions.filter((c) => c.active);
+  const colorOf = (name: string | null | undefined) =>
+    categoryOptions.find((c) => c.name === name)?.color;
 
   function applySuggestion(pattern: string) {
     const category = sugCat[pattern];
@@ -47,7 +64,6 @@ export function MassCategorize({
         saveRule: true,
       });
       setDonePatterns((p) => new Set(p).add(pattern));
-      router.refresh();
     });
   }
 
@@ -63,9 +79,11 @@ export function MassCategorize({
   const [applyMsg, setApplyMsg] = useState<string | null>(null);
 
   const matchParams = (): MatchParams => ({ field, matchType, pattern, onlyUncategorized: onlyUncat });
-
-  const inputCls =
-    "border rounded px-2 py-1 text-sm bg-transparent border-neutral-300 dark:border-neutral-700";
+  // Any change to what's matched makes an earlier preview's count wrong.
+  const stale = <T,>(set: (v: T) => void) => (v: T) => {
+    set(v);
+    setPreview(null);
+  };
 
   function doPreview() {
     setApplyMsg(null);
@@ -80,238 +98,219 @@ export function MassCategorize({
       setApplyMsg(`Updated ${n} transaction${n === 1 ? "" : "s"}${saveRule ? " and saved a rule" : ""}.`);
       setPreview(null);
       setPattern("");
-      router.refresh();
     });
   }
   function doAutoApply() {
     start(async () => {
       const n = await applySavedRules(true);
       setAutoMsg(`Applied saved rules to ${n} uncategorized transaction${n === 1 ? "" : "s"}.`);
-      router.refresh();
     });
   }
 
   const visibleSuggestions = suggestions.filter((s) => !donePatterns.has(s.pattern));
 
   return (
-    <div className="space-y-6">
-      {/* Suggested rules */}
-      <section className="rounded-lg border border-blue-200 dark:border-blue-900 bg-blue-50/40 dark:bg-blue-950/20 p-5 space-y-3">
-        <div className="flex items-baseline justify-between">
-          <h2 className="font-semibold">Suggested rules</h2>
-          <span className="text-xs text-neutral-500">
-            from the most common uncategorized descriptions
-          </span>
-        </div>
-        {visibleSuggestions.length === 0 ? (
-          <p className="text-sm text-neutral-500">
-            No suggestions right now — nothing frequent left to categorize. 🎉
-          </p>
-        ) : (
-          <div className="space-y-2">
-            {visibleSuggestions.map((s) => (
-              <div
-                key={s.pattern}
-                className="flex flex-wrap items-center gap-2 rounded-md bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 px-3 py-2"
-                title={s.samples.join("\n")}
-              >
-                <span className="font-mono text-sm px-2 py-0.5 rounded bg-neutral-100 dark:bg-neutral-800">
-                  {s.pattern}
-                </span>
-                <span className="text-sm text-neutral-500">{s.matchCount} txns</span>
-                <span className="text-xs text-neutral-400 truncate max-w-xs hidden sm:inline">
-                  e.g. {s.samples[0]}
-                </span>
-                <span className="ml-auto flex items-center gap-2">
-                  <select
-                    value={sugCat[s.pattern] ?? ""}
-                    onChange={(e) => setSugCat((m) => ({ ...m, [s.pattern]: e.target.value }))}
-                    className="border rounded px-2 py-1 text-sm bg-transparent border-neutral-300 dark:border-neutral-700"
-                  >
-                    <option value="">— pick category —</option>
-                    {categoryOptions.filter((c) => c.active).map((c) => (
-                      <option key={c.name} value={c.name}>
-                        {c.emoji ? `${c.emoji} ` : ""}
-                        {c.name}
-                      </option>
-                    ))}
-                  </select>
-                  <button
-                    onClick={() => applySuggestion(s.pattern)}
-                    disabled={pending || !sugCat[s.pattern]}
-                    className="px-3 py-1 rounded-md bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 disabled:opacity-50"
-                  >
-                    Apply{sugCat[s.pattern] ? ` (${s.matchCount})` : ""}
-                  </button>
-                </span>
-              </div>
-            ))}
-          </div>
-        )}
-        <p className="text-xs text-neutral-500">
-          Applying a suggestion categorizes all matching uncategorized transactions and saves a
-          reusable rule (description contains the pattern).
-        </p>
-      </section>
-
-      {/* Auto-apply */}
-      <section className="rounded-lg border border-neutral-200 dark:border-neutral-800 p-5 space-y-3">
-        <h2 className="font-semibold">Apply saved rules</h2>
-        <p className="text-sm text-neutral-500">
-          <strong>{uncategorized.toLocaleString()}</strong> transactions are currently
-          uncategorized. Run all {rules.length} saved rule{rules.length === 1 ? "" : "s"} against
-          them.
-        </p>
-        <div className="flex items-center gap-3">
-          <button
-            onClick={doAutoApply}
-            disabled={pending || rules.length === 0}
-            className="px-3 py-1.5 rounded-md bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 disabled:opacity-50"
-          >
-            Apply {rules.length} rule{rules.length === 1 ? "" : "s"} to uncategorized
-          </button>
-          {autoMsg && <span className="text-sm text-green-600">{autoMsg}</span>}
-        </div>
-      </section>
-
-      {/* Rule builder / bulk apply */}
-      <section className="rounded-lg border border-neutral-200 dark:border-neutral-800 p-5 space-y-3">
-        <h2 className="font-semibold">Bulk categorize by match</h2>
-        <div className="flex flex-wrap items-end gap-2">
-          <Field label="Match field">
-            <select value={field} onChange={(e) => setField(e.target.value as typeof field)} className={inputCls}>
-              <option value="description">Description</option>
-              <option value="category">Current category</option>
-            </select>
-          </Field>
-          <Field label="Type">
-            <select
-              value={matchType}
-              onChange={(e) => setMatchType(e.target.value as typeof matchType)}
-              className={inputCls}
-            >
-              <option value="contains">contains</option>
-              <option value="equals">equals</option>
-              <option value="regex">regex</option>
-            </select>
-          </Field>
-          <Field label="Pattern">
-            <input
-              value={pattern}
-              onChange={(e) => {
-                setPattern(e.target.value);
-                setPreview(null);
-              }}
-              placeholder="e.g. UBER"
-              className={inputCls + " w-56"}
+    <div className="space-y-4">
+      <div className="mp-grid items-start" style={{ "--cols": 2 } as React.CSSProperties}>
+        {/* Suggested rules */}
+        <Card title="Suggested rules" meta="from your most common uncategorized descriptions">
+          {visibleSuggestions.length === 0 ? (
+            <EmptyState
+              compact
+              icon="wand-sparkles"
+              title="No suggestions right now"
+              body="Nothing frequent is left to categorize."
             />
-          </Field>
-          <Field label="Set category to">
-            <select value={category} onChange={(e) => setCategory(e.target.value)} className={inputCls}>
-              <option value="">— pick —</option>
-              {categoryOptions.filter((c) => c.active).map((c) => (
-                <option key={c.name} value={c.name}>
-                  {c.emoji ? `${c.emoji} ` : ""}
-                  {c.name}
-                </option>
+          ) : (
+            <div>
+              {visibleSuggestions.map((s) => (
+                <div key={s.pattern} title={s.samples.join("\n")}>
+                  <ListRow
+                    lead={<Glyph icon="wand-sparkles" color={colorOf(sugCat[s.pattern])} />}
+                    title={
+                      <span className="flex min-w-0 flex-wrap items-center gap-1.5">
+                        <span className="font-mono text-[13px]">“{s.pattern}”</span>
+                        <span className="text-fg-3">→</span>
+                        <ColorSelect
+                          value={sugCat[s.pattern] ?? ""}
+                          options={active}
+                          placeholder="Pick category"
+                          onSelect={(v) => setSugCat((m) => ({ ...m, [s.pattern]: v }))}
+                        />
+                      </span>
+                    }
+                    sub={
+                      <>
+                        Matches {s.matchCount} transaction{s.matchCount === 1 ? "" : "s"}
+                        {s.samples[0] && <span className="max-sm:hidden"> · e.g. {s.samples[0]}</span>}
+                      </>
+                    }
+                    end={
+                      <Button
+                        size="sm"
+                        variant="soft"
+                        onClick={() => applySuggestion(s.pattern)}
+                        disabled={pending || !sugCat[s.pattern]}
+                        title={sugCat[s.pattern] ? undefined : "Pick a category first"}
+                      >
+                        Apply
+                      </Button>
+                    }
+                  />
+                </div>
               ))}
-            </select>
-          </Field>
-        </div>
-        <div className="flex flex-wrap items-center gap-4 text-sm">
-          <label className="flex items-center gap-1">
-            <input type="checkbox" checked={onlyUncat} onChange={(e) => setOnlyUncat(e.target.checked)} />
-            Only uncategorized
-          </label>
-          <label className="flex items-center gap-1">
-            <input type="checkbox" checked={saveRule} onChange={(e) => setSaveRule(e.target.checked)} />
-            Save as reusable rule
-          </label>
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={doPreview}
-            disabled={pending || !pattern.trim()}
-            className="px-3 py-1.5 rounded-md border border-neutral-300 dark:border-neutral-700 text-sm font-medium hover:bg-neutral-100 dark:hover:bg-neutral-800 disabled:opacity-50"
-          >
-            Preview
-          </button>
-          <button
-            onClick={doApply}
-            disabled={pending || !pattern.trim() || !category}
-            className="px-3 py-1.5 rounded-md bg-green-600 text-white text-sm font-medium hover:bg-green-700 disabled:opacity-50"
-          >
-            Apply
-          </button>
-          {applyMsg && <span className="text-sm text-green-600">{applyMsg}</span>}
-        </div>
-
-        {preview && (
-          <div className="rounded-md bg-neutral-100 dark:bg-neutral-900 p-3 text-sm space-y-1">
-            <div className="font-medium">
-              {preview.count.toLocaleString()} transaction{preview.count === 1 ? "" : "s"} match
             </div>
-            {preview.samples.length > 0 && (
-              <ul className="text-neutral-500 list-disc list-inside">
-                {preview.samples.map((s, i) => (
-                  <li key={i} className="truncate">
-                    {s}
-                  </li>
-                ))}
-              </ul>
+          )}
+          <p className="mt-3 text-xs text-fg-3">
+            Applying one categorizes every matching uncategorized transaction and saves a rule
+            (description contains the phrase) for future imports.
+          </p>
+        </Card>
+
+        {/* Rule builder / bulk apply */}
+        <Card title="Mass categorize" meta={`${uncategorized.toLocaleString()} uncategorized`}>
+          <div className="grid gap-3">
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Match on">
+                <Select
+                  value={field}
+                  onChange={(e) => stale(setField)(e.target.value as typeof field)}
+                  options={[
+                    { value: "description", label: "Description" },
+                    { value: "category", label: "Current category" },
+                  ]}
+                />
+              </Field>
+              <Field label="How">
+                <Select
+                  value={matchType}
+                  onChange={(e) => stale(setMatchType)(e.target.value as typeof matchType)}
+                  options={[
+                    { value: "contains", label: "Contains" },
+                    { value: "equals", label: "Equals" },
+                    { value: "regex", label: "Regex" },
+                  ]}
+                />
+              </Field>
+            </div>
+            <Field label={field === "description" ? "Description text" : "Category text"}>
+              <Input
+                icon="search"
+                value={pattern}
+                onChange={(e) => stale(setPattern)(e.target.value)}
+                placeholder="e.g. UBER"
+              />
+            </Field>
+            <Field label="Set category to">
+              <div>
+                <ColorSelect value={category} options={active} placeholder="Pick category" onSelect={setCategory} />
+              </div>
+            </Field>
+            <div className="flex flex-wrap gap-x-5 gap-y-2">
+              <Checkbox label="Only uncategorized" checked={onlyUncat} onChange={(e) => stale(setOnlyUncat)(e.target.checked)} />
+              <Checkbox label="Save as a rule" checked={saveRule} onChange={(e) => setSaveRule(e.target.checked)} />
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button variant="secondary" icon="eye" onClick={doPreview} disabled={pending || !pattern.trim()}>
+                Preview
+              </Button>
+              <Button icon="tags" onClick={doApply} disabled={pending || !pattern.trim() || !category}>
+                {preview ? `Categorize ${preview.count.toLocaleString()} match${preview.count === 1 ? "" : "es"}` : "Categorize matches"}
+              </Button>
+            </div>
+            {applyMsg && <Notice tone="ok">{applyMsg}</Notice>}
+            {preview && (
+              <div className="rounded-panel bg-sunken p-3 text-sm space-y-1">
+                <div className="font-medium">
+                  {preview.count.toLocaleString()} transaction{preview.count === 1 ? "" : "s"} match
+                </div>
+                {preview.samples.length > 0 && (
+                  <ul className="text-fg-3 list-disc list-inside">
+                    {preview.samples.map((s, i) => (
+                      <li key={i} className="truncate">
+                        {s}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
             )}
           </div>
+        </Card>
+      </div>
+
+      {/* Auto-apply */}
+      <Card
+        title="Apply saved rules"
+        meta={`${rules.length} rule${rules.length === 1 ? "" : "s"}`}
+        action={
+          <Button
+            size="sm"
+            icon="wand-sparkles"
+            onClick={doAutoApply}
+            disabled={pending || rules.length === 0}
+          >
+            Apply to uncategorized
+          </Button>
+        }
+      >
+        <p className="text-sm text-fg-2">
+          {uncategorized.toLocaleString()} transaction{uncategorized === 1 ? " is" : "s are"} uncategorized.
+          Run every saved rule against them.
+        </p>
+        {autoMsg && (
+          <Notice tone="ok" className="mt-3">
+            {autoMsg}
+          </Notice>
         )}
-      </section>
+      </Card>
 
       {/* Saved rules */}
-      <section className="rounded-lg border border-neutral-200 dark:border-neutral-800 p-5 space-y-3">
-        <div className="flex items-baseline justify-between gap-2 flex-wrap">
-          <h2 className="font-semibold">Saved rules ({rules.length})</h2>
-          {ruleMsg && <span className="text-sm text-green-600">{ruleMsg}</span>}
-        </div>
+      <Card title="Saved rules" meta={String(rules.length)}>
+        {ruleMsg && (
+          <Notice tone="ok" className="mb-3">
+            {ruleMsg}
+          </Notice>
+        )}
         {rules.length === 0 ? (
-          <p className="text-sm text-neutral-500">
-            No rules yet. Check &ldquo;Save as reusable rule&rdquo; above to create one.
-          </p>
+          <EmptyState
+            compact
+            icon="wand-sparkles"
+            title="No rules yet"
+            body="Tick “Save as a rule” when you categorize, and future imports follow it."
+          />
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="text-left text-neutral-500">
-                <tr>
-                  <th className="py-1 pr-3">Rule</th>
-                  <th className="py-1 pr-3">→ Category</th>
-                  <th className="py-1"></th>
-                </tr>
-              </thead>
-              <tbody>
-                {rules.map((r) => (
-                  <tr key={r.id} className="border-t border-neutral-100 dark:border-neutral-800">
-                    <td className="py-1 pr-3">{describeRuleMatch(r)}</td>
-                    <td className="py-1 pr-3">{r.category}</td>
-                    <td className="py-1 text-right whitespace-nowrap space-x-3">
-                      <button
-                        onClick={() => setEditing(r)}
-                        className="text-xs text-blue-600 hover:underline"
-                      >
-                        Edit
-                      </button>
-                      <button
-                        onClick={() =>
-                          start(async () => {
-                            await deleteCategoryRule(r.id);
-                            router.refresh();
-                          })
-                        }
-                        className="text-xs text-red-600 hover:underline"
-                      >
-                        Delete
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div>
+            {rules.map((r) => (
+              <ListRow
+                key={r.id}
+                lead={<Glyph icon="wand-sparkles" color={colorOf(r.category)} size="sm" />}
+                title={<span className="font-mono text-[13px]">{describeRuleMatch(r)}</span>}
+                sub={
+                  <span className="inline-flex items-center gap-1.5">
+                    →
+                    <Badge label={r.category} color={colorOf(r.category)} size="sm" />
+                  </span>
+                }
+                end={
+                  <span className="flex items-center gap-0.5">
+                    <IconButton icon="pencil" label="Edit rule" size="sm" onClick={() => setEditing(r)} />
+                    <IconButton
+                      icon="trash-2"
+                      label="Delete rule"
+                      size="sm"
+                      disabled={pending}
+                      className="hover:!text-over"
+                      onClick={() =>
+                        start(async () => {
+                          await deleteCategoryRule(r.id);
+                        })
+                      }
+                    />
+                  </span>
+                }
+              />
+            ))}
           </div>
         )}
         {editing && (
@@ -322,7 +321,6 @@ export function MassCategorize({
             mode={{ kind: "edit", rule: editing }}
             onSaved={(e) => {
               setRuleMsg(e.message);
-              router.refresh();
             }}
             onDeleted={(_, cleared) => {
               setRuleMsg(
@@ -330,20 +328,10 @@ export function MassCategorize({
                   ? `Rule removed; ${cleared} transaction${cleared === 1 ? "" : "s"} uncategorized again.`
                   : "Rule removed.",
               );
-              router.refresh();
             }}
           />
         )}
-      </section>
+      </Card>
     </div>
-  );
-}
-
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <label className="flex flex-col gap-1">
-      <span className="text-xs text-neutral-500">{label}</span>
-      {children}
-    </label>
   );
 }

@@ -9,6 +9,7 @@ import {
   type WithdrawalDetail,
 } from "@/server/actions/cash";
 import { formatMoney } from "@/server/lib/money";
+import { Icon, ProgressBar } from "@/components/ds";
 import { formatDate } from "@/server/lib/period";
 
 /**
@@ -54,7 +55,7 @@ export function CashOffsetDetail({ withdrawalId }: { withdrawalId: number }) {
       if (!res.ok) setError(res.error);
       setPickId("");
       await reload();
-      router.refresh();
+      if (!res.ok) router.refresh();
     });
   }
 
@@ -62,32 +63,32 @@ export function CashOffsetDetail({ withdrawalId }: { withdrawalId: number }) {
     start(async () => {
       await unallocateCash(withdrawalId, spendId);
       await reload();
-      router.refresh();
     });
   }
 
   if (loading && !detail)
-    return <div className="px-3 py-2 text-xs text-neutral-500">Loading cash detail…</div>;
+    return <div className="px-3 py-2 text-xs text-fg-3">Loading cash detail…</div>;
   if (!detail)
-    return <div className="px-3 py-2 text-xs text-neutral-500">Couldn&apos;t load this one.</div>;
+    return <div className="px-3 py-2 text-xs text-fg-3">Couldn&apos;t load this one.</div>;
 
   const { withdrawal: w, spends, linkable } = detail;
   const pct = w.amount > 0 ? Math.min(100, (w.allocated / w.amount) * 100) : 0;
 
   return (
-    <div className="px-3 py-3 space-y-3 bg-amber-50/60 dark:bg-amber-950/20">
+    <div className="px-4 py-3 space-y-3 bg-sunken">
       <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
-        <span className="text-xs font-medium text-amber-900 dark:text-amber-200">
-          💵 {formatMoney(w.amount)} withdrawn
+        <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-fg">
+          <Icon name="banknote" size={14} />
+          {formatMoney(w.amount)} withdrawn
         </span>
-        <span className="text-xs text-neutral-600 dark:text-neutral-300">
+        <span className="text-xs text-fg-2">
           {formatMoney(w.allocated)} accounted for
         </span>
         <span
           className={`text-xs font-semibold ${
             w.remaining > 0
-              ? "text-red-600 dark:text-red-400"
-              : "text-emerald-700 dark:text-emerald-400"
+              ? "text-over"
+              : "text-income"
           }`}
         >
           {formatMoney(w.remaining)} unaccounted
@@ -95,9 +96,13 @@ export function CashOffsetDetail({ withdrawalId }: { withdrawalId: number }) {
         </span>
       </div>
 
-      <div className="h-1.5 w-full max-w-md rounded-full bg-amber-200/70 dark:bg-amber-900/50 overflow-hidden">
-        <div className="h-full bg-emerald-500" style={{ width: `${pct}%` }} />
-      </div>
+      <ProgressBar
+        value={pct}
+        max={100}
+        size="sm"
+        className="max-w-md"
+        label="Share of this withdrawal accounted for"
+      />
 
       {spends.length > 0 ? (
         <ul className="space-y-1">
@@ -108,7 +113,7 @@ export function CashOffsetDetail({ withdrawalId }: { withdrawalId: number }) {
                 <span className="shrink-0 tabular-nums font-medium">
                   {formatMoney(s.allocatedAmount)}
                   {Math.abs(s.allocatedAmount - s.amount) > 0.004 && (
-                    <span className="ml-1 font-normal text-neutral-400">
+                    <span className="ml-1 font-normal text-fg-3">
                       of {formatMoney(s.amount)}
                     </span>
                   )}
@@ -116,13 +121,13 @@ export function CashOffsetDetail({ withdrawalId }: { withdrawalId: number }) {
                 <button
                   onClick={() => unlink(s.id)}
                   disabled={pending}
-                  className="shrink-0 px-1.5 py-1 text-red-600 hover:underline disabled:opacity-50"
+                  className="shrink-0 px-1.5 py-1 font-medium text-fg-2 hover:text-over hover:underline disabled:opacity-50"
                   title="Unlink — this purchase goes back to being separate spending"
                 >
                   Unlink
                 </button>
               </div>
-              <div className="text-neutral-500 tabular-nums">
+              <div className="text-fg-3 tabular-nums">
                 {formatDate(s.txnDate)}
                 {s.category ? ` · ${s.category}` : ""}
               </div>
@@ -130,7 +135,7 @@ export function CashOffsetDetail({ withdrawalId }: { withdrawalId: number }) {
           ))}
         </ul>
       ) : (
-        <p className="text-xs text-neutral-500">
+        <p className="text-xs text-fg-3">
           Nothing logged against this withdrawal yet, so all {formatMoney(w.amount)} counts as
           spending.
         </p>
@@ -141,7 +146,7 @@ export function CashOffsetDetail({ withdrawalId }: { withdrawalId: number }) {
           value={pickId}
           onChange={(e) => setPickId(e.target.value)}
           disabled={!linkable.length || w.remaining <= 0}
-          className="w-full sm:w-auto sm:max-w-md min-w-0 border rounded px-2 py-1.5 text-xs bg-transparent border-neutral-300 dark:border-neutral-700 disabled:opacity-50"
+          className="mp-select !h-9 !text-xs sm:!w-auto sm:max-w-md min-w-0 disabled:opacity-50"
         >
           <option value="">
             {w.remaining <= 0
@@ -160,11 +165,11 @@ export function CashOffsetDetail({ withdrawalId }: { withdrawalId: number }) {
         <button
           onClick={link}
           disabled={pending || !pickId}
-          className="px-3 py-1.5 rounded bg-amber-600 text-white text-xs font-medium hover:bg-amber-700 disabled:opacity-50"
+          className="mp-btn mp-btn--secondary mp-btn--sm"
         >
           Offset
         </button>
-        {error && <span className="text-xs text-red-600 dark:text-red-400">{error}</span>}
+        {error && <span className="text-xs text-over">{error}</span>}
       </div>
     </div>
   );

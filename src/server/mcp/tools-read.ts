@@ -19,7 +19,9 @@ import {
   getInstances,
   getLatestPeriod,
   getLiabilityAccounts,
+  getLiabilityStartBalances,
   getPaySchedule,
+  getPendingTransactions,
   getPeriodByLabel,
   getStatusConfig,
   getTransactionsPage,
@@ -28,7 +30,8 @@ import {
 import { monthlyInterest } from "@/server/lib/debt";
 import { projectPayoff } from "@/server/lib/budget";
 import { resolvePaydays, todayIso } from "@/server/lib/pay-schedule";
-import { parsePeriodLabel } from "@/server/lib/period";
+import { monthBounds, parsePeriodLabel } from "@/server/lib/period";
+import { cardRebalanceFrom, rebalancePlans } from "@/server/lib/card-rebalance";
 import { DEBT_STRATEGIES } from "@/constants/enums";
 
 const READ_ONLY = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
@@ -182,7 +185,7 @@ export function registerReadTools(server: McpServer) {
     {
       title: "Month summary",
       description:
-        "Income vs. spending for one month, spending by category, bills (planned / settled / outstanding) and the budget plan-vs-actual if a budget exists. The core tool for 'how did last month go' and 'where is my money going'. Cash withdrawals are reconciled so nothing is double counted. `spending` never includes debt payments: paying back a card's new purchases only rebalances it (the purchases are already counted). `debtPaydown` is payments minus new charges across every debt (negative = debt grew); `outgoing` = spending + debtPaydown, so `net` tracks the change in cash on hand.",
+        "Income vs. spending for one month, spending by category, bills (planned / settled / outstanding) and the budget plan-vs-actual if a budget exists. The core tool for 'how did last month go' and 'where is my money going'. Cash withdrawals are reconciled so nothing is double counted.",
       inputSchema: z.object({ period: periodArg }),
       annotations: READ_ONLY,
     },
@@ -195,17 +198,15 @@ export function registerReadTools(server: McpServer) {
         billsForPeriod(label),
         getBudgetView(label),
       ]);
-      const month = flows.find((f) => f.label === label);
-      const income = money0(month?.income);
-      const spending = money0(month?.spending);
-      const debtPaydown = money0(month?.debtPaydown);
-      const outgoing = money0(month?.outgoing);
+      const month = flows.filter((f) => f.label === label);
+      const income = money0(month.find((f) => f.direction === "Credit")?.total);
+      const spending = money0(month.find((f) => f.direction === "Debit")?.total);
       const settledBills = (bills ?? []).filter((b) => b.settled && !b.cancelled);
       const openBills = (bills ?? []).filter((b) => !b.settled && !b.cancelled);
 
       return ok({
         period: label,
-        cashflow: { income, spending, debtPaydown, outgoing, net: money0(income - outgoing) },
+        cashflow: { income, spending, net: money0(income - spending) },
         spendingByCategory: categories.map((c) => ({ category: c.category ?? "Uncategorized", amount: money0(c.total) })),
         bills: bills
           ? {
@@ -231,6 +232,8 @@ export function registerReadTools(server: McpServer) {
                 actual: money0(l.actual),
                 remaining: money0(l.planned - l.actual),
                 isTarget: l.isTarget,
+                // Debt lines: actual = payoff (payments beyond new charges on the card); paid = every linked
+                // payment; charged = new spending on the card this month, which paid only rebalances.
                 ...(l.kind === "debt" ? { paid: money0(l.paid), charged: money0(l.charged) } : {}),
               })),
               plannedTotal: money0(budget.lines.reduce((s, l) => s + l.planned, 0)),
@@ -247,7 +250,7 @@ export function registerReadTools(server: McpServer) {
     {
       title: "Spending trends",
       description:
-        "Income, spending, debt paydown (payments minus new charges) and net for each of the last N months, plus a category × month matrix. Use to spot drift ('dining has doubled since June') and to estimate a realistic monthly burn. Remember months before ~2026-06 may be incomplete.",
+        "Income, spending and net for each of the last N months, plus a category × month matrix. Use to spot drift ('dining has doubled since June') and to estimate a realistic monthly burn. Remember months before ~2026-06 may be incomplete.",
       inputSchema: z.object({
         months: z.number().int().min(1).max(12).default(6).describe("How many months back from `endPeriod`."),
         endPeriod: periodArg,
@@ -262,7 +265,13 @@ export function registerReadTools(server: McpServer) {
         getCashflowByPeriod(),
         Promise.all(labels.map((l) => getCategorySpend(l))),
       ]);
-      const byLabel = new Map(flows.map((f) => [f.label, f]));
+      const byLabel = new Map<string, { income: number; spending: number }>();
+      for (const f of flows) {
+        const row = byLabel.get(f.label) ?? { income: 0, spending: 0 };
+        if (f.direction === "Credit") row.income = money0(f.total);
+        else if (f.direction === "Debit") row.spending = money0(f.total);
+        byLabel.set(f.label, row);
+      }
       const categorySet = new Set<string>();
       perMonth.forEach((rows) => rows.forEach((r) => categorySet.add(r.category ?? "Uncategorized")));
       const matrix = [...categorySet].map((category) => ({
@@ -274,14 +283,8 @@ export function registerReadTools(server: McpServer) {
       matrix.sort((a, b) => Object.values(b.byMonth).reduce((s, v) => s + v, 0) - Object.values(a.byMonth).reduce((s, v) => s + v, 0));
       return ok({
         months: labels.map((l) => {
-          const row = byLabel.get(l);
-          return {
-            period: l,
-            income: money0(row?.income),
-            spending: money0(row?.spending),
-            debtPaydown: money0(row?.debtPaydown),
-            net: money0((row?.income ?? 0) - (row?.outgoing ?? 0)),
-          };
+          const row = byLabel.get(l) ?? { income: 0, spending: 0 };
+          return { period: l, income: row.income, spending: row.spending, net: money0(row.income - row.spending) };
         }),
         categories: matrix,
       });
@@ -375,6 +378,49 @@ export function registerReadTools(server: McpServer) {
         statuses: statuses.map((s) => ({ name: s.name, settled: s.isSettled })),
         total: money0(rows.filter((b) => !b.cancelled).reduce((s, b) => s + (b.amount ?? 0), 0)),
         bills: rows,
+      });
+    },
+  );
+
+  server.registerTool(
+    "get_card_rebalance",
+    {
+      title: "Card rebalance (owed to cards this month)",
+      description:
+        "How far each active credit card is over the balance it started the current month at — the payment that brings it back after charging to it. Before this month's budgeted payoff payment is made, it's measured against the starting balance and excludes the payoff. Once payments linked to the card reach the budget's planned amount (`planPaid`), it's measured against the balance the plan leaves (`target` = start + a month's interest − planned), so charges after the payoff still show. Per card: `start` (balance before the 1st, or the first one recorded this month), `balance` (latest posted balance), `pending` (net pending activity on the card: charges minus credits/payments, which the posted balance doesn't include yet), `now` = balance + pending, `change` = now − start, `target` = start (or the plan's balance once `planPaid`), `owe` = max(0, now − target). `totalOwe` sums `owe`. Cards missing a start or current balance are listed in `missing`. Same figure as the dashboard's \"Pay to rebalance\" widget.",
+      inputSchema: z.object({}),
+      annotations: READ_ONLY,
+    },
+    async () => {
+      const today = todayIso();
+      const { year, month } = parsePeriodLabel(today.slice(0, 7))!;
+      const { start: monthStart } = monthBounds(year, month);
+      const [liabilities, start, pending, budget] = await Promise.all([
+        getLiabilityAccounts(),
+        getLiabilityStartBalances(monthStart, today),
+        getPendingTransactions(),
+        getBudgetView(today.slice(0, 7)),
+      ]);
+      const r = cardRebalanceFrom(liabilities, start, pending, rebalancePlans(budget?.lines ?? []));
+      return ok({
+        asOf: today,
+        monthStart,
+        totalOwe: money0(r.owe),
+        cards: r.rows.map((c) => ({
+          accountId: c.accountId,
+          label: c.label,
+          start: money0(c.start),
+          startAsOf: c.startAsOf,
+          balance: money0(c.balance),
+          balanceAsOf: c.nowAsOf,
+          pending: money0(c.pending),
+          now: money0(c.now),
+          change: money0(c.change),
+          planPaid: c.planPaid,
+          target: money0(c.target),
+          owe: money0(c.owe),
+        })),
+        missing: r.missing,
       });
     },
   );
@@ -500,7 +546,15 @@ export function registerReadTools(server: McpServer) {
             debt: money0(projection.totals.debt),
             spending: money0(projection.totals.spending),
           },
+          // Observed pace (spend so far ÷ days so far) carried forward — what the projection uses.
           everydaySpendPerDay: money0(projection.spreadDaily),
+          // The conservative bookend: where the month lands if the budget is spent to the last
+          // dollar instead. `daily` climbs as the month closes, so it is NOT a spending forecast.
+          ifBudgetFullySpent: {
+            remaining: money0(projection.envelope.total),
+            perDay: money0(projection.envelope.daily),
+            projectedEnd: money0(projection.envelope.endBalance),
+          },
           savingsPlanned: money0(projection.savingsPlanned),
           // Why the projected inflow is what it is. A payday whose `arrived` already covers
           // `expected` adds nothing further — the money is inside cashNow. An incomplete one whose
@@ -514,8 +568,22 @@ export function registerReadTools(server: McpServer) {
           })),
           // Credits in the month that matched no payday — income the plan didn't anticipate.
           unexpectedIncome: money0(projection.months[projection.focusIndex]?.unexpectedIncome ?? 0),
-          // How today's projection compares with what earlier days said it would be.
-          forecastHistory: (projection.trend?.series ?? []).map((s) => ({ takenOn: s.takenOn, projectedEnd: money0(s.endBalance) })),
+          // Above/below plan: cash as of `asOf` against the month as budgeted from its opening
+          // balance (fixed — it only changes if the budget is edited). A bill paid before its due
+          // day reads as "below" until that day; that's timing, not overspending.
+          vsPlan: (() => {
+            const plan = projection.plan;
+            if (!plan) return null;
+            const planToday = plan.days.find((d) => d.date === projection.asOf)?.balance ?? plan.start;
+            return {
+              planStart: money0(plan.start),
+              planToday: money0(planToday),
+              cashToday: money0(projection.start),
+              aboveBelowPlan: money0(projection.start - planToday),
+              planEnd: money0(plan.endBalance),
+              projectedVsPlanEnd: money0(projection.endBalance - plan.endBalance),
+            };
+          })(),
           upcomingEvents: projection.events.map((e) => ({ date: e.date, kind: e.kind, label: e.label, amount: money0(e.amount) })),
           debt: {
             highInterestNow: money0(projection.debt.hotNow),
@@ -602,6 +670,8 @@ export function registerReadTools(server: McpServer) {
             actual: money0(l.actual),
             remaining: money0(l.planned - l.actual),
             minimum: money(l.minimum),
+            // Debt lines: actual = payoff (payments beyond new charges on the card); paid = every linked
+            // payment; charged = new spending on the card this month, which paid only rebalances.
             ...(l.kind === "debt" ? { paid: money0(l.paid), charged: money0(l.charged) } : {}),
             isTarget: l.isTarget,
             balance: money(l.balance),

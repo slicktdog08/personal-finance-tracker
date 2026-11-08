@@ -1,17 +1,25 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { badgeStyle, toHexInput } from "@/lib/colors";
+import { useState } from "react";
+import { toHexInput } from "@/lib/colors";
 import { EmojiPicker } from "@/components/EmojiPicker";
-import { GripIcon } from "@/components/icons";
+import { Badge, Glyph, Icon, IconButton, cx, type IconName, type VarStyle } from "@/components/ds";
 
-// A single reorderable list item rendered as a full-color tile. The picked color is the
-// tile background (readable text auto-computed). A "Change" button reveals the color +
-// emoji editors. Per-list extras (settled toggle, rename, delete, counts) come via slots.
+// The kit's quick-pick palette. Any other hex is still one tap away via the custom swatch.
+export const SWATCHES = ["#22c55e", "#0ea5e9", "#6366f1", "#a855f7", "#d946ef", "#ef4444", "#f97316", "#eab308", "#64748b"];
+
+/**
+ * One reorderable row in a settings list (category, bill status, payment type), in the kit's
+ * shape: glyph, the item as its own solid badge, and a row of color swatches that recolor it in
+ * place. Reorder is HTML5 drag on the handle (desktop) plus ▲▼ buttons — the only path that
+ * works on touch. The pencil opens the emoji picker and any per-list extras; rename, delete,
+ * counts and toggles come in through the slots.
+ */
 export function SettingTile({
   name,
   color,
   emoji,
+  icon = "tag",
   disabled = false,
   dragging = false,
   muted = false,
@@ -30,6 +38,8 @@ export function SettingTile({
   name: string;
   color: string;
   emoji: string | null;
+  /** Shown in the glyph when no emoji is picked. */
+  icon?: IconName;
   disabled?: boolean;
   dragging?: boolean;
   /** Washed-out rendering for items that exist but are switched off (e.g. disabled categories). */
@@ -48,83 +58,95 @@ export function SettingTile({
   belowSlot?: React.ReactNode;
 }) {
   const [editing, setEditing] = useState(false);
-  // Live color preview; re-sync to the persisted color after a refresh.
+  // Live color preview; re-synced to the persisted color when a refresh brings a new one
+  // (adjusted during render — the project pattern instead of a syncing effect).
   const [c, setC] = useState(toHexInput(color));
-  useEffect(() => setC(toHexInput(color)), [color]);
+  const [seen, setSeen] = useState(color);
+  if (seen !== color) {
+    setSeen(color);
+    setC(toHexInput(color));
+  }
+  const custom = !SWATCHES.includes(c.toLowerCase());
+
+  const pick = (hex: string) => {
+    if (disabled || hex === toHexInput(color)) return;
+    setC(hex);
+    onColor(hex);
+  };
 
   return (
-    <div
-      {...tileProps}
-      style={badgeStyle(c)}
-      className={`rounded-xl shadow-sm transition-shadow ${
-        dragging ? "opacity-60 ring-2 ring-blue-400" : muted ? "opacity-55 saturate-50" : ""
-      }`}
-    >
-      {/* Colored header */}
-      <div className="flex items-center gap-2.5 px-3 py-2.5">
+    <div {...tileProps} className={cx("border-b border-line last:border-b-0", dragging && "rounded-panel bg-accent-soft opacity-70")}>
+      <div className={cx("flex flex-wrap items-center gap-x-2.5 gap-y-2 py-2.5", muted && "opacity-55 saturate-50")}>
         <span
           {...handleProps}
           title="Drag to reorder"
           aria-label="Drag to reorder"
-          className="cursor-grab active:cursor-grabbing opacity-70 hover:opacity-100 shrink-0 touch-none"
+          className="hidden shrink-0 cursor-grab touch-none text-fg-3 hover:text-fg active:cursor-grabbing md:inline-flex"
         >
-          <GripIcon />
+          <Icon name="grip-vertical" size={16} />
         </span>
         {(onMoveUp !== undefined || onMoveDown !== undefined) && (
-          <span className="flex shrink-0 gap-0.5">
-            <button
-              type="button"
-              onClick={onMoveUp ?? undefined}
-              disabled={!onMoveUp || disabled}
-              aria-label={`Move ${name} up`}
-              className="h-9 w-8 md:h-7 md:w-7 flex items-center justify-center rounded bg-black/10 hover:bg-black/20 text-xs disabled:opacity-30"
-            >
-              ▲
-            </button>
-            <button
-              type="button"
-              onClick={onMoveDown ?? undefined}
-              disabled={!onMoveDown || disabled}
-              aria-label={`Move ${name} down`}
-              className="h-9 w-8 md:h-7 md:w-7 flex items-center justify-center rounded bg-black/10 hover:bg-black/20 text-xs disabled:opacity-30"
-            >
-              ▼
-            </button>
+          <span className="flex shrink-0">
+            <IconButton icon="chevron-up" size="sm" label={`Move ${name} up`} onClick={onMoveUp ?? undefined} disabled={!onMoveUp || disabled} />
+            <IconButton icon="chevron-down" size="sm" label={`Move ${name} down`} onClick={onMoveDown ?? undefined} disabled={!onMoveDown || disabled} />
           </span>
         )}
-        <span className="text-2xl leading-none w-8 text-center shrink-0">
-          {emoji || <span className="opacity-40 text-base">·</span>}
-        </span>
-        <div className="min-w-0 flex-1">{nameSlot ?? <span className="font-medium truncate">{name}</span>}</div>
-        {badge}
-        {headerActions}
-        <button
-          type="button"
-          onClick={() => setEditing((e) => !e)}
-          disabled={disabled}
-          className="shrink-0 text-xs font-medium px-2.5 py-1 rounded-md bg-black/15 hover:bg-black/25 disabled:opacity-50"
-        >
-          {editing ? "Done" : "Change"}
-        </button>
-      </div>
-
-      {/* Neutral editor panel (kept readable regardless of tile color) */}
-      {editing && (
-        <div className="rounded-b-xl bg-white dark:bg-neutral-900 text-neutral-900 dark:text-neutral-100 border-t border-black/10 px-3 py-3 flex flex-wrap items-center gap-4">
-          <label className="flex items-center gap-2 text-sm">
-            <span className="text-neutral-500">Color</span>
+        <Glyph icon={emoji ? undefined : icon} color={c} size="sm">
+          {emoji ? <span className="text-sm leading-none">{emoji}</span> : null}
+        </Glyph>
+        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
+          {nameSlot ?? <Badge label={name} color={c} variant="solid" dot={false} className="max-w-full" />}
+          {badge}
+        </div>
+        {/* Swatches drop to their own line on phones; inline from lg. */}
+        <div className="order-last flex basis-full flex-wrap items-center gap-1 lg:order-none lg:basis-auto" role="group" aria-label={`${name} color`}>
+          {SWATCHES.map((s) => (
+            <button
+              key={s}
+              type="button"
+              aria-label={s}
+              aria-pressed={c.toLowerCase() === s}
+              disabled={disabled}
+              onClick={() => pick(s)}
+              className="h-[18px] w-[18px] shrink-0 cursor-pointer rounded-full border-0 disabled:cursor-not-allowed"
+              style={{
+                background: s,
+                boxShadow: c.toLowerCase() === s ? `0 0 0 2px var(--mp-bg-surface), 0 0 0 4px ${s}` : "none",
+              }}
+            />
+          ))}
+          {/* Any other hex: the native picker, drawn as one more swatch. Previews live, saves on blur. */}
+          <label
+            title="Custom color"
+            className="relative ml-0.5 grid h-[18px] w-[18px] shrink-0 cursor-pointer place-items-center rounded-full border border-dashed border-line-strong"
+            style={custom ? ({ background: c, borderStyle: "solid", borderColor: c, boxShadow: `0 0 0 2px var(--mp-bg-surface), 0 0 0 4px ${c}` } as VarStyle) : undefined}
+          >
+            {!custom && <Icon name="plus" size={11} className="text-fg-3" />}
             <input
               type="color"
               value={c}
               disabled={disabled}
               onChange={(e) => setC(e.target.value)}
               onBlur={() => c !== toHexInput(color) && onColor(c)}
-              aria-label={`${name} color`}
-              className="w-9 h-9 p-0 rounded border-0 bg-transparent cursor-pointer disabled:opacity-50"
+              aria-label={`${name} custom color`}
+              className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
             />
           </label>
-          <label className="flex items-center gap-2 text-sm">
-            <span className="text-neutral-500">Emoji</span>
+        </div>
+        {headerActions}
+        <IconButton
+          icon={editing ? "check" : "ellipsis"}
+          size="sm"
+          label={editing ? "Done" : `More options for ${name}`}
+          onClick={() => setEditing((e) => !e)}
+          disabled={disabled}
+        />
+      </div>
+
+      {editing && (
+        <div className="mb-2.5 flex flex-wrap items-center gap-4 rounded-panel bg-sunken px-3 py-2.5 text-sm">
+          <label className="flex items-center gap-2">
+            <span className="text-fg-2">Emoji</span>
             <EmojiPicker value={emoji} onSelect={onEmoji} disabled={disabled} />
           </label>
           {editorExtras}

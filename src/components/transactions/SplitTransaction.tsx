@@ -1,10 +1,8 @@
 "use client";
 
 import { useRef, useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
 import { Sheet } from "@/components/ui/Sheet";
-import { ColorBadge } from "@/components/ColorBadge";
-import { ScissorsIcon } from "@/components/icons";
+import { Badge, Icon } from "@/components/ds";
 import { CASH_SOURCE_CATEGORY } from "@/constants/enums";
 import { setTransactionSplits } from "@/server/actions/splits";
 import { formatMoney, toNum } from "@/server/lib/money";
@@ -41,7 +39,6 @@ export function SplitTransaction({
   /** Set when this row can't be split (a cash withdrawal); shown as the button's tooltip. */
   disabledReason?: string;
 }) {
-  const router = useRouter();
   const btnRef = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
   const [pending, start] = useTransition();
@@ -96,19 +93,20 @@ export function SplitTransaction({
         return;
       }
       setOpen(false);
-      router.refresh();
     });
   }
 
   const inputCls =
-    "border rounded px-2 py-1 text-sm bg-transparent border-neutral-300 dark:border-neutral-700";
+    "mp-input !h-9";
+
+  const selectCls = "mp-select !h-9";
   const pickable = (current: string) =>
     categoryOptions.filter((c) => c.active || c.name === current);
   const catSelect = (value: string, onChange: (v: string) => void, placeholder: string) => (
     <select
       value={value}
       onChange={(e) => onChange(e.target.value)}
-      className={inputCls + " flex-1 min-w-0"}
+      className={selectCls + " flex-1 min-w-0"}
     >
       <option value="">{placeholder}</option>
       {pickable(value).map((c) => (
@@ -131,11 +129,10 @@ export function SplitTransaction({
         disabled={pending || !!disabledReason}
         title={disabledReason ?? (isSplit ? "Edit how this is split" : "Split across categories")}
         aria-label="Split transaction"
-        className={`inline-flex items-center justify-center rounded p-1 hover:bg-violet-50 disabled:opacity-40 dark:hover:bg-violet-950/40 ${
-          isSplit ? "text-violet-600 hover:text-violet-700" : "text-neutral-500 hover:text-violet-600"
-        }`}
+        // Accent when the row is already split, so split rows are findable at a glance.
+        className={`mp-btn mp-iconbtn mp-btn--sm ${isSplit ? "mp-btn--soft" : "mp-btn--ghost"}`}
       >
-        <ScissorsIcon className="h-4 w-4" />
+        <Icon name="scissors" size={16} />
       </button>
       <Sheet
         open={open}
@@ -146,20 +143,20 @@ export function SplitTransaction({
         width={340}
       >
         <div className="space-y-3 text-left">
-          <p className="text-xs text-neutral-500">
-            <span className="font-medium text-neutral-700 dark:text-neutral-200">
+          <p className="text-xs text-fg-3">
+            <span className="font-medium text-fg">
               {formatMoney(total)}
             </span>{" "}
             · <span className="truncate">{txn.description}</span>
           </p>
 
           <div className="space-y-1">
-            <span className="text-xs text-neutral-500">Keeps the rest</span>
+            <span className="mp-field__label">Keeps the rest</span>
             <div className="flex items-center gap-2">
               {catSelect(mainCat, setMainCat, "— uncategorized —")}
               <span
                 className={`w-20 shrink-0 text-right text-sm tabular-nums font-medium ${
-                  leftCents > 0 ? "" : "text-red-600 dark:text-red-400"
+                  leftCents > 0 ? "" : "text-over"
                 }`}
               >
                 {formatMoney(leftCents / 100)}
@@ -169,7 +166,7 @@ export function SplitTransaction({
           </div>
 
           <div className="space-y-1">
-            <span className="text-xs text-neutral-500">Split off</span>
+            <span className="mp-field__label">Split off</span>
             {parts.map((p) => (
               <div key={p.key} className="flex items-center gap-2">
                 {catSelect(p.category, (v) => update(p.key, { category: v }), "— category —")}
@@ -184,22 +181,22 @@ export function SplitTransaction({
                   onClick={() => remove(p.key)}
                   title="Remove this part"
                   aria-label="Remove this part"
-                  className="w-6 shrink-0 text-neutral-400 hover:text-red-600"
+                  className="inline-flex w-6 shrink-0 justify-center text-fg-3 hover:text-over"
                 >
-                  ✕
+                  <Icon name="x" size={14} />
                 </button>
               </div>
             ))}
             <div className="flex items-center gap-3">
-              <button onClick={addPart} className="text-xs text-violet-600 hover:underline">
-                + Add another part
+              <button onClick={addPart} className="text-xs font-medium text-accent-text hover:underline">
+                Add another part
               </button>
               {parts.length === 1 && total > 0 && (
                 <button
                   onClick={() =>
                     update(parts[0].key, { amount: (Math.floor(cents(total) / 2) / 100).toFixed(2) })
                   }
-                  className="text-xs text-neutral-500 hover:underline"
+                  className="text-xs text-fg-3 hover:underline"
                   title="Split it down the middle"
                 >
                   Half
@@ -209,25 +206,25 @@ export function SplitTransaction({
           </div>
 
           {parts.some((p) => p.category === CASH_SOURCE_CATEGORY) && (
-            <p className="text-[11px] text-amber-700 dark:text-amber-400">
-              💵 The {CASH_SOURCE_CATEGORY} part is treated as cash back: it works like an ATM
+            <p className="text-[11px] text-warn">
+              The {CASH_SOURCE_CATEGORY} part is treated as cash back: it works like an ATM
               withdrawal, so cash purchases can be offset against it on /cash.
             </p>
           )}
           {leftCents <= 0 && (
-            <p className="text-xs text-red-600 dark:text-red-400">
+            <p className="text-xs text-over">
               The parts can&apos;t take the whole {formatMoney(total)} — something has to stay in
               the first category.
             </p>
           )}
-          {error && <p className="text-xs text-red-600 dark:text-red-400">{error}</p>}
+          {error && <p className="text-xs text-over">{error}</p>}
 
           <div className="flex items-center gap-2 pt-1">
             {isSplit && (
               <button
                 onClick={() => save([])}
                 disabled={pending}
-                className="px-2 py-1.5 text-sm text-red-600 hover:underline disabled:opacity-50"
+                className="mp-btn mp-btn--ghost mp-btn--sm !text-over"
                 title="Put the whole amount back in one category"
               >
                 Unsplit
@@ -235,7 +232,7 @@ export function SplitTransaction({
             )}
             <button
               onClick={() => setOpen(false)}
-              className="ml-auto px-3 py-1.5 text-sm text-neutral-500 hover:underline"
+              className="ml-auto mp-btn mp-btn--ghost mp-btn--sm"
             >
               Cancel
             </button>
@@ -244,7 +241,7 @@ export function SplitTransaction({
                 save(filled.map((p) => ({ category: p.category, amount: parseAmount(p.amount) })))
               }
               disabled={pending || !valid}
-              className="px-3 py-1.5 rounded-md bg-violet-600 text-white text-sm font-medium hover:bg-violet-700 disabled:opacity-50"
+              className="mp-btn mp-btn--primary mp-btn--sm"
             >
               {pending ? "Saving…" : "Save"}
             </button>
@@ -273,17 +270,19 @@ export function SplitSummary({
   const splitCents = splits.reduce((s, p) => s + cents(toNum(p.amount) ?? 0), 0);
   const keeps = (cents(toNum(amount) ?? 0) - splitCents) / 100;
   return (
-    <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-neutral-500">
-      <span className="tabular-nums" title="What stays in the category above">
-        ✂ {formatMoney(keeps)} here
+    <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-fg-3">
+      <span className="inline-flex items-center gap-1 tabular-nums" title="What stays in the category above">
+        <Icon name="scissors" size={11} />
+        {formatMoney(keeps)} here
       </span>
       {splits.map((p) => (
         <span key={p.id} className="inline-flex items-center gap-1 tabular-nums">
           + {formatMoney(p.amount)}
-          <ColorBadge
+          <Badge
             label={p.category}
             color={meta.get(p.category)?.color}
             emoji={meta.get(p.category)?.emoji}
+            size="sm"
           />
         </span>
       ))}

@@ -13,7 +13,7 @@ export default async function ImportPage() {
       getCategoryRules(),
     ]);
   } catch (e) {
-    return <SetupNotice error={e instanceof Error ? e.message : String(e)} />;
+    return <SetupNotice error={e} />;
   }
 
   return (

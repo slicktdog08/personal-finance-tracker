@@ -1,5 +1,6 @@
+import { SettingsBackLink } from "@/components/settings/SettingsHeader";
+import { Badge, Card, DataTable, EmptyState, Glyph, Money, PageHeader } from "@/components/ds";
 import Link from "next/link";
-import { ArrowLeftIcon } from "@/components/icons";
 import { SetupNotice } from "@/components/SetupNotice";
 import { RecurringSuggestions } from "@/components/bills/RecurringSuggestions";
 import {
@@ -9,7 +10,8 @@ import {
   getRecurringSuggestions,
   getBillNames,
 } from "@/server/queries";
-import { formatMoney, toNum } from "@/server/lib/money";
+import { toNum } from "@/server/lib/money";
+import { billIcon } from "@/components/bills/billGlyph";
 
 export const dynamic = "force-dynamic";
 
@@ -24,7 +26,7 @@ export default async function BillsPage() {
       getBillNames(),
     ]);
   } catch (e) {
-    return <SetupNotice error={e instanceof Error ? e.message : String(e)} />;
+    return <SetupNotice error={e} />;
   }
 
   const settled = new Set(statusConfig.filter((s) => s.isSettled).map((s) => s.name));
@@ -51,60 +53,67 @@ export default async function BillsPage() {
 
   return (
     <div className="space-y-6">
-      <div className="space-y-2">
-        <Link href="/settings" className="inline-flex items-center gap-1 text-sm text-neutral-500 hover:text-blue-600">
-          <ArrowLeftIcon /> Settings
-        </Link>
-        <h1 className="text-2xl font-bold tracking-tight">Bills</h1>
-        <p className="text-sm text-neutral-500">
-          Recurring bill definitions across all months. Click a bill for its full history and to
-          consolidate duplicates. Each month&apos;s sheet is created automatically from the previous
-          one — edit a month from the dashboard.
-        </p>
-      </div>
+      <PageHeader
+        showTitleOnMobile
+        eyebrow={<SettingsBackLink />}
+        title="Recurring bills"
+        description={
+          <>
+            Every recurring bill across all months. Open one for its full history and to consolidate
+            duplicates. Each month&apos;s bills carry over from the previous one — edit a month under <Link href="/months" className="text-accent-text hover:underline">Bills</Link>.
+          </>
+        }
+      />
 
       <RecurringSuggestions suggestions={suggestions} bills={billNames} />
 
-      <div className="overflow-x-auto rounded-lg border border-neutral-200 dark:border-neutral-800">
-        <table className="w-full text-sm">
-          <thead className="bg-neutral-100 dark:bg-neutral-900 text-left">
-            <tr>
-              <th className="px-3 py-2 font-medium">Bill</th>
-              <th className="px-3 py-2 font-medium text-center">Debt</th>
-              <th className="px-3 py-2 font-medium text-right">Months</th>
-              <th className="px-3 py-2 font-medium text-right">Times paid</th>
-              <th className="px-3 py-2 font-medium text-right">Total billed</th>
-              <th className="px-3 py-2 font-medium text-right">Total paid</th>
-            </tr>
-          </thead>
-          <tbody>
-            {sorted.map((b) => {
-              const s = stats.get(b.id) ?? { months: 0, timesPaid: 0, billed: 0, paid: 0 };
-              return (
-                <tr key={b.id} className="border-t border-neutral-200 dark:border-neutral-800">
-                  <td className="px-3 py-1.5">
-                    <Link href={`/settings/bills/${b.id}`} className="text-blue-600 hover:underline font-medium">
-                      {b.name}
-                    </Link>
-                  </td>
-                  <td className="px-3 py-1.5 text-center">{b.isDebt ? "💳" : ""}</td>
-                  <td className="px-3 py-1.5 text-right tabular-nums">{s.months}</td>
-                  <td className="px-3 py-1.5 text-right tabular-nums">{s.timesPaid}</td>
-                  <td className="px-3 py-1.5 text-right tabular-nums">{formatMoney(s.billed)}</td>
-                  <td className="px-3 py-1.5 text-right tabular-nums">{formatMoney(s.paid)}</td>
-                </tr>
-              );
-            })}
-            {sorted.length === 0 && (
-              <tr>
-                <td colSpan={6} className="px-3 py-6 text-center text-neutral-500">
-                  No bills yet.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
+      <Card title="All bills" meta={`${sorted.length}`} padded={false}>
+        <DataTable
+          rows={sorted.map((b) => ({ ...b, s: stats.get(b.id) ?? { months: 0, timesPaid: 0, billed: 0, paid: 0 } }))}
+          columns={[
+            {
+              key: "name",
+              header: "Bill",
+              render: (b) => (
+                <span className="flex min-w-0 items-center gap-2.5">
+                  <Glyph icon={billIcon(b.name, b.isDebt)} size="sm" />
+                  <Link href={`/settings/bills/${b.id}`} className="truncate font-medium text-fg hover:text-accent-text hover:underline">
+                    {b.name}
+                  </Link>
+                  {b.isDebt && <Badge label="Debt" variant="outline" size="sm" dot={false} />}
+                </span>
+              ),
+            },
+            { key: "months", header: "Months", num: true, render: (b) => b.s.months },
+            { key: "timesPaid", header: "Times paid", num: true, render: (b) => b.s.timesPaid },
+            { key: "billed", header: "Total billed", num: true, render: (b) => <Money value={b.s.billed} kind="neutral" /> },
+            { key: "paid", header: "Total paid", num: true, render: (b) => <Money value={b.s.paid} kind="neutral" /> },
+          ]}
+          mobile={{
+            lead: (b) => <Glyph icon={billIcon(b.name, b.isDebt)} />,
+            title: (b) => (
+              <Link href={`/settings/bills/${b.id}`} className="hover:text-accent-text">
+                {b.name}
+              </Link>
+            ),
+            sub: (b) => (
+              <>
+                {b.isDebt && <Badge label="Debt" variant="outline" size="sm" dot={false} />}
+                <span>
+                  {b.s.months} month{b.s.months === 1 ? "" : "s"} · paid {b.s.timesPaid}×
+                </span>
+              </>
+            ),
+            amount: (b) => <Money value={b.s.paid} kind="neutral" />,
+            meta: (b) => (
+              <>
+                of <Money value={b.s.billed} kind="neutral" /> billed
+              </>
+            ),
+          }}
+          empty={<EmptyState compact icon="receipt" title="No bills yet" body="Bills show up here once you add one to a month." />}
+        />
+      </Card>
     </div>
   );
 }

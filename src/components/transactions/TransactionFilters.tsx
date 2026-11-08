@@ -2,7 +2,8 @@
 
 import { useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { MultiSelect } from "@/components/MultiSelect";
+import { Button, FilterBar, Select } from "@/components/ds";
+import { FilterMultiSelect } from "@/components/transactions/FilterMultiSelect";
 import type { CategoryOption } from "@/server/queries";
 
 // A single small debounce covers both requested cases: typing in the search box,
@@ -16,13 +17,16 @@ interface AccountOption {
   label: string | null;
 }
 
+type ChipId = "uncat" | "pending" | "bill";
+
 export function TransactionFilters({
   periods,
   accounts,
   categoryOptions,
   initial,
+  counts,
 }: {
-  periods: { label: string }[];
+  periods: { label: string; pretty?: string }[];
   accounts: AccountOption[];
   categoryOptions: CategoryOption[];
   initial: {
@@ -33,7 +37,11 @@ export function TransactionFilters({
     search: string;
     uncategorized: boolean;
     pending: boolean;
+    /** Only rows linked to a bill (?bill=1). */
+    billLinked?: boolean;
   };
+  /** How many rows each chip would leave, given the other filters. Omitted counts hide. */
+  counts?: { uncategorized?: number; pending?: number; billLinked?: number };
 }) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
@@ -45,6 +53,7 @@ export function TransactionFilters({
   const [search, setSearch] = useState(initial.search);
   const [uncategorized, setUncategorized] = useState(initial.uncategorized);
   const [pendingOnly, setPendingOnly] = useState(initial.pending);
+  const [billLinked, setBillLinked] = useState(!!initial.billLinked);
 
   // Push the current selection to the URL as a soft navigation, debounced so
   // rapid changes coalesce. Skips the initial mount so we don't re-navigate to
@@ -74,11 +83,13 @@ export function TransactionFilters({
       else next.delete("uncat");
       if (pendingOnly) next.set("pending", "1");
       else next.delete("pending");
+      if (billLinked) next.set("bill", "1");
+      else next.delete("bill");
       next.delete("page"); // any filter change returns to page 1
       startTransition(() => router.replace(`/transactions?${next.toString()}`, { scroll: false }));
     }, DEBOUNCE_MS);
     return () => clearTimeout(t);
-  }, [periodLabels, accountIds, categories, direction, search, uncategorized, pendingOnly, router]);
+  }, [periodLabels, accountIds, categories, direction, search, uncategorized, pendingOnly, billLinked, router]);
 
   const hasFilters =
     periodLabels.length > 0 ||
@@ -87,7 +98,8 @@ export function TransactionFilters({
     direction !== "" ||
     search !== "" ||
     uncategorized ||
-    pendingOnly;
+    pendingOnly ||
+    billLinked;
 
   function reset() {
     setPeriodLabels([]);
@@ -97,96 +109,95 @@ export function TransactionFilters({
     setSearch("");
     setUncategorized(false);
     setPendingOnly(false);
+    setBillLinked(false);
   }
 
-  const inputCls =
-    "border rounded px-2 py-1 text-sm bg-transparent border-neutral-300 dark:border-neutral-700";
+  const active: ChipId[] = [
+    ...(uncategorized ? (["uncat"] as const) : []),
+    ...(pendingOnly ? (["pending"] as const) : []),
+    ...(billLinked ? (["bill"] as const) : []),
+  ];
+  function onToggle(id: string) {
+    if (id === "uncat") setUncategorized((v) => !v);
+    else if (id === "pending") setPendingOnly((v) => !v);
+    else if (id === "bill") setBillLinked((v) => !v);
+  }
+
+  // Selects share the row with search on desktop; under the FilterBar's 560px container
+  // breakpoint the search takes the full row and these wrap two-up beneath it.
+  const sel = "!w-auto min-w-0 flex-1 basis-[calc(50%-8px)] sm:flex-none sm:basis-auto sm:!w-40";
 
   return (
-    <div className="grid grid-cols-2 gap-2 items-end sm:flex sm:flex-wrap">
-      <Field label="Month">
-        <MultiSelect
+    <div className="space-y-2">
+      <FilterBar
+        search={search}
+        onSearch={setSearch}
+        placeholder="Search description, note, amount"
+        chips={[
+          { id: "uncat", label: "Uncategorized", count: counts?.uncategorized },
+          { id: "pending", label: "Pending", count: counts?.pending },
+          { id: "bill", label: "Linked to a bill", count: counts?.billLinked },
+        ]}
+        active={active}
+        onToggle={onToggle}
+      >
+        <FilterMultiSelect
+          label="Month"
+          allLabel="All months"
+          noun="months"
           value={periodLabels}
           onChange={setPeriodLabels}
-          options={periods.map((p) => ({ value: p.label, label: p.label }))}
+          options={periods.map((p) => ({ value: p.label, label: p.pretty ?? p.label }))}
+          className={sel}
         />
-      </Field>
-      <Field label="Account">
-        <MultiSelect
+        <FilterMultiSelect
+          label="Account"
+          allLabel="All accounts"
+          noun="accounts"
           value={accountIds}
           onChange={setAccountIds}
           options={accounts.map((a) => ({
             value: String(a.id),
             label: a.label ? `${a.label} (${a.accountNumber})` : a.accountNumber,
           }))}
+          className={sel}
         />
-      </Field>
-      <Field label="Category">
-        <MultiSelect
+        <FilterMultiSelect
+          label="Category"
+          allLabel="All categories"
+          noun="categories"
           value={categories}
           onChange={setCategories}
           options={categoryOptions.map((c) => ({
             value: c.name,
             label: `${c.emoji ? `${c.emoji} ` : ""}${c.name}`,
           }))}
+          className={sel}
         />
-      </Field>
-      <Field label="Direction">
-        <select
+        <Select
+          aria-label="Direction"
           value={direction}
           onChange={(e) => setDirection(e.target.value)}
-          className={inputCls + " w-full sm:w-auto"}
-        >
-          <option value="">All</option>
-          <option value="Debit">Debit</option>
-          <option value="Credit">Credit</option>
-        </select>
-      </Field>
-      <Field label="Search">
-        <input
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className={inputCls + " w-full sm:w-auto"}
-          placeholder="description…"
+          options={[
+            { value: "", label: "In and out" },
+            { value: "Debit", label: "Money out" },
+            { value: "Credit", label: "Money in" },
+          ]}
+          className={sel}
         />
-      </Field>
-      <label className="flex items-center gap-1 text-sm pb-1.5">
-        <input
-          type="checkbox"
-          checked={uncategorized}
-          onChange={(e) => setUncategorized(e.target.checked)}
-        />
-        Uncategorized only
-      </label>
-      <label className="flex items-center gap-1 text-sm pb-1.5">
-        <input
-          type="checkbox"
-          checked={pendingOnly}
-          onChange={(e) => setPendingOnly(e.target.checked)}
-        />
-        Pending only
-      </label>
-      {hasFilters && (
-        <button onClick={reset} className="px-3 py-1.5 text-sm text-neutral-500 hover:underline">
-          Reset
-        </button>
+      </FilterBar>
+      {(hasFilters || isPending) && (
+        <div className="flex items-center gap-2 text-xs text-fg-3">
+          {hasFilters && (
+            <Button size="sm" variant="ghost" icon="x" onClick={reset}>
+              Clear filters
+            </Button>
+          )}
+          <span className={`transition-opacity ${isPending ? "opacity-100" : "opacity-0"}`} aria-live="polite">
+            Updating…
+          </span>
+        </div>
       )}
-      <span
-        className={`pb-1.5 text-xs text-neutral-400 transition-opacity ${
-          isPending ? "opacity-100" : "opacity-0"
-        }`}
-      >
-        Updating…
-      </span>
     </div>
-  );
-}
-
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <label className="flex flex-col gap-1">
-      <span className="text-xs text-neutral-500">{label}</span>
-      {children}
-    </label>
   );
 }

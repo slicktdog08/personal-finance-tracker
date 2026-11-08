@@ -80,20 +80,20 @@ export function NoteCell({
           }}
           rows={3}
           placeholder="What was this actually for?"
-          className="w-full min-w-0 border rounded px-2 py-1 text-xs bg-transparent border-neutral-300 dark:border-neutral-700"
+          className="mp-input !h-auto min-w-0 !py-2 !text-xs leading-snug"
         />
         <div className="flex items-center gap-2">
           <button
             onClick={save}
             disabled={pending}
-            className="text-xs text-blue-600 hover:underline disabled:opacity-50"
+            className="text-xs font-medium text-accent-text hover:underline disabled:opacity-50"
           >
             Save note
           </button>
-          <button onClick={cancel} className="text-xs text-neutral-500 hover:underline">
+          <button onClick={cancel} className="text-xs text-fg-2 hover:underline">
             Cancel
           </button>
-          <span className="text-[11px] text-neutral-400">Enter saves · Shift+Enter new line</span>
+          <span className="text-[11px] text-fg-3">Enter saves · Shift+Enter new line</span>
         </div>
       </div>
     );
@@ -104,9 +104,9 @@ export function NoteCell({
       <button
         onClick={open}
         title="Add a note explaining this transaction"
-        className="mt-0.5 text-[11px] text-neutral-400 hover:text-blue-600 hover:underline"
+        className="mt-0.5 text-[11px] text-fg-3 hover:text-accent-text hover:underline"
       >
-        + note
+        Add note
       </button>
     );
   }
@@ -116,7 +116,7 @@ export function NoteCell({
       <button
         onClick={open}
         title="Edit note"
-        className="block text-left text-xs text-neutral-500 dark:text-neutral-400 whitespace-pre-wrap hover:text-blue-600"
+        className="block text-left text-xs text-fg-3 whitespace-pre-wrap hover:text-accent-text"
         style={
           expanded
             ? undefined
@@ -134,7 +134,7 @@ export function NoteCell({
       {(note.length > 90 || note.includes("\n")) && (
         <button
           onClick={() => setExpanded((v) => !v)}
-          className="text-[11px] text-neutral-400 hover:text-blue-600 hover:underline"
+          className="text-[11px] text-fg-3 hover:text-accent-text hover:underline"
         >
           {expanded ? "less" : "more"}
         </button>

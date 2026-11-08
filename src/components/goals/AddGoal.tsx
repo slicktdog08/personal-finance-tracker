@@ -1,10 +1,11 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
 import { createGoal } from "@/server/actions/goals";
 import { EmojiPicker } from "@/components/EmojiPicker";
 import { GOAL_TYPES, GOAL_TYPE_META, type GoalType } from "@/constants/enums";
+import { Button, Field, Input, Select } from "@/components/ds";
+import { Sheet } from "@/components/ui/Sheet";
 
 export interface AcctOption {
   id: number;
@@ -16,6 +17,17 @@ export interface AcctOption {
 export const acctOptionLabel = (a: AcctOption) =>
   `${a.label ?? "••" + a.accountNumber}${a.accountType ? ` (${a.accountType})` : ""}`;
 
+/** Funding-account choices for a Select, with an explicit "none". */
+export const acctSelectOptions = (accounts: AcctOption[]) => [
+  { value: "", label: "None" },
+  ...accounts.map((a) => ({ value: String(a.id), label: acctOptionLabel(a) })),
+];
+
+const num = (s: string) => {
+  const n = Number(s.replace(/[$,\s]/g, ""));
+  return Number.isNaN(n) ? null : n;
+};
+
 export function AddGoal({ accounts }: { accounts: AcctOption[] }) {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
@@ -26,25 +38,20 @@ export function AddGoal({ accounts }: { accounts: AcctOption[] }) {
   const [emoji, setEmoji] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [pending, start] = useTransition();
-  const router = useRouter();
 
-  const inputCls =
-    "border rounded px-2 py-1 text-sm bg-transparent border-neutral-300 dark:border-neutral-700";
-  const num = (s: string) => {
-    const n = Number(s.replace(/[$,\s]/g, ""));
-    return Number.isNaN(n) ? null : n;
+  const reset = () => {
+    setName("");
+    setTarget("");
+    setTargetDate("");
+    setAcct("");
+    setEmoji(null);
+    setGoalType("savings");
+    setErr(null);
   };
-
-  if (!open) {
-    return (
-      <button
-        onClick={() => setOpen(true)}
-        className="px-3 py-1.5 rounded-md bg-blue-600 text-white text-sm font-medium hover:bg-blue-700"
-      >
-        + New goal
-      </button>
-    );
-  }
+  const close = () => {
+    setOpen(false);
+    setErr(null);
+  };
 
   const save = () =>
     start(async () => {
@@ -60,109 +67,76 @@ export function AddGoal({ accounts }: { accounts: AcctOption[] }) {
         emoji,
       });
       if (!r.ok) return setErr(r.error ?? "Failed");
-      setName("");
-      setTarget("");
-      setTargetDate("");
-      setAcct("");
-      setEmoji(null);
-      setGoalType("savings");
+      reset();
       setOpen(false);
-      router.refresh();
     });
 
   return (
-    <div className="w-full rounded-lg border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-4 space-y-3">
-      <div className="flex flex-wrap items-end gap-3">
-        <Field label="Icon">
-          <EmojiPicker
-            value={emoji ?? GOAL_TYPE_META[goalType as GoalType]?.emoji}
-            onSelect={setEmoji}
-          />
-        </Field>
-        <Field label="Name">
-          <input
-            value={name}
-            onChange={(e) => {
-              setName(e.target.value);
-              setErr(null);
-            }}
-            placeholder="Emergency fund"
-            autoFocus
-            className={inputCls + " w-56"}
-          />
-        </Field>
-        <Field label="Type">
-          <select
-            value={goalType}
-            onChange={(e) => setGoalType(e.target.value)}
-            className={inputCls}
-          >
-            {GOAL_TYPES.map((t) => (
-              <option key={t} value={t}>
-                {GOAL_TYPE_META[t].label}
-              </option>
-            ))}
-          </select>
-        </Field>
-        <Field label="Target">
-          <input
-            value={target}
-            onChange={(e) => {
-              setTarget(e.target.value);
-              setErr(null);
-            }}
-            placeholder="5000"
-            inputMode="decimal"
-            className={inputCls + " w-28"}
-          />
-        </Field>
-        <Field label="Target date (optional)">
-          <input
-            type="date"
-            value={targetDate}
-            onChange={(e) => setTargetDate(e.target.value)}
-            className={inputCls}
-          />
-        </Field>
-        <Field label="Funding account (optional)">
-          <select value={acct} onChange={(e) => setAcct(e.target.value)} className={inputCls + " max-w-52"}>
-            <option value="">— none —</option>
-            {accounts.map((a) => (
-              <option key={a.id} value={a.id}>
-                {acctOptionLabel(a)}
-              </option>
-            ))}
-          </select>
-        </Field>
-      </div>
-      <div className="flex items-center gap-3">
-        <button
-          onClick={save}
-          disabled={pending || !name.trim()}
-          className="px-3 py-1.5 rounded-md bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 disabled:opacity-50"
-        >
-          Create goal
-        </button>
-        <button
-          onClick={() => {
-            setOpen(false);
-            setErr(null);
+    <>
+      <Button icon="plus" onClick={() => setOpen(true)}>
+        New goal
+      </Button>
+      <Sheet
+        open={open}
+        onClose={close}
+        title="New goal"
+        footer={
+          <div className="mt-4 flex justify-end gap-2">
+            <Button variant="secondary" onClick={close}>
+              Cancel
+            </Button>
+            <Button icon="plus" onClick={save} loading={pending} disabled={!name.trim()}>
+              Create goal
+            </Button>
+          </div>
+        }
+      >
+        <form
+          className="grid grid-cols-2 gap-3"
+          onSubmit={(e) => {
+            e.preventDefault();
+            save();
           }}
-          className="text-sm text-neutral-500 hover:underline"
         >
-          Cancel
-        </button>
-        {err && <span className="text-xs text-red-600">{err}</span>}
-      </div>
-    </div>
-  );
-}
-
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="flex flex-col gap-1">
-      <label className="text-[10px] uppercase tracking-wide text-neutral-500">{label}</label>
-      {children}
-    </div>
+          <Field label="Name" className="col-span-2">
+            <div className="flex items-center gap-2">
+              <EmojiPicker value={emoji ?? GOAL_TYPE_META[goalType as GoalType]?.emoji} onSelect={setEmoji} title="Pick an icon" />
+              <Input
+                value={name}
+                onChange={(e) => {
+                  setName(e.target.value);
+                  setErr(null);
+                }}
+                placeholder="Emergency fund"
+                autoFocus
+                className="min-w-0 flex-1"
+              />
+            </div>
+          </Field>
+          <Field label="Type">
+            <Select value={goalType} onChange={(e) => setGoalType(e.target.value)} options={GOAL_TYPES.map((t) => ({ value: t, label: GOAL_TYPE_META[t].label }))} />
+          </Field>
+          <Field label="Target" error={err}>
+            <Input
+              money
+              value={target}
+              onChange={(e) => {
+                setTarget(e.target.value);
+                setErr(null);
+              }}
+              placeholder="5000"
+              invalid={!!err}
+            />
+          </Field>
+          <Field label="Target date" hint="Optional">
+            <Input type="date" value={targetDate} onChange={(e) => setTargetDate(e.target.value)} />
+          </Field>
+          <Field label="Funding account" hint="Optional — we'll flag it if it dips below the goal">
+            <Select value={acct} onChange={(e) => setAcct(e.target.value)} options={acctSelectOptions(accounts)} />
+          </Field>
+          <button type="submit" hidden />
+        </form>
+      </Sheet>
+    </>
   );
 }

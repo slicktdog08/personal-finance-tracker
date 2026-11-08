@@ -10,13 +10,13 @@ export default async function CategoriesPage() {
   try {
     [categoryRows, counts] = await Promise.all([getCategoryRows(), getCategoryCounts()]);
   } catch (e) {
-    return <SetupNotice error={e instanceof Error ? e.message : String(e)} />;
+    return <SetupNotice error={e} />;
   }
 
   return (
     <div className="space-y-5">
       <SettingsHeader
-        title="Categories 📂"
+        title="Categories"
         description="Transaction categories. Disable one to hide it when categorizing new transactions (existing ones keep it). Deleting requires reassigning its transactions to another category first."
       />
       <CategoryList

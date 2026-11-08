@@ -5,6 +5,7 @@ import { createPortal } from "react-dom";
 import { useIsDesktop } from "./useMediaQuery";
 import { usePopoverPosition } from "./usePopoverPosition";
 import { useExitTransition } from "./useExitTransition";
+import { Icon } from "@/components/ds/Icon";
 
 // The one modal primitive. Below md it's a bottom sheet (backdrop, rounded top,
 // internal scroll, safe-area padding). At md+ it's either a popover anchored to
@@ -44,8 +45,9 @@ export function Sheet({
     align: "right",
   });
   const hasBackdrop = !isDesktop || !anchored;
-  // Stay mounted briefly after close so the exit animation can play.
-  const { mounted, closing } = useExitTransition(open, 250);
+  // Stay mounted after close so the exit animation can play. A little longer than the longest
+  // exit keyframes (250ms, held on their last frame) so the unmount never lands a frame early.
+  const { mounted, closing } = useExitTransition(open, 280);
 
   useEffect(() => {
     if (!open) return;
@@ -81,14 +83,16 @@ export function Sheet({
   }, [open, hasBackdrop]);
 
   // Focus the panel on open (not the first input — that would pop the mobile
-  // keyboard; forms opt in via autoFocus) and restore focus on close.
+  // keyboard; forms opt in via autoFocus) and restore focus on close. preventScroll both ways:
+  // the panel is still off-screen when it takes focus, and the trigger may sit under a sticky
+  // bar — letting the browser scroll either into view jolts the page mid-animation.
   useEffect(() => {
     if (!open) return;
     const prevActive = document.activeElement as HTMLElement | null;
-    const id = requestAnimationFrame(() => panelRef.current?.focus());
+    const id = requestAnimationFrame(() => panelRef.current?.focus({ preventScroll: true }));
     return () => {
       cancelAnimationFrame(id);
-      prevActive?.focus?.();
+      prevActive?.focus?.({ preventScroll: true });
     };
   }, [open]);
 
@@ -113,18 +117,18 @@ export function Sheet({
     }
   };
 
-  const surface = "bg-white dark:bg-neutral-900 text-neutral-900 dark:text-neutral-100";
+  const surface = "bg-raised text-fg";
 
   const header = (
     <div className="flex items-center justify-between gap-2 mb-2">
-      <h2 className="font-semibold">{title}</h2>
+      <h2 className="font-display text-lg font-semibold leading-tight">{title}</h2>
       <button
         type="button"
         onClick={onClose}
         aria-label="Close"
-        className="h-11 w-11 -mr-2 -my-2 flex items-center justify-center rounded-md text-neutral-500 hover:bg-neutral-100 dark:hover:bg-neutral-800"
+        className="h-11 w-11 -mr-2 -my-2 flex items-center justify-center rounded-full text-fg-2 hover:bg-hover hover:text-fg"
       >
-        ✕
+        <Icon name="x" size={18} />
       </button>
     </div>
   );
@@ -141,7 +145,7 @@ export function Sheet({
         aria-label={title}
         onKeyDown={trapTab}
         style={{ position: "fixed", left: pos.left, top: pos.top, width, maxHeight: pos.maxHeight }}
-        className={`z-50 rounded-lg border border-neutral-300 dark:border-neutral-700 ${surface} shadow-xl p-3 overflow-y-auto outline-none`}
+        className={`z-50 rounded-panel border border-line ${surface} shadow-overlay p-3 overflow-y-auto outline-none`}
       >
         {header}
         {children}
@@ -152,12 +156,12 @@ export function Sheet({
   }
 
   const panelCls = isDesktop
-    ? `fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-50 w-full max-w-md rounded-lg border border-neutral-300 dark:border-neutral-700 ${surface} shadow-xl max-h-[85vh] overflow-y-auto p-4 outline-none ${
+    ? `fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-50 w-full max-w-md rounded-sheet border border-line ${surface} shadow-overlay max-h-[85vh] overflow-y-auto p-5 outline-none will-change-[transform,opacity] ${
         closing
           ? "motion-safe:animate-[dialog-out_.2s_ease-in_forwards]"
           : "motion-safe:animate-[dialog-in_.2s_ease-out]"
       }`
-    : `fixed inset-x-0 bottom-0 z-50 rounded-t-2xl ${surface} shadow-xl max-h-[85dvh] overflow-y-auto p-4 pb-[max(1rem,env(safe-area-inset-bottom))] outline-none ${
+    : `fixed inset-x-0 bottom-0 z-50 rounded-t-sheet ${surface} shadow-[var(--mp-shadow-sheet)] max-h-[85dvh] overflow-y-auto overflow-x-hidden overscroll-contain p-4 pb-[max(1rem,env(safe-area-inset-bottom))] outline-none will-change-transform ${
         closing
           ? "motion-safe:animate-[sheet-down_.25s_ease-in_forwards]"
           : "motion-safe:animate-[sheet-up_.3s_cubic-bezier(0.16,1,0.3,1)]"
@@ -166,7 +170,7 @@ export function Sheet({
   return createPortal(
     <div data-popover-root="" className={closing ? "pointer-events-none" : undefined}>
       <div
-        className={`fixed inset-0 z-40 bg-black/40 ${
+        className={`fixed inset-0 z-40 bg-[var(--mp-bg-overlay)] will-change-[opacity] ${
           closing
             ? "motion-safe:animate-[overlay-fade-out_.25s_ease-in_forwards]"
             : "motion-safe:animate-[overlay-fade_.2s_ease-out]"
@@ -185,7 +189,7 @@ export function Sheet({
         className={panelCls}
       >
         {!isDesktop && (
-          <div className="mx-auto mb-3 h-1 w-10 rounded-full bg-neutral-300 dark:bg-neutral-700" />
+          <div className="mx-auto mb-3 h-1 w-9 rounded-full bg-line-strong" />
         )}
         {header}
         {children}

@@ -8,13 +8,14 @@ import type { CategoryRule } from "@/server/lib/categorize";
 import { ImportCategoryCell } from "@/components/import/ImportCategoryCell";
 import { ImportNoteCell } from "@/components/import/ImportNoteCell";
 import type { RuleSavedEvent } from "@/components/transactions/RuleEditor";
+import { Badge, Money, cx } from "@/components/ds";
 
-const STATUS_BADGE: Record<string, string> = {
-  new: "bg-green-100 text-green-800 border-green-200",
-  duplicate: "bg-yellow-100 text-yellow-800 border-yellow-200",
+const STATUS_BADGE: Record<string, { label: string; color: string }> = {
+  new: { label: "New", color: "#22c55e" },
+  duplicate: { label: "Looks like a duplicate", color: "#eab308" },
   // The posted version of a pending row entered by hand: settles it instead of duplicating.
-  finalizes: "bg-blue-100 text-blue-800 border-blue-200",
-  error: "bg-red-100 text-red-800 border-red-200",
+  finalizes: { label: "Settles", color: "#0ea5e9" },
+  error: { label: "Error", color: "#ef4444" },
 };
 
 // Rows that will be written on commit (and can still be edited in the preview).
@@ -50,23 +51,23 @@ function StatusBadge({ row }: { row: PreviewRow }) {
     row.status === "finalizes"
       ? `Settles pending #${row.pendingMatchId}: ${row.pendingMatchDescription ?? ""} — keeps its category, notes and bill link (your description moves to notes); amount, date and title come from this statement`
       : row.error;
+  const b = STATUS_BADGE[row.status] ?? { label: row.status, color: "#64748b" };
   return (
-    <span
+    <Badge
+      size="sm"
       title={title}
-      className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium border ${STATUS_BADGE[row.status]}`}
-    >
-      {row.status === "finalizes" ? `settles #${row.pendingMatchId}` : row.status}
-    </span>
+      color={b.color}
+      label={row.status === "finalizes" ? `Settles #${row.pendingMatchId}` : b.label}
+    />
   );
 }
 
+// Money in is income (+, emerald); money out is spend (true minus, ink) — never red.
 function Amount({ row }: { row: PreviewRow }) {
-  return (
-    <>
-      {row.direction === "Credit" ? "+" : "−"}
-      {formatMoney(row.amount)}
-    </>
-  );
+  // An error row may have no parseable amount — a dash, not a fake $0.00.
+  if (row.amount == null || Number.isNaN(Number(row.amount))) return <span className="text-fg-3">—</span>;
+  const n = Math.abs(Number(row.amount));
+  return <Money value={row.direction === "Credit" ? n : -n} />;
 }
 
 // A hand-entered (usually pending) transaction this row looks like the posted version of.
@@ -85,17 +86,16 @@ function PendingMatchBox({
   const diff = Math.round(((row.amount ?? 0) - m.amount) * 100) / 100;
   return (
     <label
-      className={`mt-1 flex items-start gap-1.5 rounded border px-1.5 py-1 text-xs cursor-pointer select-none ${
-        checked
-          ? "border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200"
-          : "border-neutral-200 text-neutral-500 dark:border-neutral-800"
-      }`}
+      className={cx(
+        "mt-1 flex cursor-pointer select-none items-start gap-1.5 rounded-control border px-2 py-1.5 text-xs",
+        checked ? "border-warn bg-warn-soft text-fg" : "border-line text-fg-3",
+      )}
     >
       <input
         type="checkbox"
         checked={checked}
         onChange={(e) => onChange(e.target.checked ? m.id : null)}
-        className="mt-0.5 h-3.5 w-3.5 accent-amber-600"
+        className="mt-0.5 h-3.5 w-3.5 accent-[var(--mp-warn)]"
       />
       <span className="min-w-0">
         {checked ? "Settles your " : "Looks like your "}
@@ -121,9 +121,6 @@ function PendingMatchBox({
     </label>
   );
 }
-
-const amountCls = (row: PreviewRow) =>
-  `tabular-nums ${row.direction === "Credit" ? "text-green-600 dark:text-green-400" : ""}`;
 
 /**
  * The review grid shared by the CSV and PDF import wizards: a table on wide screens
@@ -173,75 +170,73 @@ export function ImportPreviewTable({
 
   return (
     <div
-      className={`rounded-lg border border-neutral-200 dark:border-neutral-800 md:overflow-x-auto md:overflow-y-auto md:overscroll-contain ${maxHeightClass}`}
+      className={`border-t border-line md:overflow-x-auto md:overflow-y-auto md:overscroll-contain ${maxHeightClass}`}
     >
       {/* Wide screens: the full table. */}
-      <table className="hidden md:table w-full text-sm">
-        <thead className="bg-neutral-100 dark:bg-neutral-900 text-left sticky top-0">
+      <table className="hidden w-full text-sm md:table">
+        <thead className="sticky top-0 z-[1] bg-surface text-left text-xs text-fg-3 shadow-[inset_0_-1px_0_var(--mp-border-1)]">
           <tr>
-            <th className="px-3 py-2 font-medium">Status</th>
+            <th className="py-2.5 pl-5 pr-3 font-medium">Status</th>
             <th className="px-3 py-2 font-medium">Date</th>
             <th className="px-3 py-2 font-medium">Description &amp; note</th>
             {showAccount && <th className="px-3 py-2 font-medium">Acct</th>}
             <th className="px-3 py-2 font-medium">Category</th>
             <th className="px-3 py-2 font-medium text-right">Amount</th>
-            <th className="px-3 py-2 font-medium">Type</th>
+            <th className="py-2.5 pl-3 pr-5 font-medium">Type</th>
           </tr>
         </thead>
         <tbody>
           {rows.map((r, i) => (
             <tr
               key={i}
-              className={`border-t border-neutral-200 dark:border-neutral-800 ${
-                !editable(r.status) ? "opacity-60" : ""
-              }`}
+              className={cx("border-t border-line first:border-t-0", !editable(r.status) && "text-fg-2 opacity-70")}
             >
-              <td className="px-3 py-1.5">
+              <td className="py-2 pl-5 pr-3 align-top">
                 <StatusBadge row={r} />
               </td>
-              <td className="px-3 py-1.5 whitespace-nowrap tabular-nums">
+              <td className="whitespace-nowrap px-3 py-2 align-top tabular-nums">
                 {r.txnDate ? formatDate(r.txnDate) : "—"}
               </td>
-              <td className="px-3 py-1.5 max-w-xs align-top">
+              <td className="max-w-xs px-3 py-2 align-top">
                 <div className="truncate" title={r.description}>
                   {r.description}
                 </div>
                 {noteCell(r, i)}
                 {matchBox(r, i)}
               </td>
-              {showAccount && <td className="px-3 py-1.5">{r.accountNumber || "—"}</td>}
-              <td className="px-3 py-1.5">{categoryCell(r, i)}</td>
-              <td className={`px-3 py-1.5 text-right ${amountCls(r)}`}>
+              {showAccount && <td className="px-3 py-2 align-top font-mono text-xs text-fg-2">{r.accountNumber || "—"}</td>}
+              <td className="px-3 py-2 align-top">{categoryCell(r, i)}</td>
+              <td className="whitespace-nowrap px-3 py-2 text-right align-top">
                 <Amount row={r} />
               </td>
-              <td className="px-3 py-1.5">{r.direction}</td>
+              <td className="py-2 pl-3 pr-5 align-top text-fg-3">{r.direction}</td>
             </tr>
           ))}
         </tbody>
       </table>
 
       {/* Phones: one card per row. Same state, second rendering — nothing dropped. */}
-      <ul className="md:hidden divide-y divide-neutral-200 dark:divide-neutral-800">
+      <ul className="divide-y divide-line md:hidden">
         {rows.map((r, i) => (
-          <li key={i} className={`p-3 space-y-1.5 ${!editable(r.status) ? "opacity-60" : ""}`}>
+          <li key={i} className={cx("space-y-1.5 px-3.5 py-3", !editable(r.status) && "opacity-70")}>
             <div className="flex items-start gap-2">
               <div className="flex-1 min-w-0">
                 <div className="font-medium break-words" title={r.description}>
                   {r.description}
                 </div>
-                <div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-neutral-500 tabular-nums">
+                <div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs tabular-nums text-fg-3">
                   <StatusBadge row={r} />
                   <span>{r.txnDate ? formatDate(r.txnDate) : "no date"}</span>
                   {showAccount && <span>· {r.accountNumber || "no account"}</span>}
                   <span>· {r.direction}</span>
                 </div>
               </div>
-              <div className={`shrink-0 text-right font-medium ${amountCls(r)}`}>
+              <div className="shrink-0 text-right font-medium">
                 <Amount row={r} />
               </div>
             </div>
             {/* An error row can't be imported, so say why rather than leaving a bare badge. */}
-            {r.error && <div className="text-xs text-red-600 dark:text-red-400">{r.error}</div>}
+            {r.error && <div className="text-xs text-over">{r.error}</div>}
             {matchBox(r, i)}
             {noteCell(r, i)}
             {categoryCell(r, i)}

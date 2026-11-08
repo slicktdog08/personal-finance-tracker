@@ -2,6 +2,7 @@ import { SetupNotice } from "@/components/SetupNotice";
 import { TransfersManager } from "@/components/transfers/TransfersManager";
 import { getTransfersData, getPeriods } from "@/server/queries";
 import { prettyPeriod } from "@/server/lib/period";
+import { PageHeader } from "@/components/ds";
 
 export const dynamic = "force-dynamic";
 
@@ -23,19 +24,14 @@ export default async function TransfersPage({
       getPeriods(),
     ]);
   } catch (e) {
-    return <SetupNotice error={e instanceof Error ? e.message : String(e)} />;
+    return <SetupNotice error={e} />;
   }
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight">Transfers</h1>
-        <p className="text-sm text-neutral-500">
-          Link the two sides of internal account-to-account transfers so they don&apos;t count as
-          income or spending. Confirm suggested matches, or find the counterpart for transfers
-          you&apos;ve flagged.
-        </p>
-      </div>
+    <div className="space-y-4">
+      {/* The kit titles every Activity view "Activity"; the sub-tab names the view, and the
+          cards below explain what each list is for. */}
+      <PageHeader title="Activity" />
       <TransfersManager
         data={data}
         periods={periods.map((p) => ({ label: p.label, pretty: prettyPeriod(p.year, p.month) }))}

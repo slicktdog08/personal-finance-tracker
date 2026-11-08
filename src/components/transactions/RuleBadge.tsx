@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
+import { Icon } from "@/components/ds";
 import { RuleEditor, type RuleSavedEvent } from "@/components/transactions/RuleEditor";
 import { describeRuleMatch, type CategoryRule, type RuleInput } from "@/server/lib/categorize";
 import type { CategoryOption } from "@/server/queries";
@@ -30,9 +31,10 @@ export function RuleBadge({
   const stale = currentCategory !== rule.category;
   const clause = describeRuleMatch(rule);
 
+  // The kit's outline "rule" badge; a stale rule borrows the warn tint so it reads as "look here".
   const cls = stale
-    ? "border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200"
-    : "border-neutral-200 bg-neutral-50 text-neutral-500 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-400";
+    ? "mp-badge mp-badge--sm max-w-[16rem] !bg-warn-soft !text-warn"
+    : "mp-badge mp-badge--outline mp-badge--sm max-w-[16rem]";
 
   return (
     <>
@@ -45,10 +47,10 @@ export function RuleBadge({
             ? `This was auto-categorized as ${rule.category} by the rule "${clause}", which is still active for future imports. Click to change or remove the rule.`
             : `Auto-categorized by rule: ${clause} → ${rule.category}. Click to edit or remove the rule.`
         }
-        className={`inline-flex items-center gap-1 max-w-[16rem] rounded-full border px-2 py-0.5 text-[11px] leading-4 hover:underline ${cls}`}
+        className={cls}
       >
-        <span aria-hidden>⚙</span>
-        <span className="truncate">
+        <Icon name={stale ? "triangle-alert" : "wand-sparkles"} size={11} />
+        <span className="mp-badge__label">
           {stale ? (
             <>
               rule “{rule.pattern}” → {rule.category} still active

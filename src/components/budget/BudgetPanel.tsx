@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { Icon } from "@/components/ds";
 import { formatMoney } from "@/server/lib/money";
 import { PlanBar } from "@/components/budget/PlanBar";
 import type { BudgetView } from "@/server/queries";
@@ -12,10 +13,13 @@ export function BudgetPanel({ view, periodLabel, pretty }: { view: BudgetView | 
     return (
       <Link
         href={`/budget?period=${periodLabel}`}
-        className="block rounded-lg border border-dashed border-neutral-300 dark:border-neutral-700 p-4 hover:border-blue-400 transition-colors"
+        className="block rounded-card border border-dashed border-line-strong p-4 hover:border-accent transition-colors"
       >
-        <div className="text-sm font-medium">⛄ Plan a budget for {pretty}</div>
-        <div className="text-xs text-neutral-500 mt-0.5">
+        <div className="flex items-center gap-1.5 text-sm font-medium">
+          <Icon name="flag" size={14} className="text-accent-text" />
+          Plan a budget for {pretty}
+        </div>
+        <div className="text-xs text-fg-3 mt-0.5">
           Debt snowball or blank — then watch plan vs. actual fill in from your transactions.
         </div>
       </Link>
@@ -36,28 +40,31 @@ export function BudgetPanel({ view, periodLabel, pretty }: { view: BudgetView | 
       <div className="flex items-baseline justify-between gap-2 text-sm">
         <span>
           <span className="font-semibold tabular-nums">{formatMoney(actual)}</span>{" "}
-          <span className="text-neutral-500">
+          <span className="text-fg-3">
             of {formatMoney(planned)} planned{savings > 0 && <> · {formatMoney(savings)} to savings</>}
           </span>
         </span>
-        <span className={`tabular-nums font-medium ${actual > planned ? "text-red-600" : "text-neutral-600 dark:text-neutral-300"}`}>
+        <span className={`tabular-nums font-medium ${actual > planned ? "text-over" : "text-fg-2"}`}>
           {actual > planned ? `${formatMoney(actual - planned)} over` : `${formatMoney(planned - actual)} left`}
         </span>
       </div>
-      <PlanBar planned={planned} actual={actual} color="#3b82f6" />
+      <PlanBar planned={planned} actual={actual} color="var(--mp-accent)" />
       {target && (
         <div className="text-sm">
           <div className="flex items-center justify-between gap-2">
-            <span className="truncate">⛄ {target.label}</span>
-            <span className="tabular-nums text-neutral-500">
+            <span className="inline-flex min-w-0 items-center gap-1.5">
+              <Icon name="flag" size={14} className="shrink-0 text-owed" />
+              <span className="truncate">{target.label}</span>
+            </span>
+            <span className="tabular-nums text-fg-3">
               {formatMoney(target.actual)} / {formatMoney(target.planned)}
             </span>
           </div>
-          <PlanBar planned={target.planned} actual={target.actual} color="#2563eb" className="mt-1 h-2" />
+          <PlanBar planned={target.planned} actual={target.actual} color="var(--mp-money-owed)" className="mt-1 h-2" />
         </div>
       )}
       {over.length > 0 && (
-        <ul className="text-xs text-red-600 dark:text-red-400 space-y-0.5">
+        <ul className="text-xs text-over space-y-0.5">
           {over.map((l) => (
             <li key={l.id}>
               {l.emoji && <span aria-hidden>{l.emoji} </span>}

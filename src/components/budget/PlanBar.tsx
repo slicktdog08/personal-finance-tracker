@@ -17,12 +17,12 @@ export function PlanBar({
   const overPct = actual > planned ? ((actual - planned) / base) * 100 : 0;
   // Unspent plan shows as the track itself, so the bar's full width == max(planned, actual).
   return (
-    <div className={`h-2.5 w-full flex overflow-hidden rounded bg-neutral-200 dark:bg-neutral-800 ${className}`}>
+    <div className={`h-2.5 w-full flex overflow-hidden rounded-full bg-[var(--mp-track)] ${className}`}>
       <div
         className="h-full"
-        style={{ width: `${Math.max(actual > 0 ? 1.5 : 0, withinPct)}%`, backgroundColor: color || "#3b82f6" }}
+        style={{ width: `${Math.max(actual > 0 ? 1.5 : 0, withinPct)}%`, backgroundColor: color || "var(--mp-accent)" }}
       />
-      {overPct > 0 && <div className="h-full bg-red-500/85" style={{ width: `${overPct}%` }} />}
+      {overPct > 0 && <div className="h-full bg-over" style={{ width: `${overPct}%` }} />}
     </div>
   );
 }

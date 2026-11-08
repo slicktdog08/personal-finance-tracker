@@ -1,3 +1,4 @@
+import { EmptyState, Icon, PageHeader, buttonClass } from "@/components/ds";
 import Link from "next/link";
 import { SetupNotice } from "@/components/SetupNotice";
 import { MonthNav } from "@/components/dashboard/MonthNav";
@@ -30,20 +31,20 @@ export default async function BudgetPage({ searchParams }: { searchParams: Promi
     await ensureCurrentPeriods();
     periods = await getPeriods(); // newest first
   } catch (e) {
-    return <SetupNotice error={e instanceof Error ? e.message : String(e)} />;
+    return <SetupNotice error={e} />;
   }
   if (!periods.length) {
     return (
-      <div className="space-y-3">
-        <h1 className="text-2xl font-bold">Budget</h1>
-        <p className="text-neutral-500">
-          No months yet. Open the{" "}
-          <Link href="/dashboard" className="text-blue-600 hover:underline">
-            dashboard
-          </Link>{" "}
-          — the current month is created automatically.
-        </p>
-      </div>
+      <EmptyState
+        icon="chart-pie"
+        title="No months yet"
+        body="The current month is created automatically when you open the dashboard."
+        action={
+          <Link href="/dashboard" className={buttonClass({ variant: "secondary" })}>
+            Open the dashboard
+          </Link>
+        }
+      />
     );
   }
 
@@ -104,41 +105,41 @@ export default async function BudgetPage({ searchParams }: { searchParams: Promi
     }))
     .reverse();
 
-  return (
-    <div className="space-y-10">
-      <div className="flex items-end justify-between flex-wrap gap-4">
-        <div>
-          <div className="text-[11px] uppercase tracking-[0.14em] text-neutral-500">Budget</div>
-          <h1 className="mt-1 text-3xl md:text-4xl font-semibold tracking-tight">{pretty}</h1>
-          {!view && <p className="mt-1 text-sm text-neutral-500">No plan for {pretty} yet. Pick how to start.</p>}
-        </div>
-        <div className="flex flex-wrap items-center gap-3">
-          <MonthNav periods={navPeriods} current={selected.label} basePath="/budget" />
-          <Link href={`/dashboard?period=${selected.label}`} className="text-sm text-neutral-500 hover:text-indigo-600 whitespace-nowrap">
-            Dashboard →
-          </Link>
-        </div>
-      </div>
+  const today = todayIso();
+  // The next payday the projection still expects (it already nets paydays that landed).
+  const nextPaycheck = cash?.events.find((e) => e.kind === "paycheck" && e.date >= today)?.date ?? null;
 
-      {view ? (
-        <BudgetView
-          view={view}
-          pretty={pretty}
-          projection={projection}
-          projectionBudget={debtBudget}
-          categories={categories}
-          cashWidget={<CashMonthWidget daily={dailyCash} projection={cash} periodLabel={selected.label} lines={view.lines} unplanned={view.unplannedSpend} today={todayIso()} />}
-          projectedEndCash={cash?.endBalance ?? null}
-        />
-      ) : (
-        <BudgetSetup
-          periodLabel={selected.label}
-          pretty={pretty}
-          year={selected.year}
-          month={selected.month}
-          inputs={inputs!}
-        />
-      )}
+  const nav = (
+    <>
+      <MonthNav periods={navPeriods} current={selected.label} basePath="/budget" />
+      <Link href={`/dashboard?period=${selected.label}`} className={buttonClass({ variant: "ghost", size: "sm", className: "max-sm:hidden" })}>
+        Dashboard
+        <Icon name="arrow-right" size={14} />
+      </Link>
+    </>
+  );
+
+  if (view) {
+    return (
+      <BudgetView
+        view={view}
+        pretty={pretty}
+        nav={nav}
+        projection={projection}
+        projectionBudget={debtBudget}
+        categories={categories}
+        cashWidget={<CashMonthWidget daily={dailyCash} projection={cash} periodLabel={selected.label} lines={view.lines} unplanned={view.unplannedSpend} today={today} />}
+        projectedEndCash={cash?.endBalance ?? null}
+        today={today}
+        nextPaycheck={nextPaycheck}
+      />
+    );
+  }
+
+  return (
+    <div className="space-y-8">
+      <PageHeader eyebrow={pretty} title="Budget" description={<>No plan for {pretty} yet. Pick how to start.</>} actions={nav} />
+      <BudgetSetup periodLabel={selected.label} pretty={pretty} year={selected.year} month={selected.month} inputs={inputs!} />
     </div>
   );
 }

@@ -106,14 +106,27 @@ the `goal_contributions.transaction_id` seam, not a budget column.
 - `ProjectionSummary.tsx` — the one sentence about the projection, shared by wizard and plan view.
 
 ## Non-obvious logic / edge cases
+- **Unbudgeted excess (2026-10-17).** A fully planned month grows cash on hand by exactly its
+  savings lines, so `excess = (cash at month end − cash at start) − planned savings`
+  (`budgetExcess`, server/lib/budget.ts; month end = the cash projection's figure, so it agrees with
+  "Cash by month end"). Shown as one line under the flow bar in all three states (unbudgeted /
+  on plan / short) — "no excess" is stated, never implied by absence. Income above plan and
+  income left unallocated are named as sources; they don't sum to the total (the rest is envelopes
+  running under and timing). Needed because auto-rebalance sweeps plan-level leftover into the
+  target, so the "Unallocated" sliver is always $0 there — Sep 2026 ended $420 unbudgeted unseen.
 - **Cash projection — the double-counting rules.** A bill and a budget line can describe the same
   money, so: (1) every *unpaid* bill leaves in full on its due day (overdue → the first projected
   day); if its majority category has a budget line, that line's remaining is reduced by the bill so
-  it isn't also spread. (2) A **debt line schedules ONE payment** of `planned − (max(linked payments,
-  sheet-paid instance amount) − new charges)` — so card purchases not yet paid off are still owed on
-  top of the planned paydown (their envelopes counted them; the cash leaves when the card is paid) — on the unpaid instance's due day, else at month end (the extra). The
-  liability's bill instance is never its own event. (3) Category lines spread `planned − actual`
-  (after bill deductions) evenly over the remaining days. (4) Savings lines are not outflows.
+  it isn't also spread. (2) A **debt line schedules ONE payment** of `planned − max(linked payments,
+  sheet-paid instance amount)` — on the unpaid instance's due day, else at month end (the extra). The
+  liability's bill instance is never its own event. (3) Category lines spread everyday money over
+  the remaining days — at what rate is its own bullet below. The envelope behind it is
+  `planned − actual` (after bill deductions) summed across lines, where **per line this may go
+  negative** and only the month's TOTAL is floored at zero, so overspending one envelope is
+  credited forward against the rest instead of being ignored (`months[].overspend` is how much was
+  absorbed). Flooring each line, the old rule, was one-sided: overspend ignored, underspend still
+  assumed to be spent, so a month could only ever look worse than it was.
+  (4) Savings lines are not outflows.
   (5) Paydays: dates from the pay schedule, each worth `plannedIncome ÷ paydays in month`, then
   **netted against the payroll that actually landed** (see below). (6) A bill is `paid` when a
   transaction is linked to its instance, or its status is settled — except an *Autopay* status
@@ -133,6 +146,33 @@ the `goal_contributions.transaction_id` seam, not a budget column.
   window past with nothing matched is **dropped, not carried forward** — it is a deposit the matcher
   failed to recognise, and resurrecting it would invent cash that already arrived. `/budget` shows an
   amber note in both cases.
+- **Everyday spending is projected at observed PACE, with the full-budget figure kept beside it.**
+  Two rates exist and both are on the result:
+  - `spreadDaily` / `spreadTotal` — what the walk actually drains: `observedSpend ÷ elapsedDays`
+    carried forward. This is the line the chart draws.
+  - `envelope.{daily,total,endBalance,low}` — the conservative bookend: what is left of the budget,
+    and where the month lands if every last dollar of it goes out before month end.
+
+  The envelope rate is "what's left ÷ days left", so it **accelerates as the month closes** and
+  drops the entire unspent remainder on the final day. On 2026-09-29, one day left, that put
+  $275.09 on the 30th — more than twice September's own $100.89/day. Nothing was going to happen
+  that day; it was the deadline meeting the assumption that a budget always gets fully spent. Pace
+  has no such cliff, which is why pace is what gets drawn.
+
+  Pace is deliberately **not capped at the envelope**: spending hot means the budget will be blown
+  and the projection should say so — `endBalance` then lands BELOW `envelope.endBalance` and the two
+  bookends swap places, which is itself the signal.
+
+  A rate measured over two days is noise: one $300 grocery run on the 1st reads as $300/day and
+  projects a $9,300 month against a $3,100 plan. So pace is blended toward the budget's own rate
+  until `PACE_TRUST_DAYS` (7) have elapsed — `w = min(1, elapsed/7)`, reported as
+  `months[].paceWeight` — which also stops the projection stepping discontinuously on whichever day
+  a hard switch would have landed. A month with nothing spent yet, and every future month, uses the
+  envelope rate outright (`pacedFromHistory: false`).
+
+  `projectCash` runs the day-walk TWICE, once per rate, rather than adjusting one result
+  arithmetically: a heavier daily drain can change WHICH day is lowest, not just how low it goes.
+
 - **The walk starts in the ANCHOR month, not the viewed one.** `getCashProjection` builds segments
   from wherever the freshest cash balance sits through the month after the one being viewed, and
   `focusIndex` points at the viewed month; the flat `endBalance` / `spread*` / `paydays` figures all
@@ -192,21 +232,32 @@ the `goal_contributions.transaction_id` seam, not a budget column.
 - **Category actuals reuse `getCategorySpend(label)`** — so cash offsets, the pocket count and
   transfer exclusion are already applied. A budget can never disagree with the dashboard about
   what a category cost. Don't re-implement the sum.
-- **Debt actuals are PAYDOWN = payments − new charges** (`computeDebtFlows`,
-  `src/server/lib/debt-flows.ts`). Payments = Debits in the month NOT on the liability that are
-  linked to its bill (`bill_id`) or are a linked transfer to it. New charges = every Debit on the
-  liability (purchases, interest, fees) minus refund Credits. Why: the user often charges a purchase
-  to a card and pays it off from checking days later. The purchase already counts in its category
-  envelope, so the payment that clears it is a rebalance — counting it as debt repayment would
-  claim progress the balance never made and double the month's outflow. Paydown is the balance
-  trend; negative means the balance grew. `paid` and `charged` ride on the line for display. A
-  liability with no linked bill shows "payments can't be matched".
+- **Debt actuals = Debit transactions in the month with `bill_id` = the account's `bill_id`,
+  excluding rows on the liability account itself** (a card's own linked rows are purchases and
+  interest, not payments). A liability with no linked bill shows "payments can't be matched".
   Debits categorized `Debt Repayment` with no `bill_id` are totaled as **unassigned** with a link to
   go fix them — the nudge, not a guess.
 - **`Debt Repayment`, `Deposit`, `Transfer`, `Interest`, `Interest/Rewards`, `Investing` never
   become spending lines** (`BUDGET_EXCLUDED_CATEGORIES`): income, internal moves, bank noise, or
   money the debt lines already count. Excluding `Debt Repayment` is what keeps a payment from being
   counted on a debt line *and* a category line.
+- **A debt line's actual is PAYOFF, not payments (2026-10-17).** Paying a card back for what was
+  charged to it the same month only rebalances it — those purchases already count in their
+  categories. So `actual = max(0, paid − charged)` (`splitCardPayments`, server/lib/debt.ts), where
+  `paid` = linked payments as before and `charged` = the month's rows ON the liability, debits minus
+  refunds, excluding `BUDGET_EXCLUDED_CATEGORIES` (payments landing, transfers, interest — interest
+  is covered by the plan's payment and modeled by the projection) and transfer-paired rows. Linking
+  is unchanged: every payment still links to the card's bill. The envelope shows "$X paid · $Y
+  covered new charges". The cash projection follows: it schedules `planned − payoff`, so charging
+  the card raises what's still owed to it this month; a sheet "paid" mark is netted the same way.
+- **"Behind" warning on debt cards (current month, credit cards only).** Reuses the dashboard's
+  card-rebalance rule, not the transaction split above: `cardRebalanceFrom` with the same inputs
+  (`getLiabilityStartBalances`, `getPendingTransactions`), then `cardStanding` adds the plan.
+  `toCover` = balance + pending − month start (the dashboard's `owe`, pending INCLUDED);
+  `toPlan` = what's still needed to reach `start + interest − planned` beyond that. The two methods
+  can disagree when a balance moves without a synced transaction (a travel card, Oct 17 2026: −$342 drop,
+  so balance says $156.82 under start while charges − payments says $150.72 over) — the balance
+  wins, deliberately, so the card and the dashboard widget never disagree.
 - **Extra sweeps down the order.** The target takes `min(extra, balance − min)`; the remainder
   spills onto the next debt. A $200 balance with $500 spare doesn't strand $300.
 - **Slider algebra is zero-sum over the pie** (income − minimums). `scaleRowsTo(rows, total)`

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { formatMoney } from "@/server/lib/money";
+import { IconButton, Input, Money } from "@/components/ds";
 
 /**
  * Phone money control: − / a big tappable number / +. Tap the number to type; Enter or blur
@@ -30,21 +30,31 @@ export function AmountStepper({
     const n = Number(s.replace(/[$,\s]/g, ""));
     return s.trim() === "" || Number.isNaN(n) ? null : clamp(Math.round(n));
   };
-  const btn =
-    "h-11 w-11 shrink-0 rounded-full border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-xl leading-none select-none active:scale-95 transition-transform disabled:opacity-30";
   return (
     <div className="flex items-center justify-between gap-2 w-full" role="group" aria-label={ariaLabel}>
-      <button type="button" className={btn} disabled={disabled || value - step < min} onClick={() => onCommit(clamp(value - step))} aria-label={`Decrease ${ariaLabel} by ${step}`}>
-        −
-      </button>
+      <IconButton
+        icon="minus"
+        variant="secondary"
+        size="lg"
+        className="h-11 w-11 shrink-0"
+        disabled={disabled || value - step < min}
+        onClick={() => onCommit(clamp(value - step))}
+        label={`Decrease ${ariaLabel} by ${step}`}
+      />
       {text == null ? (
-        <button type="button" disabled={disabled} onClick={() => setText(String(value))} className="h-11 flex-1 rounded-xl text-2xl font-semibold tabular-nums tracking-tight active:bg-neutral-100 dark:active:bg-neutral-800 disabled:cursor-default" title="Tap to type an amount">
-          {formatMoney(value)}
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={() => setText(String(value))}
+          className="h-11 flex-1 rounded-control active:bg-hover disabled:cursor-default"
+          title="Tap to type an amount"
+        >
+          <Money value={value} kind="neutral" style={{ font: "var(--mp-type-money-md)" }} />
         </button>
       ) : (
-        <input
+        <Input
           autoFocus
-          inputMode="numeric"
+          money
           aria-label={`${ariaLabel} (typed)`}
           value={text}
           onChange={(e) => setText(e.target.value)}
@@ -57,12 +67,18 @@ export function AmountStepper({
             if (e.key === "Enter") (e.target as HTMLInputElement).blur();
             if (e.key === "Escape") setText(null);
           }}
-          className="h-11 flex-1 min-w-0 rounded-xl border border-indigo-400 bg-transparent text-center text-2xl font-semibold tabular-nums outline-none ring-2 ring-indigo-400/20"
+          className="h-11 flex-1 min-w-0 text-center! text-xl font-semibold"
         />
       )}
-      <button type="button" className={btn} disabled={disabled || (max != null && value + step > max)} onClick={() => onCommit(clamp(value + step))} aria-label={`Increase ${ariaLabel} by ${step}`}>
-        +
-      </button>
+      <IconButton
+        icon="plus"
+        variant="secondary"
+        size="lg"
+        className="h-11 w-11 shrink-0"
+        disabled={disabled || (max != null && value + step > max)}
+        onClick={() => onCommit(clamp(value + step))}
+        label={`Increase ${ariaLabel} by ${step}`}
+      />
     </div>
   );
 }

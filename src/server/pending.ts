@@ -1,6 +1,6 @@
 import "server-only";
 import { db } from "@/server/db";
-import { transactions, accounts, cashAllocations, transactionSplits } from "@/server/db/schema";
+import { transactions, accounts, cashAllocations, transactionSplits, uiLayouts } from "@/server/db/schema";
 import { and, eq, gte, lte, inArray, isNull, isNotNull, or, type SQL } from "drizzle-orm";
 import { normalizeMerchant } from "@/server/lib/merchant";
 import {
@@ -40,6 +40,25 @@ type SideRow = {
   description: string;
   pending: boolean;
 };
+
+// "Keep both" on a suggested pair: remembered as `${pendingId}:${postedId}` in the ui_layouts
+// key/value store (no migration), so that pair is never offered again while each row can still
+// match something else. Capped — old dismissals refer to long-settled rows.
+const DISMISSED_KEY = "pending-dismissed-pairs";
+const DISMISSED_CAP = 500;
+
+export async function getDismissedPendingPairs(): Promise<Set<string>> {
+  const [row] = await db.select({ layout: uiLayouts.layout }).from(uiLayouts).where(eq(uiLayouts.layoutKey, DISMISSED_KEY));
+  const pairs = (row?.layout as { pairs?: unknown } | null)?.pairs;
+  return new Set(Array.isArray(pairs) ? pairs.filter((p): p is string => typeof p === "string") : []);
+}
+
+export async function dismissPendingPair(pendingId: number, postedId: number): Promise<void> {
+  const pairs = [...(await getDismissedPendingPairs())].filter((p) => p !== `${pendingId}:${postedId}`);
+  pairs.push(`${pendingId}:${postedId}`);
+  const layout = { pairs: pairs.slice(-DISMISSED_CAP) };
+  await db.insert(uiLayouts).values({ layoutKey: DISMISSED_KEY, layout }).onDuplicateKeyUpdate({ set: { layout } });
+}
 
 const toSide = (r: SideRow): MatchSide => ({
   id: r.id,
@@ -114,6 +133,8 @@ export interface PendingReviewItem {
     accountNumber: string | null;
     accountLabel: string | null;
     notes: string | null;
+    /** From bank sync: the bank settles it, so it can't be marked posted by hand. */
+    synced: boolean;
   };
   /** The posted row this most likely became, or null while it's still genuinely pending. */
   match: {
@@ -132,7 +153,13 @@ export interface PendingReviewItem {
  */
 export async function getPendingReview(): Promise<PendingReviewItem[]> {
   const pendingRows = await db
-    .select({ ...sideCols, accountLabel: accounts.label, notes: transactions.notes })
+    .select({
+      ...sideCols,
+      accountLabel: accounts.label,
+      notes: transactions.notes,
+      externalId: transactions.externalId,
+      importBatchId: transactions.importBatchId,
+    })
     .from(transactions)
     .leftJoin(accounts, eq(accounts.id, transactions.accountId))
     .where(eq(transactions.pending, true))
@@ -160,7 +187,10 @@ export async function getPendingReview(): Promise<PendingReviewItem[]> {
           )
       : [];
 
-  const pairs = pairPending(pendingRows.map(toSide), posted.map(toSide));
+  // A pending row from bank sync or a statement carries the bank's descriptor, so its posted twin
+  // must share the merchant name (see pending-match.ts); one typed by hand may not.
+  const pendingSides = pendingRows.map((p) => ({ ...toSide(p), handEntered: p.externalId == null && p.importBatchId == null }));
+  const pairs = pairPending(pendingSides, posted.map(toSide), await getDismissedPendingPairs());
   const pairFor = new Map(pairs.map((p) => [p.enteredId, p]));
   const postedById = new Map(posted.map((p) => [p.id, p]));
   return pendingRows.map((p) => {
@@ -176,6 +206,7 @@ export async function getPendingReview(): Promise<PendingReviewItem[]> {
         accountNumber: p.accountNumber,
         accountLabel: p.accountLabel,
         notes: p.notes,
+        synced: p.externalId != null,
       },
       match:
         pr && m

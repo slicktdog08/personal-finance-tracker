@@ -1,0 +1,14 @@
+-- Which budget envelope a bill draws from, stated on the bill instead of inferred.
+--
+-- The cash projection nets a bill against the category line that already plans for it, so the
+-- same money isn't both paid as a bill AND spread as everyday spending. It found that line from
+-- the majority category of the bill's LINKED TRANSACTIONS — which a brand-new bill does not have.
+-- So the rent ($1,410) and an electric bill ($165.24) were each counted twice in 2026-10,
+-- making a budget that nets to zero project a $1,575.24 monthly loss. New bills are exactly the
+-- big ones when you move into an apartment, so "wait for payment history" was never going to work.
+--
+-- Nullable: unset keeps today's behaviour (guess from transactions, else treat as unbudgeted).
+--
+-- Hand-written like 0005+ (the drizzle journal stops at 0004). Apply with:
+--   npx tsx scripts/apply-sql.ts drizzle/0025_add_bill_category.sql
+ALTER TABLE `bills` ADD COLUMN `category` varchar(48) NULL;

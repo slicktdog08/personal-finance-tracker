@@ -10,13 +10,13 @@ export default async function StatusesPage() {
   try {
     statuses = await getStatusRows();
   } catch (e) {
-    return <SetupNotice error={e instanceof Error ? e.message : String(e)} />;
+    return <SetupNotice error={e} />;
   }
 
   return (
     <div className="space-y-5">
       <SettingsHeader
-        title="Bill Statuses 🏷️"
+        title="Bill statuses"
         description="The statuses you assign to bills each month. “Settled” statuses count toward the paid-off percentage on the months view."
       />
       <StatusList

@@ -1,12 +1,15 @@
+import { MarkTransactionsSeen } from "@/components/transactions/MarkTransactionsSeen";
+import { PageHeader, buttonClass, Icon } from "@/components/ds";
 import Link from "next/link";
 import { SetupNotice } from "@/components/SetupNotice";
 import { TransactionsTable } from "@/components/transactions/TransactionsTable";
 import { AddTransaction } from "@/components/transactions/AddTransaction";
 import { TransactionFilters } from "@/components/transactions/TransactionFilters";
 import { PendingReview } from "@/components/transactions/PendingReview";
-import { formatMoney } from "@/server/lib/money";
+import { prettyPeriod } from "@/server/lib/period";
 import {
   getTransactionsPage,
+  getLatestTransactionId,
   getAccounts,
   getCategoryOptionsRich,
   getPeriods,
@@ -46,14 +49,20 @@ export default async function TransactionsPage({
     search: one(sp.q) || undefined,
     uncategorized: one(sp.uncat) === "1",
     pending: one(sp.pending) === "1",
+    billLinked: one(sp.bill) === "1",
     sort: one(sp.sort) || "date",
     dir: one(sp.dir) === "asc" ? "asc" : "desc",
     page: one(sp.page) ? Number(one(sp.page)) : 1,
     pageSize: one(sp.size) ? Number(one(sp.size)) : 50,
   };
 
+  // Each filter chip's count: what the page would hold with that chip on, everything else as
+  // is. Reuses the page query (one row, totals only) so the counts can't drift from the list.
+  const chipCount = (extra: Partial<TxQuery>) =>
+    getTransactionsPage({ ...q, ...extra, page: 1, pageSize: 1 }).then((r) => r.total);
+
   let result, accounts, catOptions, periods, uncategorized, billOptions, openWithdrawals, rules,
-    pendingReview;
+    pendingReview, latestId, uncatCount, pendingCount, billCount;
   try {
     [
       result,
@@ -65,6 +74,10 @@ export default async function TransactionsPage({
       openWithdrawals,
       rules,
       pendingReview,
+      latestId,
+      uncatCount,
+      pendingCount,
+      billCount,
     ] =
       await Promise.all([
         getTransactionsPage(q),
@@ -78,9 +91,14 @@ export default async function TransactionsPage({
         getCategoryRules(),
         // Hand-entered pending charges, each with the imported row it likely posted as.
         getPendingReview(),
+        // Opening this page marks everything up to here as seen (the nav "new" badge).
+        getLatestTransactionId(),
+        q.uncategorized ? null : chipCount({ uncategorized: true }),
+        q.pending ? null : chipCount({ pending: true }),
+        q.billLinked ? null : chipCount({ billLinked: true }),
       ]);
   } catch (e) {
-    return <SetupNotice error={e instanceof Error ? e.message : String(e)} />;
+    return <SetupNotice error={e} />;
   }
 
   const { rows, total, page, pageSize, pages, sumDebit, sumCredit, sumNet } = result;
@@ -91,39 +109,49 @@ export default async function TransactionsPage({
     accountIds.length === 1 ? accounts.find((a) => a.id === accountIds[0]) : undefined;
 
   return (
-    // The shared <main> caps pages at max-w-7xl, which squeezes this eight-column table.
-    // Negative margins (a share of the slack between the cap and the viewport) let the page
-    // spread to 96rem on wide screens without ever exceeding the viewport.
-    <div className="space-y-5 xl:mx-[calc((100%_-_min(100vw_-_2rem,96rem))/2)]">
-      <div className="flex items-center justify-between flex-wrap gap-2">
-        <h1 className="text-2xl font-bold tracking-tight">Transactions</h1>
-        <div className="flex flex-wrap items-center gap-3 text-sm">
-          <span className="text-neutral-500">
-            {uncategorized} uncategorized
-          </span>
-          <AddTransaction
-            accounts={accounts.map((a) => ({
-              id: a.id,
-              accountNumber: a.accountNumber,
-              label: a.label,
-              accountType: a.accountType,
-            }))}
-            categoryOptions={catOptions}
-            defaultAccountNumber={filteredAccount?.accountNumber}
-            openWithdrawals={openWithdrawals}
-          />
-          <Link
-            href="/transactions/categorize"
-            className="px-3 py-1.5 rounded-md bg-blue-600 text-white font-medium hover:bg-blue-700"
-          >
-            Mass categorize →
-          </Link>
-        </div>
-      </div>
+    // The shell caps page content at 80rem, which squeezes the wide table. Negative margins
+    // (a share of the slack between the cap and the main column) let the page spread to 96rem
+    // on wide screens without ever exceeding that column. 100cqw is the main column (the
+    // shell's `app` container), not the viewport, so the sidebar is never overlapped.
+    <div className="space-y-4 xl:mx-[calc((100%_-_min(100cqw_-_2rem,96rem))/2)]">
+      <MarkTransactionsSeen upToId={latestId} />
+      <PageHeader
+        title="Activity"
+        actions={
+          <>
+            {uncategorized > 0 && (
+              <Link
+                href="/transactions/categorize"
+                className={buttonClass({ variant: "ghost", className: "max-lg:hidden" })}
+              >
+                <Icon name="tags" size={16} />
+                {uncategorized.toLocaleString()} to categorize
+              </Link>
+            )}
+            <Link href="/import" className={buttonClass({ variant: "secondary", className: "max-lg:hidden" })}>
+              <Icon name="upload" size={16} />
+              Import
+            </Link>
+            <AddTransaction
+              accounts={accounts.map((a) => ({
+                id: a.id,
+                accountNumber: a.accountNumber,
+                label: a.label,
+                accountType: a.accountType,
+              }))}
+              categoryOptions={catOptions}
+              defaultAccountNumber={filteredAccount?.accountNumber}
+              openWithdrawals={openWithdrawals}
+            />
+          </>
+        }
+      />
+
+      <PendingReview items={pendingReview} />
 
       {/* Filters apply live (debounced) via client-side navigation — no submit button. */}
       <TransactionFilters
-        periods={periods.map((p) => ({ label: p.label }))}
+        periods={periods.map((p) => ({ label: p.label, pretty: prettyPeriod(p.year, p.month) }))}
         accounts={accounts.map((a) => ({
           id: a.id,
           accountNumber: a.accountNumber,
@@ -138,44 +166,15 @@ export default async function TransactionsPage({
           search: q.search ?? "",
           uncategorized: q.uncategorized ?? false,
           pending: q.pending ?? false,
+          billLinked: q.billLinked ?? false,
+        }}
+        counts={{
+          // With a chip already on, its count is just the current total.
+          uncategorized: uncatCount ?? total,
+          pending: pendingCount ?? total,
+          billLinked: billCount ?? total,
         }}
       />
-
-      <PendingReview items={pendingReview} />
-
-      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-sm">
-        <span className="text-neutral-500">
-          Showing {from}–{to} of {total.toLocaleString()}
-        </span>
-        {total > 0 && (
-          <span className="flex flex-wrap items-center gap-x-4 gap-y-1">
-            <span className="text-neutral-500">
-              Out{" "}
-              <span className="font-medium tabular-nums text-neutral-700 dark:text-neutral-300">
-                {formatMoney(sumDebit)}
-              </span>
-            </span>
-            <span className="text-neutral-500">
-              In{" "}
-              <span className="font-medium tabular-nums text-emerald-700 dark:text-emerald-400">
-                {formatMoney(sumCredit)}
-              </span>
-            </span>
-            <span className="text-neutral-500">
-              Net{" "}
-              <span
-                className={`font-semibold tabular-nums ${
-                  sumNet < 0
-                    ? "text-red-600 dark:text-red-400"
-                    : "text-emerald-700 dark:text-emerald-400"
-                }`}
-              >
-                {formatMoney(sumNet)}
-              </span>
-            </span>
-          </span>
-        )}
-      </div>
 
       <TransactionsTable
         rows={rows.map((t) => ({
@@ -210,6 +209,7 @@ export default async function TransactionsPage({
         pageSize={pageSize}
         sort={q.sort ?? "date"}
         dir={q.dir ?? "desc"}
+        summary={{ total, from, to, sumDebit, sumCredit, sumNet }}
       />
     </div>
   );

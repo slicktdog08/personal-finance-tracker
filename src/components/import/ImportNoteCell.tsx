@@ -62,16 +62,16 @@ export function ImportNoteCell({
           }}
           rows={3}
           placeholder="What was this actually for?"
-          className="w-full min-w-0 border rounded px-2 py-1 text-base md:text-xs bg-transparent border-neutral-300 dark:border-neutral-700"
+          className="w-full min-w-0 rounded-control border border-line-2 bg-surface px-2 py-1 text-base text-fg focus:border-accent focus:outline-none md:text-xs"
         />
         <div className="flex items-center gap-2">
-          <button onClick={save} className="text-xs text-blue-600 hover:underline">
+          <button onClick={save} className="text-xs text-accent-text hover:underline">
             Save note
           </button>
-          <button onClick={cancel} className="text-xs text-neutral-500 hover:underline">
+          <button onClick={cancel} className="text-xs text-fg-3 hover:underline">
             Cancel
           </button>
-          <span className="text-[11px] text-neutral-400">Enter saves · Shift+Enter new line</span>
+          <span className="text-[11px] text-fg-3">Enter saves · Shift+Enter new line</span>
         </div>
       </div>
     );
@@ -82,7 +82,7 @@ export function ImportNoteCell({
   // just can't be edited.
   if (disabled) {
     return note ? (
-      <div className="mt-0.5 text-xs text-neutral-400 whitespace-pre-wrap">{note}</div>
+      <div className="mt-0.5 whitespace-pre-wrap text-xs text-fg-3">{note}</div>
     ) : null;
   }
 
@@ -91,7 +91,7 @@ export function ImportNoteCell({
       <button
         onClick={open}
         title="Add a note — it's saved with the transaction when you import"
-        className="mt-0.5 inline-block py-1 text-xs text-neutral-400 hover:text-blue-600 hover:underline md:py-0 md:text-[11px]"
+        className="mt-0.5 inline-block py-1 text-xs text-fg-3 hover:text-accent-text hover:underline md:py-0 md:text-[11px]"
       >
         + note
       </button>
@@ -103,7 +103,7 @@ export function ImportNoteCell({
       <button
         onClick={open}
         title="Edit note"
-        className="block text-left text-xs text-neutral-500 dark:text-neutral-400 whitespace-pre-wrap hover:text-blue-600"
+        className="block whitespace-pre-wrap text-left text-xs text-fg-2 hover:text-accent-text"
         style={
           expanded
             ? undefined
@@ -121,7 +121,7 @@ export function ImportNoteCell({
       {(note.length > 90 || note.includes("\n")) && (
         <button
           onClick={() => setExpanded((v) => !v)}
-          className="text-[11px] text-neutral-400 hover:text-blue-600 hover:underline"
+          className="text-[11px] text-fg-3 hover:text-accent-text hover:underline"
         >
           {expanded ? "less" : "more"}
         </button>

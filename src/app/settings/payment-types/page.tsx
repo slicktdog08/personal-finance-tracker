@@ -10,13 +10,13 @@ export default async function PaymentTypesPage() {
   try {
     payments = await getPaymentTypeRows();
   } catch (e) {
-    return <SetupNotice error={e instanceof Error ? e.message : String(e)} />;
+    return <SetupNotice error={e} />;
   }
 
   return (
     <div className="space-y-5">
       <SettingsHeader
-        title="Payment Types 💳"
+        title="Payment types"
         description="How each bill gets paid. Customize the color, emoji, and order shown in dropdowns."
       />
       <PaymentTypeList

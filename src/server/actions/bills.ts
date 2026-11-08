@@ -168,7 +168,7 @@ export async function mergeBills(
 // Update the recurring bill definition's defaults / debt flag.
 export async function updateBill(
   id: number,
-  patch: { name?: string; isDebt?: boolean; active?: boolean; notes?: string | null },
+  patch: { name?: string; isDebt?: boolean; active?: boolean; notes?: string | null; category?: string | null },
 ): Promise<void> {
   await requireSession();
   const set: Record<string, unknown> = {};
@@ -176,9 +176,14 @@ export async function updateBill(
   if (patch.isDebt !== undefined) set.isDebt = patch.isDebt;
   if (patch.active !== undefined) set.active = patch.active;
   if (patch.notes !== undefined) set.notes = patch.notes;
+  // Empty string clears it back to "guess from transactions".
+  if (patch.category !== undefined) set.category = patch.category?.trim() || null;
   if (Object.keys(set).length) await db.update(bills).set(set).where(eq(bills.id, id));
   revalidatePath(`/settings/bills/${id}`);
   revalidatePath("/settings/bills");
+  // The projection nets bills against this category, so budget views change with it.
+  revalidatePath("/budget");
+  revalidatePath("/dashboard");
 }
 
 // Apply this instance's due day to all later months' instances of the same bill.

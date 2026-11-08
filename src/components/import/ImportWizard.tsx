@@ -3,7 +3,6 @@
 import { useState, useTransition } from "react";
 import { FileDropzone } from "@/components/import/FileDropzone";
 import { inspectCsv, analyzeWithMapping, commitImport } from "@/server/actions/import";
-import { resyncTransactionPeriods } from "@/server/actions/transactions";
 import type {
   ColumnMapping,
   InspectResult,
@@ -12,7 +11,6 @@ import type {
   BalanceSnapshot,
   CommitResult,
 } from "@/server/lib/import-types";
-import { formatMoney } from "@/server/lib/money";
 import { formatDate } from "@/server/lib/period";
 import type { CategoryOption } from "@/server/queries";
 import type { CategoryRule } from "@/server/lib/categorize";
@@ -24,6 +22,9 @@ import {
   clearRuleFromRows,
   upsertRuleInList,
 } from "@/components/import/rule-helpers";
+import { Button, Card, EmptyState, Input, Money, Notice, Segmented, Select, buttonClass, cx } from "@/components/ds";
+import { ImportSteps } from "@/components/import/ImportSteps";
+import Link from "next/link";
 
 interface Account {
   id: number;
@@ -50,7 +51,6 @@ export function ImportWizard({
   const [balances, setBalances] = useState<BalanceSnapshot[]>([]);
   const [result, setResult] = useState<CommitResult | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [resyncMsg, setResyncMsg] = useState<string | null>(null);
   const [pending, start] = useTransition();
   // Saved rules, kept current as rules are created/edited from the review table so
   // the "set by rule" chips and local re-application stay accurate without a reload.
@@ -74,9 +74,6 @@ export function ImportWizard({
   }
 
   const set = (patch: Partial<ColumnMapping>) => setMapping((m) => (m ? { ...m, ...patch } : m));
-
-  const inputCls =
-    "border rounded px-2 py-1 text-sm bg-transparent border-neutral-300 dark:border-neutral-700";
 
   async function onFile(file: File) {
     setError(null);
@@ -151,61 +148,26 @@ export function ImportWizard({
     setError(null);
   }
 
-  const headerOptions = (inspect?.headers ?? []).map((h) => (
-    <option key={h} value={h}>
-      {h}
-    </option>
-  ));
+  const headers = inspect?.headers ?? [];
+  // Column pickers: required ones list the headers; optional/unset ones lead with a blank.
+  const cols = (blank?: string) => [...(blank ? [{ value: "", label: blank }] : []), ...headers.map((h) => ({ value: h, label: h }))];
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between flex-wrap gap-2">
-        <h1 className="text-2xl font-bold tracking-tight">Import transactions</h1>
-        <div className="flex items-center gap-2 text-sm">
-          <button
-            onClick={() =>
-              start(async () => {
-                const n = await resyncTransactionPeriods();
-                setResyncMsg(`Linked ${n} transaction${n === 1 ? "" : "s"} to their month.`);
-              })
-            }
-            disabled={pending}
-            className="px-3 py-1.5 rounded-md border border-neutral-300 dark:border-neutral-700 font-medium hover:bg-neutral-100 dark:hover:bg-neutral-800 disabled:opacity-50"
-          >
-            Re-sync transactions ↔ months
-          </button>
-          {resyncMsg && <span className="text-neutral-500">{resyncMsg}</span>}
-        </div>
-      </div>
+    <div className="space-y-5">
+      <ImportSteps steps={["Upload", "Map columns", "Review", "Done"]} current={["upload", "map", "preview", "done"].indexOf(phase)} />
 
-      {/* Steps */}
-      <div className="flex items-center gap-2 text-xs text-neutral-500">
-        {(["upload", "map", "preview", "done"] as const).map((p, i) => (
-          <span key={p} className="flex items-center gap-2">
-            <span
-              className={`px-2 py-0.5 rounded-full ${
-                phase === p ? "bg-blue-600 text-white" : "bg-neutral-200 dark:bg-neutral-800"
-              }`}
-            >
-              {i + 1}. {p}
-            </span>
-            {i < 3 && <span>→</span>}
-          </span>
-        ))}
-      </div>
-
-      {error && (
-        <div className="rounded border border-red-300 bg-red-50 dark:bg-red-950/30 p-3 text-sm text-red-700 dark:text-red-300">
-          {error}
-        </div>
-      )}
+      {error && <Notice tone="danger">{error}</Notice>}
       {ruleMsg && (
-        <div className="rounded border border-green-300 bg-green-50 dark:bg-green-950/30 p-3 text-sm text-green-700 dark:text-green-300 flex items-start justify-between gap-2">
-          <span>{ruleMsg}</span>
-          <button onClick={() => setRuleMsg(null)} className="text-xs hover:underline">
-            dismiss
-          </button>
-        </div>
+        <Notice
+          tone="ok"
+          action={
+            <Button size="sm" variant="ghost" onClick={() => setRuleMsg(null)}>
+              Dismiss
+            </Button>
+          }
+        >
+          {ruleMsg}
+        </Notice>
       )}
 
       {/* Step 1: upload */}
@@ -215,332 +177,272 @@ export function ImportWizard({
           disabled={pending}
           pending={pending}
           pendingLabel="Reading…"
-          title="Drag &amp; drop a bank CSV, or"
-          hint="You'll map its columns next — works even with no account column or an odd “Type” field."
+          title="Drop a bank CSV here"
+          hint="CSV from any bank. You map its columns next, so it works even with no account column or an odd Type field."
           onFiles={(files) => onFile(files[0])}
         />
       )}
 
       {/* Step 2: map columns */}
       {phase === "map" && inspect && mapping && (
-        <div className="space-y-5">
-          <div className="text-sm text-neutral-500">
-            <strong>{filename}</strong> · {inspect.rowCount} rows · {inspect.headers.length} columns
-          </div>
-
-          <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            <MapField label="Date column *">
-              <select value={mapping.date} onChange={(e) => set({ date: e.target.value })} className={inputCls}>
-                {headerOptions}
-              </select>
-            </MapField>
-            <MapField label="Description column *">
-              <select
-                value={mapping.description}
-                onChange={(e) => set({ description: e.target.value })}
-                className={inputCls}
+        <Card
+          title={`Map columns · ${filename}`}
+          meta={`${inspect.rowCount} rows · ${inspect.headers.length} columns`}
+          action={
+            <Button size="sm" variant="ghost" icon="arrow-left" onClick={reset}>
+              Start over
+            </Button>
+          }
+        >
+          <div className="space-y-5">
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              <MapField label="Date column" required>
+                <Select value={mapping.date} onChange={(e) => set({ date: e.target.value })} options={cols()} />
+              </MapField>
+              <MapField label="Description column" required>
+                <Select value={mapping.description} onChange={(e) => set({ description: e.target.value })} options={cols()} />
+              </MapField>
+              <MapField label="Net amount (optional)">
+                <Select value={mapping.netAmount ?? ""} onChange={(e) => set({ netAmount: e.target.value || undefined })} options={cols("None")} />
+              </MapField>
+              <MapField label="Source category (optional)">
+                <Select value={mapping.category ?? ""} onChange={(e) => set({ category: e.target.value || undefined })} options={cols("None")} />
+              </MapField>
+              <MapField
+                label="Available balance (optional)"
+                hint="Records the available balance into each account's balance ledger (one snapshot per account per day)."
               >
-                {headerOptions}
-              </select>
-            </MapField>
-            <MapField label="Net amount (optional)">
-              <select
-                value={mapping.netAmount ?? ""}
-                onChange={(e) => set({ netAmount: e.target.value || undefined })}
-                className={inputCls}
-              >
-                <option value="">— none —</option>
-                {headerOptions}
-              </select>
-            </MapField>
-            <MapField label="Source category (optional)">
-              <select
-                value={mapping.category ?? ""}
-                onChange={(e) => set({ category: e.target.value || undefined })}
-                className={inputCls}
-              >
-                <option value="">— none —</option>
-                {headerOptions}
-              </select>
-            </MapField>
-            <MapField label="Available balance (optional)">
-              <select
-                value={mapping.balanceColumn ?? ""}
-                onChange={(e) => set({ balanceColumn: e.target.value || undefined })}
-                className={inputCls}
-              >
-                <option value="">— none —</option>
-                {headerOptions}
-              </select>
-              <span className="text-xs text-neutral-500">
-                Records the available balance into each account&apos;s balance ledger (one snapshot
-                per account per day).
-              </span>
-            </MapField>
-          </div>
-
-          {/* Account */}
-          <div className="rounded-lg border border-neutral-200 dark:border-neutral-800 p-4 space-y-2">
-            <div className="font-medium text-sm">Account</div>
-            <div className="flex flex-wrap items-center gap-4 text-sm">
-              <label className="flex items-center gap-1">
-                <input
-                  type="radio"
-                  checked={mapping.accountMode === "fixed"}
-                  onChange={() => set({ accountMode: "fixed" })}
+                <Select
+                  value={mapping.balanceColumn ?? ""}
+                  onChange={(e) => set({ balanceColumn: e.target.value || undefined })}
+                  options={cols("None")}
                 />
-                Same account for all rows
-              </label>
-              <label className="flex items-center gap-1">
-                <input
-                  type="radio"
-                  checked={mapping.accountMode === "column"}
-                  onChange={() => set({ accountMode: "column" })}
-                />
-                From a column
-              </label>
+              </MapField>
             </div>
-            {mapping.accountMode === "fixed" ? (
-              <div className="flex flex-wrap items-center gap-2">
-                <select
-                  value={mapping.fixedAccountNumber ?? ""}
-                  onChange={(e) => set({ fixedAccountNumber: e.target.value })}
-                  className={inputCls}
-                >
-                  <option value="">— pick account —</option>
-                  {accounts.map((a) => (
-                    <option key={a.id} value={a.accountNumber}>
-                      {a.label ? `${a.label} (${a.accountNumber})` : `••${a.accountNumber}`}
-                    </option>
-                  ))}
-                </select>
-                <span className="text-xs text-neutral-500">or type a new last-4:</span>
-                <input
-                  value={
-                    accounts.some((a) => a.accountNumber === mapping.fixedAccountNumber)
-                      ? ""
-                      : mapping.fixedAccountNumber ?? ""
-                  }
-                  onChange={(e) => set({ fixedAccountNumber: e.target.value })}
-                  placeholder="e.g. 1234"
-                  className={inputCls + " w-24"}
-                />
-              </div>
-            ) : (
-              <select
-                value={mapping.accountColumn ?? ""}
-                onChange={(e) => set({ accountColumn: e.target.value || undefined })}
-                className={inputCls}
-              >
-                <option value="">— pick column —</option>
-                {headerOptions}
-              </select>
-            )}
-          </div>
 
-          {/* Amount & direction */}
-          <div className="rounded-lg border border-neutral-200 dark:border-neutral-800 p-4 space-y-2">
-            <div className="font-medium text-sm">Amount &amp; direction (money in vs out)</div>
-            <div className="flex flex-wrap items-center gap-4 text-sm">
-              <label className="flex items-center gap-1">
-                <input
-                  type="radio"
-                  checked={mapping.amountMode !== "split" && mapping.directionMode === "sign"}
-                  onChange={() => set({ amountMode: "single", directionMode: "sign" })}
-                />
-                One amount column, +/− sign
-              </label>
-              <label className="flex items-center gap-1">
-                <input
-                  type="radio"
-                  checked={mapping.amountMode !== "split" && mapping.directionMode === "column"}
-                  onChange={() => set({ amountMode: "single", directionMode: "column" })}
-                />
-                Amount + a Debit/Credit label column
-              </label>
-              <label className="flex items-center gap-1">
-                <input
-                  type="radio"
-                  checked={mapping.amountMode === "split"}
-                  onChange={() => set({ amountMode: "split" })}
-                />
-                Separate Debit &amp; Credit columns
-              </label>
-            </div>
-            {mapping.amountMode === "split" ? (
-              <div className="grid sm:grid-cols-2 gap-3">
-                <MapField label="Debit column (money out) *">
-                  <select
-                    value={mapping.debitColumn ?? ""}
-                    onChange={(e) => set({ debitColumn: e.target.value || undefined })}
-                    className={inputCls}
-                  >
-                    <option value="">— pick column —</option>
-                    {headerOptions}
-                  </select>
+            {/* Account */}
+            <section className="space-y-3 rounded-panel bg-sunken p-4">
+              <div className="text-sm font-medium">Account</div>
+              <Segmented
+                label="Account source"
+                value={mapping.accountMode}
+                onChange={(v) => set({ accountMode: v })}
+                options={[
+                  { value: "fixed", label: "Same for all rows" },
+                  { value: "column", label: "From a column" },
+                ]}
+              />
+              {mapping.accountMode === "fixed" ? (
+                <div className="flex flex-wrap items-end gap-3">
+                  <MapField label="Pick an account" className="min-w-0 flex-1 basis-56">
+                    <Select
+                      value={accounts.some((a) => a.accountNumber === mapping.fixedAccountNumber) ? mapping.fixedAccountNumber ?? "" : ""}
+                      onChange={(e) => set({ fixedAccountNumber: e.target.value })}
+                      options={[
+                        { value: "", label: "Choose…" },
+                        ...accounts.map((a) => ({
+                          value: a.accountNumber,
+                          label: a.label ? `${a.label} (${a.accountNumber})` : `••${a.accountNumber}`,
+                        })),
+                      ]}
+                    />
+                  </MapField>
+                  <MapField label="Or type a new last four" className="w-36">
+                    <Input
+                      value={
+                        accounts.some((a) => a.accountNumber === mapping.fixedAccountNumber)
+                          ? ""
+                          : mapping.fixedAccountNumber ?? ""
+                      }
+                      onChange={(e) => set({ fixedAccountNumber: e.target.value })}
+                      placeholder="e.g. 1234"
+                    />
+                  </MapField>
+                </div>
+              ) : (
+                <MapField label="Account column" className="max-w-sm">
+                  <Select
+                    value={mapping.accountColumn ?? ""}
+                    onChange={(e) => set({ accountColumn: e.target.value || undefined })}
+                    options={cols("Choose a column…")}
+                  />
                 </MapField>
-                <MapField label="Credit column (money in) *">
-                  <select
-                    value={mapping.creditColumn ?? ""}
-                    onChange={(e) => set({ creditColumn: e.target.value || undefined })}
-                    className={inputCls}
-                  >
-                    <option value="">— pick column —</option>
-                    {headerOptions}
-                  </select>
-                </MapField>
-              </div>
-            ) : (
-              <div className="space-y-2">
-                <MapField label="Amount column *">
-                  <select
-                    value={mapping.amount}
-                    onChange={(e) => set({ amount: e.target.value })}
-                    className={inputCls}
-                  >
-                    <option value="">— pick column —</option>
-                    {headerOptions}
-                  </select>
-                </MapField>
-                {mapping.directionMode === "sign" ? (
-                  <label className="text-sm flex items-center gap-2">
-                    A negative amount means
-                    <select
-                      value={mapping.negativeIs}
-                      onChange={(e) => set({ negativeIs: e.target.value as "Debit" | "Credit" })}
-                      className={inputCls}
-                    >
-                      <option value="Debit">Debit (money out / charge)</option>
-                      <option value="Credit">Credit (money in)</option>
-                    </select>
-                  </label>
-                ) : (
-                  <select
-                    value={mapping.directionColumn ?? ""}
-                    onChange={(e) => set({ directionColumn: e.target.value || undefined })}
-                    className={inputCls}
-                  >
-                    <option value="">— pick Debit/Credit column —</option>
-                    {headerOptions}
-                  </select>
-                )}
-              </div>
-            )}
-            <p className="text-xs text-neutral-500">
-              Tip: many bank exports use one signed amount (keep the first option, negative =
-              Debit). Capital One and similar put the amount in a separate <strong>Debit</strong> or{" "}
-              <strong>Credit</strong> column — use the third option. A taxonomy column like
-              Chase&apos;s &ldquo;Type&rdquo; (Sale/Payment/Fee) is not a direction — leave it
-              unmapped.
-            </p>
-          </div>
+              )}
+            </section>
 
-          {/* Sample preview */}
-          {inspect.sample.length > 0 && (
-            <div className="overflow-x-auto rounded-lg border border-neutral-200 dark:border-neutral-800">
-              <table className="w-full text-xs">
-                <thead className="bg-neutral-100 dark:bg-neutral-900 text-left">
-                  <tr>
-                    {inspect.headers.map((h) => (
-                      <th key={h} className="px-2 py-1 font-medium whitespace-nowrap">
-                        {h}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {inspect.sample.map((r, i) => (
-                    <tr key={i} className="border-t border-neutral-200 dark:border-neutral-800">
+            {/* Amount & direction */}
+            <section className="space-y-3 rounded-panel bg-sunken p-4">
+              <div className="text-sm font-medium">Amount and direction (money in vs out)</div>
+              {/* Three long labels don't fit a phone row as a segmented control; radios wrap. */}
+              <div className="flex flex-wrap gap-x-5 gap-y-2 text-sm" role="radiogroup" aria-label="Amount layout">
+                <label className="flex items-center gap-2">
+                  <input
+                    type="radio"
+                    className="accent-[var(--mp-accent)]"
+                    checked={mapping.amountMode !== "split" && mapping.directionMode === "sign"}
+                    onChange={() => set({ amountMode: "single", directionMode: "sign" })}
+                  />
+                  One amount column, +/− sign
+                </label>
+                <label className="flex items-center gap-2">
+                  <input
+                    type="radio"
+                    className="accent-[var(--mp-accent)]"
+                    checked={mapping.amountMode !== "split" && mapping.directionMode === "column"}
+                    onChange={() => set({ amountMode: "single", directionMode: "column" })}
+                  />
+                  Amount + a Debit/Credit label column
+                </label>
+                <label className="flex items-center gap-2">
+                  <input
+                    type="radio"
+                    className="accent-[var(--mp-accent)]"
+                    checked={mapping.amountMode === "split"}
+                    onChange={() => set({ amountMode: "split" })}
+                  />
+                  Separate Debit and Credit columns
+                </label>
+              </div>
+              {mapping.amountMode === "split" ? (
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <MapField label="Debit column (money out)" required>
+                    <Select
+                      value={mapping.debitColumn ?? ""}
+                      onChange={(e) => set({ debitColumn: e.target.value || undefined })}
+                      options={cols("Choose a column…")}
+                    />
+                  </MapField>
+                  <MapField label="Credit column (money in)" required>
+                    <Select
+                      value={mapping.creditColumn ?? ""}
+                      onChange={(e) => set({ creditColumn: e.target.value || undefined })}
+                      options={cols("Choose a column…")}
+                    />
+                  </MapField>
+                </div>
+              ) : (
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <MapField label="Amount column" required>
+                    <Select value={mapping.amount} onChange={(e) => set({ amount: e.target.value })} options={cols("Choose a column…")} />
+                  </MapField>
+                  {mapping.directionMode === "sign" ? (
+                    <MapField label="A negative amount means">
+                      <Select
+                        value={mapping.negativeIs}
+                        onChange={(e) => set({ negativeIs: e.target.value as "Debit" | "Credit" })}
+                        options={[
+                          { value: "Debit", label: "Debit (money out / charge)" },
+                          { value: "Credit", label: "Credit (money in)" },
+                        ]}
+                      />
+                    </MapField>
+                  ) : (
+                    <MapField label="Debit/Credit column" required>
+                      <Select
+                        value={mapping.directionColumn ?? ""}
+                        onChange={(e) => set({ directionColumn: e.target.value || undefined })}
+                        options={cols("Choose a column…")}
+                      />
+                    </MapField>
+                  )}
+                </div>
+              )}
+              <p className="text-xs text-fg-3">
+                Tip: many bank exports use one signed amount (keep the first option, negative = Debit). Capital One and
+                similar put the amount in a separate <strong>Debit</strong> or <strong>Credit</strong> column, so use the
+                third option. A taxonomy column like Chase&apos;s &ldquo;Type&rdquo; (Sale/Payment/Fee) is not a direction;
+                leave it unmapped.
+              </p>
+            </section>
+
+            {/* Sample preview */}
+            {inspect.sample.length > 0 && (
+              <div className="overflow-x-auto rounded-panel border border-line">
+                <table className="w-full text-xs">
+                  <thead className="bg-sunken text-left text-fg-3">
+                    <tr>
                       {inspect.headers.map((h) => (
-                        <td key={h} className="px-2 py-1 whitespace-nowrap max-w-48 truncate">
-                          {r[h]}
-                        </td>
+                        <th key={h} className="whitespace-nowrap px-2.5 py-1.5 font-medium">
+                          {h}
+                        </th>
                       ))}
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-
-          <div className="flex items-center gap-2">
-            <button onClick={reset} className="px-3 py-1.5 text-sm text-neutral-500 hover:underline">
-              ← Start over
-            </button>
-            <button
-              onClick={analyze}
-              disabled={pending || !canAnalyze(mapping)}
-              className="px-4 py-2 rounded-md bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 disabled:opacity-50"
-            >
-              {pending ? "Analyzing…" : "Analyze →"}
-            </button>
-            {!canAnalyze(mapping) && (
-              <span className="text-xs text-amber-600">
-                Map date, description, the amount (or Debit/Credit columns), and pick an account.
-              </span>
+                  </thead>
+                  <tbody>
+                    {inspect.sample.map((r, i) => (
+                      <tr key={i} className="border-t border-line">
+                        {inspect.headers.map((h) => (
+                          <td key={h} className="max-w-48 truncate whitespace-nowrap px-2.5 py-1.5">
+                            {r[h]}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             )}
+
+            <div className="flex flex-wrap items-center gap-3">
+              <Button iconRight="arrow-right" loading={pending} onClick={analyze} disabled={pending || !canAnalyze(mapping)}>
+                {pending ? "Analyzing…" : "Review rows"}
+              </Button>
+              {!canAnalyze(mapping) && (
+                <span className="text-xs text-warn">Map date, description, the amount (or Debit/Credit columns), and pick an account.</span>
+              )}
+            </div>
           </div>
-        </div>
+        </Card>
       )}
 
       {/* Step 3: preview */}
       {phase === "preview" && preview && (
-        <div className="space-y-3">
-          <div className="flex items-center justify-between flex-wrap gap-2">
-            <div className="text-sm">
-              <strong>{filename}</strong> — {preview.total} rows ·{" "}
-              <span className="text-green-700">{preview.newCount} new</span> ·{" "}
-              <span className="text-yellow-700">{preview.duplicateCount} duplicates</span> ·{" "}
-              {preview.finalizeCount ? (
-                <>
-                  <span className="text-blue-700">{preview.finalizeCount} settle pending</span> ·{" "}
-                </>
-              ) : null}
-              <span className="text-red-700">{preview.errorCount} errors</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <button onClick={() => setPhase("map")} className="px-3 py-1.5 text-sm text-neutral-500 hover:underline">
-                ← Back to mapping
-              </button>
-              <button
+        <Card
+          padded={false}
+          title={`Review · ${filename}`}
+          meta={reviewMeta(preview.newCount, preview.duplicateCount, preview.finalizeCount ?? 0, preview.errorCount)}
+          action={
+            <div className="flex flex-wrap justify-end gap-1.5">
+              <Button size="sm" variant="ghost" icon="arrow-left" onClick={() => setPhase("map")}>
+                Back to mapping
+              </Button>
+              <Button
+                size="sm"
+                icon="check"
+                loading={pending}
                 onClick={commit}
                 // Settling pending rows and recording balances are work too — a file of only
                 // duplicates and pending settles must still be importable.
                 disabled={pending || (preview.newCount === 0 && !preview.finalizeCount && balances.length === 0)}
-                className="px-4 py-2 rounded-md bg-green-600 text-white text-sm font-medium hover:bg-green-700 disabled:opacity-50"
               >
                 {pending ? "Importing…" : importLabel(preview.newCount, preview.finalizeCount ?? 0, balances.length)}
-              </button>
+              </Button>
             </div>
+          }
+        >
+          <div className="space-y-3 px-5 pb-3 max-md:px-3.5">
+            <p className="text-xs text-fg-3">
+              {preview.total} rows. Set a category, and use <span className="text-fg-2">+ note</span> under a description to add
+              a comment; both save with the transaction when you import.
+            </p>
+
+            {balances.length > 0 && (
+              <Notice tone="info" title={`${balances.length} balance snapshot${balances.length === 1 ? "" : "s"} to record`}>
+                <div>
+                  End-of-day balance per account per day, written to the account balance ledger. Ones already recorded for that
+                  account and date are skipped.
+                </div>
+                <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs">
+                  {balances.slice(0, 12).map((b) => (
+                    <span key={`${b.accountNumber}-${b.asOf}`}>
+                      {b.accountNumber || "—"} · {formatDate(b.asOf)} · <Money value={b.balance} kind="neutral" />
+                    </span>
+                  ))}
+                  {balances.length > 12 && <span className="text-accent-text">+{balances.length - 12} more</span>}
+                </div>
+              </Notice>
+            )}
           </div>
-
-          <p className="text-xs text-neutral-500">
-            Tip: set a category, and use <span className="text-neutral-400">+ note</span> under a
-            description to add a comment — both save with the transaction when you import.
-          </p>
-
-          {balances.length > 0 && (
-            <div className="rounded-lg border border-blue-200 dark:border-blue-900 bg-blue-50 dark:bg-blue-950/30 p-3 text-sm">
-              <div className="font-medium text-blue-800 dark:text-blue-200">
-                {balances.length} balance snapshot{balances.length === 1 ? "" : "s"} to record
-              </div>
-              <div className="text-blue-700 dark:text-blue-300 mt-1 text-xs">
-                End-of-day balance per account per day, written to the account balance ledger. Ones
-                already recorded for that account &amp; date are skipped.
-              </div>
-              <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs tabular-nums">
-                {balances.slice(0, 12).map((b) => (
-                  <span key={`${b.accountNumber}-${b.asOf}`} className="text-blue-700 dark:text-blue-300">
-                    {b.accountNumber || "—"} · {formatDate(b.asOf)} ·{" "}
-                    <span className="font-medium">{formatMoney(b.balance)}</span>
-                  </span>
-                ))}
-                {balances.length > 12 && (
-                  <span className="text-blue-600">+{balances.length - 12} more</span>
-                )}
-              </div>
-            </div>
-          )}
 
           <ImportPreviewTable
             rows={rows}
@@ -561,50 +463,80 @@ export function ImportWizard({
             onRuleSaved={onRuleSaved}
             onRuleDeleted={onRuleDeleted}
           />
-        </div>
+        </Card>
       )}
 
       {/* Step 4: done */}
       {phase === "done" && result && (
-        <div className="space-y-4">
-          <div className="rounded-lg border border-green-300 bg-green-50 dark:bg-green-950/30 p-4">
-            <div className="font-semibold text-green-800 dark:text-green-200">Import complete</div>
-            <div className="text-sm text-green-700 dark:text-green-300 mt-1">
-              Inserted {result.inserted}
-              {result.finalized ? ` · settled ${result.finalized} pending` : ""} · skipped {result.duplicates} duplicates ·{" "}
-              {result.errors} errors
-              {result.merged ? ` · merged ${result.merged} into pending transaction${result.merged === 1 ? "" : "s"}` : ""}
-              {result.balancesRecorded ? ` · recorded ${result.balancesRecorded} balance snapshot${result.balancesRecorded === 1 ? "" : "s"}` : ""}
-              {result.batchId ? ` · batch #${result.batchId}` : ""}.
-            </div>
-            <div className="flex gap-3 mt-2 text-sm">
-              <a href="/transactions" className="text-blue-600 hover:underline">
-                View transactions →
-              </a>
-              <a href="/transactions/categorize" className="text-blue-600 hover:underline">
-                Mass categorize →
-              </a>
-            </div>
-          </div>
-          <button
-            onClick={reset}
-            className="px-4 py-2 rounded-md bg-blue-600 text-white text-sm font-medium hover:bg-blue-700"
-          >
-            Import another file
-          </button>
-        </div>
+        <Card padded={false}>
+          <EmptyState
+            icon="circle-check"
+            title="Import complete. Listo."
+            body={
+              <>
+                Inserted {result.inserted}
+                {result.finalized ? ` · settled ${result.finalized} pending` : ""} · skipped {result.duplicates} duplicates ·{" "}
+                {result.errors} errors
+                {result.merged ? ` · merged ${result.merged} into pending transaction${result.merged === 1 ? "" : "s"}` : ""}
+                {result.balancesRecorded
+                  ? ` · recorded ${result.balancesRecorded} balance snapshot${result.balancesRecorded === 1 ? "" : "s"}`
+                  : ""}
+                {result.batchId ? ` · batch #${result.batchId}` : ""}.
+              </>
+            }
+            action={
+              <div className="flex flex-wrap justify-center gap-2">
+                <Link href="/transactions" className={buttonClass({ variant: "secondary" })}>
+                  View transactions
+                </Link>
+                <Link href="/transactions/categorize" className={buttonClass({ variant: "secondary" })}>
+                  Mass categorize
+                </Link>
+                <Button icon="upload" onClick={reset}>
+                  Import another file
+                </Button>
+              </div>
+            }
+          />
+        </Card>
       )}
     </div>
   );
 }
 
-function MapField({ label, children }: { label: string; children: React.ReactNode }) {
+// A <label> wrapper (not ds Field, which is a div) so each picker is named by its label.
+function MapField({
+  label,
+  hint,
+  required,
+  className,
+  children,
+}: {
+  label: string;
+  hint?: string;
+  required?: boolean;
+  className?: string;
+  children: React.ReactNode;
+}) {
   return (
-    <label className="flex flex-col gap-1">
-      <span className="text-xs text-neutral-500">{label}</span>
+    <label className={cx("mp-field", className)}>
+      <span className="mp-field__label">
+        {label}
+        {required && <span className="text-over"> *</span>}
+      </span>
       {children}
+      {hint && <span className="mp-field__hint">{hint}</span>}
     </label>
   );
+}
+
+/** "4 new · 1 duplicate" — the review card's meta line. */
+export function reviewMeta(newCount: number, dupes: number, settles: number, errors: number): string {
+  const parts = [`${newCount} new`];
+  if (dupes) parts.push(`${dupes} duplicate${dupes === 1 ? "" : "s"}`);
+  if (settles) parts.push(`${settles} settle pending`);
+  if (errors) parts.push(`${errors} error${errors === 1 ? "" : "s"}`);
+  return parts.join(" · ");
 }
 
 function importLabel(newCount: number, settles: number, balances: number): string {

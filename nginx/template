@@ -1,5 +1,25 @@
 # Rendered by the Jenkins pipeline: __DOMAIN__ and __PORT__ are substituted,
 # then certbot rewrites this file in place to add the TLS listener.
+
+# Device-certificate gate. Browsers must present a client cert signed by our own
+# CA; machine callers that can't (claude.ai's MCP connector, provider webhooks)
+# are exempted by path below and authenticate in the app instead (Cognito bearer,
+# HMAC signature). geo/map live in the shared http context, so the variable names
+# are prefixed to avoid colliding with other sites' configs on this nginx.
+geo $pb_trusted_internal {
+    default          0;
+    127.0.0.1        1;
+    172.16.0.0/12    1;   # Docker networks
+    __SERVER_IP__    1;   # the server's own public IP (host cron -> /api/sync/run); SERVER_PUBLIC_IP in .env
+}
+
+# Allow if: valid device certificate OR internal origin
+map "$ssl_client_verify:$pb_trusted_internal" $pb_deny_access {
+    default        1;
+    "~^SUCCESS:"   0;
+    "~:1$"         0;
+}
+
 server {
 
     server_name __DOMAIN__;
@@ -33,15 +53,54 @@ server {
     chunked_transfer_encoding on;
     proxy_cache off;
 
+    ssl_client_certificate /etc/nginx/client-ca/ca.crt;
+    ssl_verify_client optional;
+    ssl_verify_depth 1;
+
+    # Server-level so every location below inherits them (none sets its own).
+    expires off;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+
+    # No device cert required: claude.ai MCP connector (Cognito bearer checked by
+    # the app) and its OAuth discovery under /.well-known/ ...
+    location = /api/mcp {
+        proxy_pass http://127.0.0.1:__PORT__;
+    }
+    location /.well-known/ {
+        proxy_pass http://127.0.0.1:__PORT__;
+    }
+    # ... and bank-provider webhooks (HMAC-verified in the app).
+    location /api/sync/webhook/ {
+        proxy_pass http://127.0.0.1:__PORT__;
+    }
+    # ... and the web app manifest and brand icons. Browsers fetch the manifest with
+    # credentials omitted (no client cert), and iOS takes the Home Screen icon from it,
+    # so behind the gate both came back 403. Brand artwork and the app name only — the
+    # app's proxy serves these without a session too.
+    location = /manifest.webmanifest {
+        proxy_pass http://127.0.0.1:__PORT__;
+    }
+    location = /apple-icon.png {
+        proxy_pass http://127.0.0.1:__PORT__;
+    }
+    location = /icon.svg {
+        proxy_pass http://127.0.0.1:__PORT__;
+    }
+    location = /favicon.ico {
+        proxy_pass http://127.0.0.1:__PORT__;
+    }
+    location /brand/ {
+        proxy_pass http://127.0.0.1:__PORT__;
+    }
+
     location / {
-        expires off;
-        proxy_pass       http://127.0.0.1:__PORT__;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
+        if ($pb_deny_access) { return 403; }
+        proxy_pass http://127.0.0.1:__PORT__;
     }
 
     listen 80;

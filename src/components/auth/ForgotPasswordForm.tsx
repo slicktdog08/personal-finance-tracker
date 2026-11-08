@@ -5,11 +5,9 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { confirmPasswordReset, requestPasswordReset } from "@/server/actions/auth";
 
-const inputCls =
-  "w-full border rounded px-3 py-2 text-sm bg-transparent border-neutral-300 dark:border-neutral-700 focus:outline-none focus:ring-2 focus:ring-neutral-900 dark:focus:ring-neutral-100";
+const inputCls = "mp-input";
 
-const buttonCls =
-  "w-full rounded px-3 py-2 text-sm font-medium bg-neutral-900 text-white dark:bg-white dark:text-neutral-900 disabled:opacity-50";
+const buttonCls = "mp-btn mp-btn--primary mp-btn--lg mp-btn--block";
 
 export function ForgotPasswordForm() {
   const router = useRouter();
@@ -52,9 +50,9 @@ export function ForgotPasswordForm() {
 
   if (done) {
     return (
-      <p className="text-sm">
+      <p className="text-sm text-fg-2">
         Password updated.{" "}
-        <Link href="/login" className="underline">
+        <Link href="/login" className="font-medium text-accent-text hover:underline">
           Sign in
         </Link>
         .
@@ -72,8 +70,8 @@ export function ForgotPasswordForm() {
       }}
     >
       <div>
-        <h1 className="text-lg font-semibold tracking-tight">Reset your password</h1>
-        <p className="mt-1 text-sm text-neutral-600 dark:text-neutral-400">
+        <h1 className="font-display text-lg font-semibold tracking-tight">Reset your password</h1>
+        <p className="mt-1 text-sm text-fg-2">
           {stage === "request"
             ? "We'll email you a verification code."
             : `Enter the code sent to ${email} and pick a new password.`}
@@ -81,7 +79,7 @@ export function ForgotPasswordForm() {
       </div>
 
       <div className="space-y-1">
-        <label className="text-sm font-medium" htmlFor="email">
+        <label className="mp-field__label" htmlFor="email">
           Email
         </label>
         <input
@@ -99,7 +97,7 @@ export function ForgotPasswordForm() {
       {stage === "confirm" && (
         <>
           <div className="space-y-1">
-            <label className="text-sm font-medium" htmlFor="code">
+            <label className="mp-field__label" htmlFor="code">
               Verification code
             </label>
             <input
@@ -113,7 +111,7 @@ export function ForgotPasswordForm() {
             />
           </div>
           <div className="space-y-1">
-            <label className="text-sm font-medium" htmlFor="new-password">
+            <label className="mp-field__label" htmlFor="new-password">
               New password
             </label>
             <input
@@ -129,7 +127,7 @@ export function ForgotPasswordForm() {
         </>
       )}
 
-      {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
+      {error && <p className="text-sm text-danger" role="alert">{error}</p>}
 
       <button className={buttonCls} type="submit" disabled={pending}>
         {pending
@@ -140,7 +138,7 @@ export function ForgotPasswordForm() {
       </button>
 
       <p className="text-center text-sm">
-        <Link href="/login" className="text-neutral-600 hover:underline dark:text-neutral-400">
+        <Link href="/login" className="text-fg-2 hover:text-accent-text hover:underline">
           Back to sign in
         </Link>
       </p>

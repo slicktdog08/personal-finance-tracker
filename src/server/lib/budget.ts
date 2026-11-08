@@ -488,3 +488,47 @@ export function absorbDelta(
   }
   return { updates, remainder: round2(-left) || 0 };
 }
+
+// ---- Unbudgeted excess ----------------------------------------------------------------------
+// "Is there money no envelope is accounting for?" A fully planned month should grow cash on hand
+// by exactly its savings lines: everything else was planned to leave as spending or debt. So
+//
+//   excess = (cash at month end − cash at month start) − planned savings
+//
+// > 0: money the plan never gave a job (income above plan, a part of income left unallocated,
+//      envelopes running under). < 0: the month is short of its own plan. The month-end figure is
+// the cash projection's (actual for a finished month), so this agrees with "Cash by month end".
+// The two known sources are broken out; they're explanations, not a decomposition — the rest is
+// envelopes running under/over and timing.
+
+export interface BudgetExcess {
+  /** Positive = unbudgeted money; negative = short of the plan. Null when cash can't be projected. */
+  excess: number | null;
+  /** Income the plan itself left unassigned (income − every planned line), when positive. */
+  unallocated: number;
+  /** Income that has landed beyond the planned income, when positive. */
+  incomeAbovePlan: number;
+}
+
+/** Below this the month is "on plan" — rounding and pennies of interest aren't excess. */
+export const EXCESS_THRESHOLD = 5;
+
+export function budgetExcess(input: {
+  cashStart: number | null;
+  cashEnd: number | null;
+  savingsPlanned: number;
+  plannedIncome: number | null;
+  plannedTotal: number;
+  actualIncome: number;
+}): BudgetExcess {
+  const excess =
+    input.cashStart != null && input.cashEnd != null
+      ? round2(input.cashEnd - input.cashStart - input.savingsPlanned)
+      : null;
+  const pi = input.plannedIncome;
+  return {
+    excess,
+    unallocated: pi != null ? round2(Math.max(0, pi - input.plannedTotal)) : 0,
+    incomeAbovePlan: pi != null ? round2(Math.max(0, input.actualIncome - pi)) : 0,
+  };
+}

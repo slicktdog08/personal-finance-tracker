@@ -9,6 +9,8 @@ import { countLocalMatches } from "@/components/import/rule-helpers";
 import type { CategoryRule, RuleInput } from "@/server/lib/categorize";
 import { settledCategory, settlesPending, type PreviewRow } from "@/server/lib/import-types";
 import type { CategoryOption } from "@/server/queries";
+import { ColorSelect } from "@/components/ColorSelect";
+import { Icon } from "@/components/ds";
 
 // Category picker for one import-review row, with the same rule affordances as the
 // transactions table: a "set by rule" chip when a saved rule picked the category,
@@ -115,32 +117,29 @@ export function ImportCategoryCell({
 
   return (
     <div className="flex flex-wrap items-center gap-1.5">
-      {/* 16px on phones so iOS doesn't zoom the page when the picker opens. */}
-      <select
+      {/* A category is a colored thing, so it's picked from its own badge (ColorSelect), never a
+          plain <select>. Active categories only, plus this row's current one (auto-mapped or
+          disabled) so it isn't silently lost. */}
+      <ColorSelect
         value={shown.category ?? ""}
-        onChange={(e) => pick(e.target.value || null)}
-        title={fromPending ? "Kept from your pending entry — pick another to change it" : undefined}
+        onSelect={(name) => pick(name || null)}
+        allowEmpty
+        placeholder="Choose category"
         disabled={disabled || pending}
-        className="bg-transparent border border-neutral-300 dark:border-neutral-700 rounded max-w-full px-2 py-1 text-base md:px-1 md:py-0.5 md:text-sm"
-      >
-        <option value="">— none —</option>
-        {/* Active categories only, plus this row's current one (auto-mapped
-            or disabled) so it isn't silently lost. */}
-        {[
+        options={[
           ...categoryOptions
             .filter((c) => c.active || c.name === shown.category)
-            .map((c) => ({ name: c.name, emoji: c.emoji })),
+            .map((c) => ({ name: c.name, color: c.color, emoji: c.emoji })),
           ...(shown.category && !categoryOptions.some((c) => c.name === shown.category)
-            ? [{ name: shown.category, emoji: null as string | null }]
+            ? [{ name: shown.category, color: "#64748b", emoji: null as string | null }]
             : []),
-        ].map((c) => (
-          <option key={c.name} value={c.name}>
-            {c.emoji ? `${c.emoji} ` : ""}
-            {c.name}
-          </option>
-        ))}
-      </select>
-      {fromPending && <span className="text-xs text-neutral-500">from pending</span>}
+        ]}
+      />
+      {fromPending && (
+        <span className="text-xs text-fg-3" title="Kept from your pending entry. Pick another to change it.">
+          from pending
+        </span>
+      )}
       {rule && (
         <RuleBadge
           rule={rule}
@@ -160,9 +159,9 @@ export function ImportCategoryCell({
             onClick={saveSuggested}
             disabled={pending}
             title={`Save rule: description contains "${suggest.pattern}" → ${suggest.category}. Applies to matching rows here and to uncategorized transactions already imported; future imports use it automatically.`}
-            className="min-w-0 break-words text-xs text-blue-600 hover:underline text-left disabled:opacity-50"
+            className="min-w-0 break-words text-xs text-accent-text hover:underline text-left disabled:opacity-50"
           >
-            Save rule “{suggest.pattern}”{counts.length ? ` (${counts.join(" · ")})` : ""} →
+            Save rule “{suggest.pattern}”{counts.length ? ` (${counts.join(" · ")})` : ""}
           </button>
           <button
             ref={editBtnRef}
@@ -171,9 +170,9 @@ export function ImportCategoryCell({
             disabled={pending}
             title="Customize the pattern before saving the rule"
             aria-label="Customize rule"
-            className="text-xs text-neutral-400 hover:text-blue-600 disabled:opacity-50"
+            className="inline-flex text-fg-3 hover:text-accent-text disabled:opacity-50"
           >
-            ✎
+            <Icon name="pencil" size={13} />
           </button>
           <RuleEditor
             open={editing}

@@ -4,8 +4,8 @@
 // sync.ts. Readers — pages, queries, MCP tools, the CLI's status commands — never touch a
 // provider (planning/features/bank-sync.md, D11).
 //
-// No provider is registered right now: Teller, the first one built against this contract,
-// shut its API down in July 2026. Adding one (Plaid is the obvious candidate) = a folder
+// Registered: SimpleFIN Bridge (src/server/lib/simplefin/) and Plaid (src/server/lib/plaid/). Teller, the first provider built
+// against this contract, shut its API down in July 2026. Adding another = a folder
 // implementing this interface + one line in PROVIDERS. The e2e suite exercises the whole
 // engine through an in-memory provider (tests/e2e/helpers.ts).
 
@@ -69,6 +69,9 @@ export type ProviderWebhookEvent =
 
 export interface SyncProvider {
   readonly id: string; // a SyncProviderId in the app; tests register throwaway ids
+  // Whether an account missing from listAccounts has been closed (default true). False for
+  // providers that drop an account from a response while its bank connection is failing.
+  readonly unlistedMeansClosed?: boolean;
   listAccounts(accessToken: string): Promise<ProviderAccount[]>;
   // `account.type` is passed because sign conventions differ by account type at most
   // aggregators; sync.ts already knows it from sync_accounts.
@@ -77,13 +80,20 @@ export interface SyncProvider {
     account: { externalId: string; type: ExternalAccountType },
     range: DateRange,
   ): Promise<ProviderTransaction[]>;
-  getBalances(accessToken: string, externalAccountId: string): Promise<ProviderBalances>;
+  // `account.type` is the cash/credit view of the LOCAL account it feeds (the ledger's own
+  // account type is the truth), for providers whose balances need a sign decision.
+  getBalances(accessToken: string, account: { externalId: string; type: ExternalAccountType }): Promise<ProviderBalances>;
   // Revoke our access on the provider's side. Idempotent: an already-deleted enrollment is
   // not an error.
   deleteEnrollment(accessToken: string, enrollmentId: string): Promise<void>;
   // Returns null when the signature doesn't verify (caller responds 401) — never throws
-  // on bad input, since the input is attacker-controlled.
-  verifyWebhook(rawBody: string, headers: Headers): ProviderWebhookEvent | null;
+  // on bad input, since the input is attacker-controlled. May be async (Plaid fetches its
+  // signing key).
+  verifyWebhook(rawBody: string, headers: Headers): ProviderWebhookEvent | null | Promise<ProviderWebhookEvent | null>;
+  // Optional diagnostics: the raw response the last calls for this token were served from,
+  // trimmed to a reasonable size. Dry runs store it in the run's details so the settings
+  // page / CLI can show exactly what the provider sent.
+  debugResponse?(accessToken: string): unknown;
 }
 
 // Thrown by providers for any non-2xx or transport failure. `disconnected` means the
@@ -117,8 +127,10 @@ export class SyncProviderError extends Error {
 }
 
 // Lazy registry so importing the contract never pulls in a provider's transport code.
-// e.g.  plaid: async () => (await import("../plaid")).plaidProvider,
-const PROVIDERS: Record<string, () => Promise<SyncProvider>> = {};
+const PROVIDERS: Record<string, () => Promise<SyncProvider>> = {
+  simplefin: async () => (await import("../simplefin")).simplefinProvider,
+  plaid: async () => (await import("../plaid")).plaidProvider,
+};
 
 export async function getProvider(id: string): Promise<SyncProvider> {
   const load = PROVIDERS[id];

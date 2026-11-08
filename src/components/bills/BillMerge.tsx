@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
+import { Button, Card, Icon, Select } from "@/components/ds";
 import { mergeBills } from "@/server/actions/bills";
 
 export function BillMerge({
@@ -15,7 +15,6 @@ export function BillMerge({
 }) {
   const [sel, setSel] = useState<number | "">("");
   const [pending, start] = useTransition();
-  const router = useRouter();
 
   function doMerge() {
     if (sel === "") return;
@@ -30,38 +29,27 @@ export function BillMerge({
     start(async () => {
       await mergeBills(Number(sel), currentId, `/settings/bills/${currentId}`);
       setSel("");
-      router.refresh();
     });
   }
 
   return (
-    <div className="rounded-lg border border-neutral-200 dark:border-neutral-800 p-4 space-y-2">
-      <div className="font-medium text-sm">Consolidate duplicate bills</div>
-      <p className="text-xs text-neutral-500">
-        If this bill got split into separate entities (e.g. dropped and re-added), merge the
-        duplicate into this one. The other bill&apos;s history moves here.
+    <Card title="Consolidate duplicate bills" icon={<Icon name="merge" size={16} className="text-fg-3" />}>
+      <p className="mb-3 text-sm text-fg-2">
+        If this bill got split into separate entries (say, dropped and re-added), merge the duplicate
+        into this one. The other bill&apos;s history moves here.
       </p>
-      <div className="flex items-center gap-2">
-        <select
-          value={sel}
+      <div className="flex flex-wrap items-center gap-2">
+        <Select
+          value={sel === "" ? "" : String(sel)}
           onChange={(e) => setSel(e.target.value === "" ? "" : Number(e.target.value))}
-          className="border rounded px-2 py-1 text-sm bg-transparent border-neutral-300 dark:border-neutral-700 flex-1"
-        >
-          <option value="">— select a bill to merge in —</option>
-          {others.map((o) => (
-            <option key={o.id} value={o.id}>
-              {o.name}
-            </option>
-          ))}
-        </select>
-        <button
-          onClick={doMerge}
-          disabled={sel === "" || pending}
-          className="px-3 py-1.5 rounded-md bg-amber-600 text-white text-sm font-medium hover:bg-amber-700 disabled:opacity-50"
-        >
+          aria-label="Bill to merge in"
+          className="min-w-0 flex-1 basis-56"
+          options={[{ value: "", label: "Choose a bill to merge in" }, ...others.map((o) => ({ value: String(o.id), label: o.name }))]}
+        />
+        <Button variant="secondary" icon="merge" onClick={doMerge} disabled={sel === ""} loading={pending}>
           {pending ? "Merging…" : "Merge in"}
-        </button>
+        </Button>
       </div>
-    </div>
+    </Card>
   );
 }

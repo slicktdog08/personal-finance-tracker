@@ -2,8 +2,8 @@
 
 import { useState, useRef, useTransition } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { Sheet } from "@/components/ui/Sheet";
+import { Icon, Money } from "@/components/ds";
 import {
   previewBillConversion,
   convertTransactionToBill,
@@ -12,7 +12,6 @@ import {
   type MatchCandidate,
 } from "@/server/actions/transactions";
 import { formatDate } from "@/server/lib/period";
-import { formatMoney } from "@/server/lib/money";
 
 export interface BillOption {
   id: number;
@@ -40,7 +39,6 @@ export function ConvertToBill({
   bills: BillOption[];
   path?: string;
 }) {
-  const router = useRouter();
   const [open, setOpen] = useState(false);
   const [pending, start] = useTransition();
   const [mode, setMode] = useState<"new" | "existing">("new");
@@ -101,7 +99,6 @@ export function ConvertToBill({
           : await linkTransactionToExistingBill(transactionId, Number(existingId), path, others);
       if (res.ok) {
         setOpen(false);
-        router.refresh();
       } else {
         alert(res.error);
       }
@@ -113,8 +110,7 @@ export function ConvertToBill({
     if (!confirm(`Unlink this transaction from ${billName}? The bill itself is left as-is.`)) return;
     start(async () => {
       const res = await setTransactionBill(transactionId, null, path);
-      if (res.ok) router.refresh();
-      else alert(res.error);
+      if (!res.ok) alert(res.error);
     });
   }
 
@@ -125,35 +121,33 @@ export function ConvertToBill({
   if (billId != null) {
     const bill = bills.find((b) => b.id === billId);
     return (
-      <span className="inline-flex items-center gap-1.5 text-xs whitespace-nowrap">
+      <span className="inline-flex min-w-0 items-center gap-0.5 whitespace-nowrap">
         <Link
           href={`/settings/bills/${billId}`}
-          className="text-neutral-500 hover:underline max-w-[10rem] truncate"
+          className="mp-badge mp-badge--outline mp-badge--sm max-w-[11rem] hover:!text-accent-text"
           title={bill ? `Linked to ${bill.name}` : "Linked to a bill"}
         >
-          {bill?.name ?? "Linked"}
+          <Icon name="link" size={11} />
+          <span className="mp-badge__label">{bill?.name ?? "Linked"}</span>
         </Link>
         <button
           onClick={unlink}
           disabled={pending}
           title="Unlink from this bill"
-          className="text-neutral-400 hover:text-red-600 hover:underline disabled:opacity-50"
+          aria-label="Unlink from this bill"
+          className="inline-flex rounded-full p-0.5 text-fg-3 hover:text-over disabled:opacity-50"
         >
-          Unlink
+          <Icon name="unlink" size={12} />
         </button>
       </span>
     );
   }
 
   const inputCls =
-    "border rounded px-2 py-1 text-sm bg-transparent border-neutral-300 dark:border-neutral-700 w-full";
-  const tabCls = (active: boolean) =>
-    `flex-1 px-2 py-1 text-xs font-medium rounded ${
-      active
-        ? "bg-blue-600 text-white"
-        : "text-neutral-500 hover:bg-neutral-100 dark:hover:bg-neutral-800"
-    }`;
-  const pickCls = "text-blue-600 hover:underline disabled:opacity-50 disabled:no-underline";
+    "mp-input !h-9";
+
+  const selectCls = "mp-select !h-9";
+  const pickCls = "text-accent-text hover:underline disabled:opacity-50 disabled:no-underline";
 
   const panel = (
     <Sheet
@@ -165,12 +159,13 @@ export function ConvertToBill({
       width={336}
     >
       <div className="space-y-2 text-left">
-        <div className="flex gap-1 rounded-md border border-neutral-200 dark:border-neutral-800 p-0.5">
-          <button className={tabCls(mode === "new")} onClick={() => setMode("new")}>
+        <div className="mp-seg mp-seg--block" role="group" aria-label="Convert or link">
+          <button type="button" aria-pressed={mode === "new"} onClick={() => setMode("new")}>
             New bill
           </button>
           <button
-            className={tabCls(mode === "existing")}
+            type="button"
+            aria-pressed={mode === "existing"}
             onClick={() => setMode("existing")}
             disabled={bills.length === 0}
             title={bills.length === 0 ? "No bills yet" : undefined}
@@ -181,7 +176,7 @@ export function ConvertToBill({
 
         {mode === "new" ? (
           <div className="flex flex-col gap-1">
-            <span className="text-xs text-neutral-500">Bill name</span>
+            <span className="mp-field__label">Bill name</span>
             <input
               value={name}
               onChange={(e) => setName(e.target.value)}
@@ -191,11 +186,11 @@ export function ConvertToBill({
           </div>
         ) : (
           <div className="flex flex-col gap-1">
-            <span className="text-xs text-neutral-500">Link to bill</span>
+            <span className="mp-field__label">Link to bill</span>
             <select
               value={existingId}
               onChange={(e) => setExistingId(e.target.value)}
-              className={inputCls}
+              className={selectCls}
               autoFocus
             >
               <option value="">— choose a bill —</option>
@@ -209,13 +204,13 @@ export function ConvertToBill({
         )}
 
         {loading ? (
-          <p className="text-xs text-neutral-500">Checking for other occurrences…</p>
+          <p className="text-xs text-fg-3">Checking for other occurrences…</p>
         ) : matches.length === 0 ? (
-          <p className="text-xs text-neutral-500">No other matching transactions found.</p>
+          <p className="text-xs text-fg-3">No other matching transactions found.</p>
         ) : (
           <div className="space-y-1">
             <div className="flex items-center justify-between gap-2 text-xs">
-              <span className="text-neutral-500">
+              <span className="text-fg-3">
                 Also link {chosen.size} of {matches.length} other matching
               </span>
               <span className="flex gap-2 whitespace-nowrap">
@@ -246,11 +241,11 @@ export function ConvertToBill({
                 )}
               </span>
             </div>
-            <ul className="max-h-40 overflow-y-auto rounded border border-neutral-200 dark:border-neutral-800 divide-y divide-neutral-100 dark:divide-neutral-800 text-xs">
+            <ul className="max-h-40 overflow-y-auto rounded-control border border-line divide-y divide-line text-xs">
               {matches.map((m) => (
                 <li key={m.id}>
                   <label
-                    className="flex items-center gap-2 px-2 py-1 cursor-pointer hover:bg-neutral-50 dark:hover:bg-neutral-900"
+                    className="flex items-center gap-2 px-2 py-1 cursor-pointer hover:bg-hover"
                     title={m.description}
                   >
                     <input
@@ -259,27 +254,24 @@ export function ConvertToBill({
                       onChange={() => toggle(m.id)}
                       className="shrink-0"
                     />
-                    <span className="tabular-nums text-neutral-500 whitespace-nowrap">
+                    <span className="tabular-nums text-fg-3 whitespace-nowrap">
                       {formatDate(m.txnDate)}
                     </span>
-                    <span
-                      className={`ml-auto tabular-nums whitespace-nowrap ${
-                        m.direction === "Credit" ? "text-emerald-700 dark:text-emerald-400" : ""
-                      }`}
-                    >
-                      {formatMoney(m.amount)}
-                    </span>
+                    <Money
+                      className="ml-auto whitespace-nowrap"
+                      value={(m.direction === "Credit" ? 1 : -1) * (Number(m.amount) || 0)}
+                    />
                   </label>
                 </li>
               ))}
             </ul>
-            <p className="text-[11px] text-neutral-400">
+            <p className="text-[11px] text-fg-3">
               Untick any that belong to a different bill — you can link those separately, or
               unlink later from the row or the bill page.
             </p>
           </div>
         )}
-        <p className="text-[11px] text-neutral-400">
+        <p className="text-[11px] text-fg-3">
           {loading
             ? ""
             : recent
@@ -289,14 +281,14 @@ export function ConvertToBill({
         <div className="flex justify-end gap-2 pt-1">
           <button
             onClick={() => setOpen(false)}
-            className="px-3 py-1.5 text-sm text-neutral-500 hover:underline"
+            className="mp-btn mp-btn--ghost mp-btn--sm"
           >
             Cancel
           </button>
           <button
             onClick={submit}
             disabled={!canSubmit}
-            className="px-3 py-1.5 rounded-md bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 disabled:opacity-50"
+            className="mp-btn mp-btn--primary mp-btn--sm"
           >
             {pending ? "Saving…" : mode === "new" ? "Convert" : "Link"}
           </button>
@@ -312,9 +304,10 @@ export function ConvertToBill({
         onClick={() => (open ? setOpen(false) : openPanel())}
         disabled={pending}
         title="Convert to a bill or link to an existing one"
-        className="text-xs text-blue-600 hover:underline disabled:opacity-50"
+        aria-label="Convert to bill"
+        className="mp-btn mp-iconbtn mp-btn--ghost mp-btn--sm"
       >
-        To bill
+        <Icon name="receipt" size={16} />
       </button>
       {panel}
     </>

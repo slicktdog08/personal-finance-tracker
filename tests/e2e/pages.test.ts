@@ -35,10 +35,13 @@ function isEl(n: unknown): n is El {
   return typeof n === "object" && n != null && "props" in n && "type" in n;
 }
 // Element-valued props other than children (a Panel's `action`, a card's `badge`) are
-// part of the tree too, so walks visit every prop that holds elements.
+// part of the tree too, so walks visit every prop that holds elements — including elements
+// carried inside plain objects in an array prop (DashboardGrid's `widgets: { node }[]`).
 function childNodes(el: El): ReactNode[] {
   return Object.values(el.props).filter((v) => isEl(v) || Array.isArray(v) || typeof v === "string") as ReactNode[];
 }
+const isPlain = (n: unknown): n is Record<string, unknown> =>
+  typeof n === "object" && n != null && !Array.isArray(n) && !isEl(n) && Object.getPrototypeOf(n) === Object.prototype;
 // Depth-first search over a React element tree.
 function find(node: ReactNode, pred: (el: El) => boolean): El | null {
   if (Array.isArray(node)) {
@@ -48,6 +51,7 @@ function find(node: ReactNode, pred: (el: El) => boolean): El | null {
     }
     return null;
   }
+  if (isPlain(node)) return find(Object.values(node) as ReactNode[], pred);
   if (!isEl(node)) return null;
   if (pred(node)) return node;
   return find(childNodes(node), pred);
@@ -58,6 +62,7 @@ const textOf = (node: ReactNode): string => {
   if (typeof node === "string" || typeof node === "number") return String(node);
   if (Array.isArray(node)) return node.map(textOf).join("");
   if (isEl(node)) return childNodes(node).map(textOf).join("");
+  if (isPlain(node)) return Object.values(node).map((v) => textOf(v as ReactNode)).join("");
   return "";
 };
 

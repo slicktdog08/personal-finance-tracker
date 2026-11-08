@@ -2,9 +2,9 @@
 
 import { useState, useRef, useTransition } from "react";
 import { LOCAL_SOURCES } from "@/constants/sync";
-import { useRouter } from "next/navigation";
 import { Sheet } from "@/components/ui/Sheet";
-import { PencilIcon } from "@/components/icons";
+import { ColorSelect } from "@/components/ColorSelect";
+import { Icon } from "@/components/ds";
 import { updateTransaction } from "@/server/actions/transactions";
 import { toNum } from "@/server/lib/money";
 import type { CategoryOption } from "@/server/queries";
@@ -44,7 +44,6 @@ export function EditTransaction({
   categoryOptions: CategoryOption[];
   path?: string;
 }) {
-  const router = useRouter();
   const [open, setOpen] = useState(false);
   const [pending, start] = useTransition();
   const btnRef = useRef<HTMLButtonElement>(null);
@@ -97,7 +96,6 @@ export function EditTransaction({
       );
       if (res.ok) {
         setOpen(false);
-        router.refresh();
       } else {
         alert(res.error);
       }
@@ -105,7 +103,9 @@ export function EditTransaction({
   }
 
   const inputCls =
-    "border rounded px-2 py-1 text-sm bg-transparent border-neutral-300 dark:border-neutral-700 w-full";
+    "mp-input !h-9";
+
+  const selectCls = "mp-select !h-9";
 
   const panel = (
     <Sheet
@@ -118,7 +118,7 @@ export function EditTransaction({
     >
           <div className="space-y-2 text-left">
             <div className="flex flex-col gap-1">
-              <span className="text-xs text-neutral-500">Date</span>
+              <span className="mp-field__label">Date</span>
               <input
                 type="date"
                 value={date}
@@ -127,7 +127,7 @@ export function EditTransaction({
               />
             </div>
             <div className="flex flex-col gap-1">
-              <span className="text-xs text-neutral-500">Description</span>
+              <span className="mp-field__label">Description</span>
               <input
                 value={desc}
                 onChange={(e) => setDesc(e.target.value)}
@@ -137,7 +137,7 @@ export function EditTransaction({
             </div>
             <div className="flex gap-2">
               <div className="flex flex-col gap-1 flex-1">
-                <span className="text-xs text-neutral-500">Amount</span>
+                <span className="mp-field__label">Amount</span>
                 <input
                   value={amount}
                   onChange={(e) => setAmount(e.target.value)}
@@ -147,11 +147,11 @@ export function EditTransaction({
                 />
               </div>
               <div className="flex flex-col gap-1">
-                <span className="text-xs text-neutral-500">Type</span>
+                <span className="mp-field__label">Type</span>
                 <select
                   value={direction}
                   onChange={(e) => setDirection(e.target.value)}
-                  className={inputCls}
+                  className={selectCls}
                 >
                   <option value="Debit">Debit</option>
                   <option value="Credit">Credit</option>
@@ -159,11 +159,11 @@ export function EditTransaction({
               </div>
             </div>
             <div className="flex flex-col gap-1">
-              <span className="text-xs text-neutral-500">Account</span>
+              <span className="mp-field__label">Account</span>
               <select
                 value={acct}
                 onChange={(e) => setAcct(e.target.value)}
-                className={inputCls}
+                className={selectCls}
               >
                 <option value="">— none —</option>
                 {accounts.map((a) => (
@@ -179,20 +179,21 @@ export function EditTransaction({
               </select>
             </div>
             <div className="flex flex-col gap-1">
-              <span className="text-xs text-neutral-500">Category</span>
-              <select value={cat} onChange={(e) => setCat(e.target.value)} className={inputCls}>
-                <option value="">— category —</option>
-                {/* Active categories only, plus the txn's current (possibly disabled) one. */}
-                {categoryOptions.filter((c) => c.active || c.name === cat).map((c) => (
-                  <option key={c.name} value={c.name}>
-                    {c.emoji ? `${c.emoji} ` : ""}
-                    {c.name}
-                  </option>
-                ))}
-              </select>
+              <span className="mp-field__label">Category</span>
+              {/* Active categories only, plus the txn's current (possibly disabled) one. A colored
+                  thing is picked from its color tiles, never a plain select. */}
+              <div>
+                <ColorSelect
+                  value={cat}
+                  options={categoryOptions.filter((c) => c.active || c.name === cat)}
+                  allowEmpty
+                  placeholder="Set category"
+                  onSelect={setCat}
+                />
+              </div>
             </div>
             <div className="flex flex-col gap-1">
-              <span className="text-xs text-neutral-500">Notes</span>
+              <span className="mp-field__label">Notes</span>
               <textarea
                 value={notes}
                 onChange={(e) => setNotes(e.target.value)}
@@ -207,28 +208,28 @@ export function EditTransaction({
                   type="checkbox"
                   checked={isPending}
                   onChange={(e) => setIsPending(e.target.checked)}
-                  className="h-4 w-4 accent-amber-600"
+                  className="h-4 w-4 accent-accent"
                 />
-                <span className="text-xs text-neutral-600 dark:text-neutral-300">
+                <span className="text-xs text-fg-2">
                   Pending — not posted by the bank yet
                 </span>
               </label>
             )}
-            <p className="text-[11px] text-neutral-400">
+            <p className="text-[11px] text-fg-3">
               Changing the date moves the transaction to that month. Account balance
               snapshots aren&apos;t changed — edit those on the account.
             </p>
             <div className="flex justify-end gap-2 pt-1">
               <button
                 onClick={() => setOpen(false)}
-                className="px-3 py-1.5 text-sm text-neutral-500 hover:underline"
+                className="mp-btn mp-btn--ghost mp-btn--sm"
               >
                 Cancel
               </button>
               <button
                 onClick={submit}
                 disabled={pending || !valid}
-                className="px-3 py-1.5 rounded-md bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 disabled:opacity-50"
+                className="mp-btn mp-btn--primary mp-btn--sm"
               >
                 {pending ? "Saving…" : "Save"}
               </button>
@@ -245,9 +246,9 @@ export function EditTransaction({
         disabled={pending}
         title="Edit date, amount, type, account or category"
         aria-label="Edit transaction"
-        className="inline-flex items-center justify-center rounded p-1 text-blue-600 hover:bg-blue-50 hover:text-blue-700 disabled:opacity-50 dark:hover:bg-blue-950/40"
+        className="mp-btn mp-iconbtn mp-btn--ghost mp-btn--sm"
       >
-        <PencilIcon className="h-4 w-4" />
+        <Icon name="pencil" size={16} />
       </button>
       {panel}
     </>

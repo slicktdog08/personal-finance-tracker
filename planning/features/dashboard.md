@@ -28,12 +28,7 @@ URL-driven** so month switching re-renders every widget with no client state; (2
 - **Bill stats** (this month) — from `getInstances(selected.id)`: billed = Σ instance amount, paid =
   Σ where status is settled (from `statusConfig`), outstanding = billed − paid.
 - **Income vs outgoing** — `getCashflowByPeriod()` groups `transactions` by period + direction,
-  `SUM(amount)`, **excluding Transfer**, then splits outgoing into **spending** (debt payments
-  backed out) + **debt paydown** (payments − new charges per liability, from `getDebtFlows` /
-  `computeDebtFlows`). A card payment that only clears the month's card purchases is not counted
-  again; card-side payment credits filed as Debt Repayment are not income. Net = income − spending
-  − paydown ≈ change in cash; income − spending = what the month kept. The category chart's `Debt
-  Repayment` slice is the same net paydown.
+  `SUM(amount)`, **excluding Transfer**; Net = income − outgoing.
 - **Status donut** — instance counts per status, colored from config; center = % settled.
 - **Spend by category** — `getCategorySpend(label)`, top 10; rows link into filtered
   `/transactions`.
@@ -112,3 +107,28 @@ See [budget.md](budget.md).
 ## Related
 - Reads from [accounts-and-balances.md](accounts-and-balances.md), [savings-goals.md](savings-goals.md),
   [categorization.md](categorization.md), [transfers.md](transfers.md)
+
+## Owed to cards — the rebalance widget (2026-10-10)
+User: "a widget … to tell how much I owe to cards. I charge to cards at times but want to make it
+easy to rebalance things through a payment … starting balance vs today's balance. Excess is treated
+as a payment owed to that card on top of the debt payoff payment."
+- Widget `card-rebalance` ("Owed to cards"), current month only, default slot right under payday
+  (full width). `src/components/dashboard/CardRebalance.tsx`; rule in
+  `src/server/lib/card-rebalance.ts` (unit-tested in `tests/unit/card-rebalance.test.ts`).
+- Per active credit card: **owe = max(0, today − start)** — how far the card has climbed above
+  the balance it started the month at. `start` = latest snapshot before the 1st
+  (`getLiabilityStartBalances`; falls back to the first snapshot this month for a card first
+  recorded mid-month), `today` = latest snapshot.
+- 2026-10-10 follow-up — user: "the value needs to be how much the card is over the original
+  reported balance. The debt payoff is treated separately here." The first version added the
+  budget's planned payoff payment; it no longer does. Consequence: a payoff payment made this month
+  lowers `today`, so it can mask charges made the same month (pay $300, charge $250 → owes $0).
+- Interest posted this month also lands in "charges" — it is real money owed back to stay on plan.
+- 2026-10-12 fix — user: "the current balance doesn't reflect current spending … take the credit
+  limit minus available, or the current balance plus all pending transactions, then subtract where
+  I started the month." `today` is now **latest balance + net pending on that card** (pending
+  debits add, pending credits subtract). Credit-card available credit isn't stored (sync records the
+  ledger balance only), so the pending route is used; it equals limit − available.
+- Same figure exposed to agents as MCP tool `get_card_rebalance` (per card: start, balance,
+  pending, now, change, owe; plus totalOwe and missing). Dashboard and tool both build it through
+  `cardRebalanceFrom` so they can't disagree.

@@ -64,9 +64,9 @@ export class FakeProvider implements SyncProvider {
     if (err) throw err;
     return (this.txns.get(account.externalId) ?? []).filter((t) => t.txnDate >= range.startDate && t.txnDate <= range.endDate).map((t) => ({ ...t }));
   }
-  async getBalances(_t: string, externalAccountId: string): Promise<ProviderBalances> {
+  async getBalances(_t: string, account: { externalId: string }): Promise<ProviderBalances> {
     this.calls.getBalances++;
-    return this.balances.get(externalAccountId) ?? { ledger: null, available: null };
+    return this.balances.get(account.externalId) ?? { ledger: null, available: null };
   }
   async deleteEnrollment(_t: string, enrollmentId: string): Promise<void> {
     this.calls.deleteEnrollment++;
