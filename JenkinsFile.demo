@@ -1,0 +1,82 @@
+// Deploys the public demo: the app in DEMO_MODE with its own throwaway MySQL
+// (docker-compose.demo.yml), behind nginx with a Let's Encrypt certificate. See docs/demo.md.
+//
+// Unlike JenkinsFile it needs no secret file: the demo holds only generated sample data.
+// It reuses the same `vps-deploy-key` SSH credential for the nginx + certbot step.
+pipeline {
+    agent any
+
+    parameters {
+        string(name: 'DOMAIN', defaultValue: '', description: 'Domain the demo is served on, e.g. demo.example.com. Its DNS A record must already point at this server.')
+        string(name: 'CERTBOT_EMAIL', defaultValue: '', description: 'Contact address for Let\'s Encrypt (needed for the first certificate only).')
+        string(name: 'DEMO_PORT', defaultValue: '9011', description: 'Loopback port the demo container publishes and nginx proxies to. Must be free on the host.')
+        string(name: 'DEMO_RESET_MINUTES', defaultValue: '60', description: 'How often the sample data is wiped and reseeded.')
+    }
+
+    stages {
+        stage("Check Parameters") {
+            steps {
+                script {
+                    if (!params.DOMAIN?.trim()) { error('DOMAIN is required') }
+                    if (!(params.DEMO_PORT ==~ /\d{2,5}/)) { error('DEMO_PORT must be a port number') }
+                    if (!(params.DOMAIN.trim() ==~ /[A-Za-z0-9.-]+/)) { error('DOMAIN must be a bare hostname') }
+                }
+            }
+        }
+
+        stage("Cleanup Workspace") {
+            steps {
+                sh "git clean -fdx"
+            }
+        }
+
+        stage("Deploy Nginx Config & TLS") {
+            steps {
+                script {
+                    def domain = params.DOMAIN.trim()
+                    def email = params.CERTBOT_EMAIL?.trim() ?: ''
+                    def host = '172.17.0.1' // Docker bridge gateway — reaches the VPS host from inside Jenkins container
+                    sshagent(credentials: ['vps-deploy-key']) {
+                        sh """
+                            # render-nginx-conf.sh reads the port from ./.env
+                            echo "PORT=${params.DEMO_PORT}" > .env
+
+                            # The OPEN template: the demo is meant to be reachable by anyone.
+                            NGINX_TEMPLATE=nginx/template.public sh scripts/render-nginx-conf.sh ${domain} \\
+                                | ssh -o StrictHostKeyChecking=no deployer@${host} "tee /etc/nginx/sites-available/${domain} > /dev/null"
+                            ssh deployer@${host} "[ -L /etc/nginx/sites-enabled/${domain} ] || ln -s /etc/nginx/sites-available/${domain} /etc/nginx/sites-enabled/${domain}"
+                            ssh deployer@${host} "sudo nginx -t && sudo systemctl reload nginx"
+
+                            CERT_EXISTS=\$(ssh deployer@${host} '[ -f /etc/letsencrypt/live/${domain}/fullchain.pem ] && echo yes || echo no')
+                            if [ "\$CERT_EXISTS" = "no" ]; then
+                                [ -n "${email}" ] || { echo "First certificate needs CERTBOT_EMAIL"; exit 1; }
+                                ssh deployer@${host} "sudo certbot-deploy --nginx -d ${domain} --non-interactive --agree-tos -m ${email}"
+                            else
+                                ssh deployer@${host} "sudo certbot-deploy install --nginx --cert-name ${domain} --non-interactive"
+                            fi
+                        """
+                    }
+                }
+            }
+        }
+
+        stage("Build & Deploy") {
+            steps {
+                // The container wipes and reseeds its database on start, so a redeploy is
+                // also a data reset.
+                sh """
+                    DEMO_URL=https://${params.DOMAIN.trim()} \\
+                    DEMO_PORT=${params.DEMO_PORT} \\
+                    DEMO_RESET_MINUTES=${params.DEMO_RESET_MINUTES} \\
+                    docker compose -p pft-demo -f docker-compose.demo.yml up -d --build --force-recreate
+                """
+            }
+        }
+
+        stage("Cleanup Old Images") {
+            steps {
+                sh "docker image prune -f"
+            }
+        }
+    }
+}

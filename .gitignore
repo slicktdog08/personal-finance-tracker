@@ -67,3 +67,6 @@ next-env.d.ts
 # Local copy of the MiPlata design-system project (claude.ai/design). Its uploads/ holds
 # screenshots of real financial data, so it never goes in the repo.
 /design/
+
+# Local preview launch config for Claude Code (machine-specific paths)
+/.claude/launch.json

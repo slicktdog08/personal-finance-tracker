@@ -75,6 +75,13 @@ export default async function SyncSettingsPage({ searchParams }: { searchParams:
             One entry per bank login. Map each account the bank exposes to the account it feeds here.
           </p>
         </div>
+        {connect.demo && (
+          <Notice tone="info" title="Demo Bank">
+            Bank linking is disabled in the demo — Demo Bank is already connected. It&apos;s a made-up bank that
+            runs through the same sync engine a real one would, so <strong>Sync now</strong> brings in new
+            pretend transactions and balances.
+          </Notice>
+        )}
         {connect.ready && connect.providers.includes("simplefin") && (
           <Card title="Link with SimpleFIN" meta="paste a Setup Token">
             <LinkSimplefin envToken={connect.simplefinEnvToken} />
@@ -103,7 +110,7 @@ export default async function SyncSettingsPage({ searchParams }: { searchParams:
             </div>
           </Card>
         )}
-        {!connect.ready && (
+        {!connect.ready && !connect.demo && (
           <Notice tone="warn" title="Linking a bank isn't available">
             <ul className="mt-1 list-inside list-disc">
               {connect.problems.map((p) => (

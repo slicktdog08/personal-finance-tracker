@@ -110,5 +110,5 @@ ledger reads them. After applying the migration, regenerate the test schema
   the `insightSchema` in `tools-advisor.ts`, and `InsightCard`.
 
 ## Related
-- MCP server and advisor profile: `src/server/mcp/`, README "Connecting Claude (MCP)"
+- MCP server and advisor profile: `src/server/mcp/`, `docs/claude-mcp.md`
 - Dashboard (what insights should not just repeat): [dashboard.md](dashboard.md)

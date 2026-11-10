@@ -6,6 +6,7 @@ import { db } from "@/server/db";
 import { syncEnrollments } from "@/server/db/schema";
 import { requireSession } from "@/server/auth/session";
 import { decryptToken, hasTokenKey } from "@/server/lib/sync/crypto";
+import { DEMO_LINK_DISABLED, isDemoMode } from "@/server/lib/demo/mode";
 import { completeEnrollment } from "@/server/lib/sync/sync";
 import { createLinkToken, exchangePublicToken, plaidConfigured, plaidProvider } from "@/server/lib/plaid";
 
@@ -33,6 +34,7 @@ async function plaidEnrollment(id: number) {
 // Everything that would make a finished link unstorable is checked before Link opens:
 // a new Item uses one of the Trial plan's 10 (non-refundable) slots.
 function preflight(): string | null {
+  if (isDemoMode()) return DEMO_LINK_DISABLED;
   if (!plaidConfigured()) return "Plaid isn't configured (PLAID_API_CLIENT_ID / PLAID_API_SECRET).";
   if (!hasTokenKey()) return "SYNC_TOKEN_ENCRYPTION_KEY is missing or not 32 bytes of hex — set it before linking.";
   return null;

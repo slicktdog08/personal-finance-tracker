@@ -13,7 +13,7 @@ import { MCP_PATH, PROTECTED_RESOURCE_METADATA_PATH, mcpBearerChallenge } from "
 
 /**
  * Routes reachable without a session. Everything not listed here — every page, every
- * Server Action POST, every API route — requires a verified Cognito access token.
+ * Server Action POST, every API route — requires a verified access token (built-in or Cognito).
  *
  * This is an allowlist rather than a blocklist on purpose: a new page added later is
  * protected by default, and forgetting to update this file fails closed.
@@ -27,7 +27,7 @@ const PUBLIC_PATHS = new Set(["/login", "/forgot-password"]);
  */
 /**
  * Bank-sync callbacks are authenticated by the provider's HMAC signature over the raw
- * body (verified in the route), not by a session — an aggregator has no Cognito token. The
+ * body (verified in the route), not by a session — an aggregator has no session token. The
  * cron fallback route checks its own bearer secret for the same reason.
  */
 const SYNC_WEBHOOK_PREFIX = "/api/sync/webhook/";

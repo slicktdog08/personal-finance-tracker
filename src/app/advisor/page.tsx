@@ -5,6 +5,7 @@ import { ChatView } from "@/components/advisor/ChatView";
 import { LiveRefresh } from "@/components/advisor/LiveRefresh";
 import { isActive } from "@/lib/advisor";
 import { routineConfigured } from "@/server/lib/advisor/routine";
+import { DEMO_ADVISOR_DISABLED, isDemoMode } from "@/server/lib/demo/mode";
 import { countNewInsights, getInsight, getThread, listMessages, listRuns, listThreads, sweepStale } from "@/server/lib/advisor/store";
 
 export const dynamic = "force-dynamic";
@@ -69,7 +70,12 @@ export default async function AdvisorPage({ searchParams }: { searchParams: Prom
         }
       />
 
-      {!configured && (
+      {isDemoMode() && (
+        <Notice tone="info" title="Sample conversation">
+          {DEMO_ADVISOR_DISABLED}
+        </Notice>
+      )}
+      {!configured && !isDemoMode() && (
         <Notice tone="warn" title="The advisor routine isn't connected yet">
           Set <code>CLAUDE_ADVISOR_ROUTINE_ID</code> and <code>CLAUDE_ADVISOR_ROUTINE_TOKEN</code> on the server to chat from here (planning/features/ai-advisor.md).
         </Notice>

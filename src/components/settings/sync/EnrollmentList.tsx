@@ -72,7 +72,9 @@ export function EnrollmentList({
           icon="landmark"
           title="No banks linked"
           body={
-            connect.ready
+            connect.demo
+              ? "Demo Bank was removed. It comes back the next time the demo data resets."
+              : connect.ready
               ? "Paste a SimpleFIN Setup Token above. The accounts it exposes appear here for mapping."
               : "Linking becomes available once a bank provider is wired up. Everything else here (mapping, runs, history) is ready."
           }

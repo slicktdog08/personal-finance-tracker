@@ -7,6 +7,11 @@ import { schedulerAllowed } from "./server/sync/scheduler-gate";
 
 export async function register() {
   if (process.env.NEXT_RUNTIME !== "nodejs") return;
+  // The public demo puts its sample data back on a timer (no-op unless DEMO_MODE=1).
+  if (process.env.DEMO_MODE === "1") {
+    const { startDemoReset } = await import("./server/demo/reset");
+    startDemoReset();
+  }
   if (!schedulerAllowed()) return;
   const { startSyncScheduler } = await import("./server/sync/scheduler");
   startSyncScheduler();

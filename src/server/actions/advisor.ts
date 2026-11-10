@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { requireSession } from "@/server/auth/session";
+import { DEMO_ADVISOR_DISABLED, isDemoMode } from "@/server/lib/demo/mode";
 import { INSIGHT_STATUSES, type AdvisorMessageDto, type AdvisorRunDto, type InsightStatus } from "@/lib/advisor";
 import { requestRun, sendMessage, type RequestResult, type SendResult } from "@/server/lib/advisor/requests";
 import {
@@ -22,6 +23,7 @@ function revalidateAdvisor() {
 /** "Generate insights": fire the routine (or join the run already going unless forced). */
 export async function generateInsights(force = false): Promise<RequestResult> {
   await requireSession();
+  if (isDemoMode()) return { status: "error", message: DEMO_ADVISOR_DISABLED };
   const res = await requestRun("insights", force);
   revalidateAdvisor();
   return res;
@@ -30,6 +32,7 @@ export async function generateInsights(force = false): Promise<RequestResult> {
 /** "Run check-in now": the daily update, outside its schedule. */
 export async function runCheckinNow(force = false): Promise<RequestResult> {
   await requireSession();
+  if (isDemoMode()) return { status: "error", message: DEMO_ADVISOR_DISABLED };
   const res = await requestRun("checkin", force);
   revalidateAdvisor();
   return res;
@@ -47,6 +50,8 @@ export async function updateInsightStatus(ids: number[], status: InsightStatus):
 /** A chat turn from /advisor; threadId null starts a new conversation. */
 export async function sendAdvisorMessage(threadId: number | null, body: string): Promise<SendResult> {
   await requireSession();
+  // Nothing would ever answer: don't leave a visitor's message sitting as "pending".
+  if (isDemoMode()) return { status: "error", message: DEMO_ADVISOR_DISABLED, threadId: threadId ?? undefined };
   const res = await sendMessage(threadId, body);
   revalidateAdvisor();
   return res;
