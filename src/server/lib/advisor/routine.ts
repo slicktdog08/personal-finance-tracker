@@ -1,5 +1,6 @@
 import "server-only";
 import { formatPayload, type AdvisorRequest } from "@/lib/advisor";
+import { DEMO_ADVISOR_DISABLED, isDemoMode } from "@/server/lib/demo/mode";
 
 // Fires the "MiPlata advisor" Claude Code routine: a claude.ai routine with an API trigger,
 // so a request from the app runs on the owner's Claude plan instead of metered API credit.
@@ -17,10 +18,12 @@ const API = "https://api.anthropic.com/v1/claude_code/routines";
 export type FireResult = { ok: true; sessionUrl: string | null } | { ok: false; error: string };
 
 export function routineConfigured(): boolean {
+  if (isDemoMode()) return false;
   return Boolean(process.env.CLAUDE_ADVISOR_ROUTINE_ID && process.env.CLAUDE_ADVISOR_ROUTINE_TOKEN);
 }
 
 export async function fireAdvisorRoutine(req: AdvisorRequest): Promise<FireResult> {
+  if (isDemoMode()) return { ok: false, error: DEMO_ADVISOR_DISABLED };
   const id = process.env.CLAUDE_ADVISOR_ROUTINE_ID;
   const token = process.env.CLAUDE_ADVISOR_ROUTINE_TOKEN;
   if (!id || !token) {

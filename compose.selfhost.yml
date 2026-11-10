@@ -1,0 +1,60 @@
+# The whole app on one machine: MySQL and the tracker, nothing else to install.
+#
+#   docker compose -f compose.selfhost.yml up -d
+#   open http://localhost:3000        # the first visit creates your account
+#
+# The app container creates the schema on first boot and applies new migrations on every
+# start, so upgrading is `docker compose -f compose.selfhost.yml pull && ... up -d`.
+# Your data lives in the `pft-db` volume; `down` keeps it, `down -v` deletes it.
+#
+# Settings come from an optional `.env` beside this file (see docs/docker.md):
+#   DB_PASSWORD, DB_ROOT_PASSWORD   change these before exposing the machine to anyone
+#   APP_PORT                        host port (default 3000)
+#   APP_URL                         your https:// origin once it is behind a reverse proxy
+#   SYNC_TOKEN_ENCRYPTION_KEY       `openssl rand -hex 32`, only needed for bank sync
+#   PFT_IMAGE                       pin a version instead of :latest
+services:
+  db:
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: finance
+      MYSQL_USER: finance
+      MYSQL_PASSWORD: ${DB_PASSWORD:-finance-local-only}
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-root-local-only}
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    volumes:
+      - pft-db:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  app:
+    image: ${PFT_IMAGE:-ghcr.io/slicktdog08/personal-finance-tracker:latest}
+    # No published image for your platform, or you changed the code? `--build` uses this.
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: mysql://finance:${DB_PASSWORD:-finance-local-only}@db:3306/finance
+      # Built-in accounts: no AWS, no extra services. To use Cognito instead, see docs/authentication.md.
+      AUTH_PROVIDER: local
+      # Plain http on localhost. Set APP_URL to your https:// origin when you put this behind
+      # a reverse proxy; session cookies then become Secure automatically.
+      APP_URL: ${APP_URL:-http://localhost:3000}
+      SYNC_TOKEN_ENCRYPTION_KEY: ${SYNC_TOKEN_ENCRYPTION_KEY:-}
+      # DEMO_MODE=1 fills the app with sample data and signs visitors in automatically.
+      # It WIPES the database on every start — never set it on an install you care about.
+      DEMO_MODE: ${DEMO_MODE:-0}
+    ports:
+      # Loopback only by default. Use "3000:3000" to reach it from other devices on your network.
+      - "127.0.0.1:${APP_PORT:-3000}:3000"
+
+volumes:
+  pft-db:

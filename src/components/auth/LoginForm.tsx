@@ -3,7 +3,8 @@
 import { useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { completeNewPassword, signIn } from "@/server/actions/auth";
+import { completeNewPassword, createFirstUser, signIn } from "@/server/actions/auth";
+import type { LoginMode } from "@/server/auth/types";
 
 const inputCls = "mp-input";
 
@@ -12,13 +13,18 @@ const buttonCls = "mp-btn mp-btn--primary mp-btn--lg mp-btn--block";
 /** Set by Cognito when an admin-created user signs in with a temporary password. */
 type Challenge = { session: string; username: string };
 
-export function LoginForm({ next }: { next: string }) {
+export function LoginForm({ next, mode }: { next: string; mode: LoginMode }) {
   const router = useRouter();
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
 
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
+  const demo = mode.kind === "demo" ? mode : null;
+  // Built-in auth with no account yet: this same screen creates the owner's account.
+  const firstRun = mode.kind === "local" && mode.firstRun;
+
+  const [email, setEmail] = useState(demo?.email ?? "");
+  const [password, setPassword] = useState(demo?.password ?? "");
+  const [name, setName] = useState("");
 
   const [challenge, setChallenge] = useState<Challenge | null>(null);
   const [newPassword, setNewPassword] = useState("");
@@ -33,8 +39,12 @@ export function LoginForm({ next }: { next: string }) {
 
   const submitCredentials = () => {
     setError(null);
+    if (firstRun && password !== confirmPassword) {
+      setError("Those passwords don't match.");
+      return;
+    }
     start(async () => {
-      const res = await signIn({ email, password });
+      const res = firstRun ? await createFirstUser({ email, password, name }) : await signIn({ email, password });
       if (res.ok) return enter();
       if ("challenge" in res) {
         setChallenge({ session: res.session, username: res.username });
@@ -127,8 +137,36 @@ export function LoginForm({ next }: { next: string }) {
       }}
     >
       <div>
-        <h1 className="font-display text-lg font-semibold tracking-tight">Sign in</h1>
+        <h1 className="font-display text-lg font-semibold tracking-tight">
+          {firstRun ? "Create your account" : demo ? "Try the demo" : "Sign in"}
+        </h1>
+        {firstRun && (
+          <p className="mt-1 text-sm text-fg-2">
+            Welcome. This install has no account yet — the one you create here is the owner, and the only one.
+          </p>
+        )}
+        {demo && (
+          <p className="mt-1 text-sm text-fg-2">
+            The demo account is filled in for you. Everything inside is made-up data, and it resets regularly.
+          </p>
+        )}
       </div>
+
+      {firstRun && (
+        <div className="space-y-1">
+          <label className="mp-field__label" htmlFor="name">
+            Name <span className="text-fg-3">(optional)</span>
+          </label>
+          <input
+            id="name"
+            className={inputCls}
+            type="text"
+            autoComplete="name"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+          />
+        </div>
+      )}
 
       <div className="space-y-1">
         <label className="mp-field__label" htmlFor="email">
@@ -139,7 +177,7 @@ export function LoginForm({ next }: { next: string }) {
           className={inputCls}
           type="email"
           autoComplete="username"
-          autoFocus
+          autoFocus={!demo}
           value={email}
           onChange={(e) => setEmail(e.target.value)}
           required
@@ -154,27 +192,56 @@ export function LoginForm({ next }: { next: string }) {
           id="password"
           className={inputCls}
           type="password"
-          autoComplete="current-password"
+          autoComplete={firstRun ? "new-password" : "current-password"}
           value={password}
           onChange={(e) => setPassword(e.target.value)}
+          minLength={firstRun ? 8 : undefined}
           required
         />
+        {firstRun && <p className="text-xs text-fg-3">At least 8 characters.</p>}
       </div>
+
+      {firstRun && (
+        <div className="space-y-1">
+          <label className="mp-field__label" htmlFor="confirm-password">
+            Confirm password
+          </label>
+          <input
+            id="confirm-password"
+            className={inputCls}
+            type="password"
+            autoComplete="new-password"
+            value={confirmPassword}
+            onChange={(e) => setConfirmPassword(e.target.value)}
+            required
+          />
+        </div>
+      )}
 
       {error && <p className="text-sm text-danger" role="alert">{error}</p>}
 
-      <button className={buttonCls} type="submit" disabled={pending}>
-        {pending ? "Signing in…" : "Sign in"}
+      <button className={buttonCls} type="submit" disabled={pending} autoFocus={!!demo}>
+        {firstRun
+          ? pending
+            ? "Creating…"
+            : "Create account"
+          : pending
+            ? "Signing in…"
+            : demo
+              ? "Enter the demo"
+              : "Sign in"}
       </button>
 
-      <p className="text-center text-sm">
-        <Link
-          href="/forgot-password"
-          className="text-fg-2 hover:text-accent-text hover:underline"
-        >
-          Forgot password?
-        </Link>
-      </p>
+      {!firstRun && !demo && (
+        <p className="text-center text-sm">
+          <Link
+            href="/forgot-password"
+            className="text-fg-2 hover:text-accent-text hover:underline"
+          >
+            Forgot password?
+          </Link>
+        </p>
+      )}
     </form>
   );
 }

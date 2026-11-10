@@ -8,6 +8,7 @@ import { RoutineButtons } from "@/components/advisor/RoutineButtons";
 import { RunList } from "@/components/advisor/RunList";
 import { isActive, type AdvisorInsightDto } from "@/lib/advisor";
 import { routineConfigured } from "@/server/lib/advisor/routine";
+import { DEMO_ADVISOR_DISABLED, isDemoMode } from "@/server/lib/demo/mode";
 import { latestCheckin, listInsights, listRuns, markInsightsSeen, sweepStale } from "@/server/lib/advisor/store";
 
 export const dynamic = "force-dynamic";
@@ -48,7 +49,12 @@ export default async function InsightsPage() {
         actions={configured ? <RoutineButtons busy={busy} /> : undefined}
       />
 
-      {!configured && (
+      {isDemoMode() && (
+        <Notice tone="info" title="Sample insights">
+          {DEMO_ADVISOR_DISABLED} The findings below are examples of what it writes.
+        </Notice>
+      )}
+      {!configured && !isDemoMode() && (
         <Notice tone="warn" title="The advisor routine isn't connected yet">
           Set <code>CLAUDE_ADVISOR_ROUTINE_ID</code> and <code>CLAUDE_ADVISOR_ROUTINE_TOKEN</code> on the server to run insights and chat from here.
           Scheduled routines that use the MCP connector still report their runs below. Setup: planning/features/ai-advisor.md.

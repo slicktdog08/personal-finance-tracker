@@ -7,6 +7,7 @@ import { AppShell, LaunchSplash, NavProgress } from "@/components/ds";
 import { SPLASH_SEEN_KEY } from "@/lib/launch-splash";
 import { SIDEBAR_COOKIE } from "@/components/ds/sidebar";
 import { SyncNotice } from "@/components/SyncNotice";
+import { DemoNotice } from "@/components/DemoNotice";
 import { SignOutButton } from "@/components/auth/SignOutButton";
 import { getSession } from "@/server/auth/session";
 import { getNavCounts } from "@/server/queries";
@@ -95,7 +96,12 @@ async function Shell({ children }: { children: React.ReactNode }) {
       sidebarCollapsed={sidebarCollapsed}
       counts={counts}
       sync={sync}
-      banner={<SyncNotice />}
+      banner={
+        <>
+          <DemoNotice />
+          <SyncNotice />
+        </>
+      }
     >
       {children}
     </AppShell>
