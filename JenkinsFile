@@ -5,6 +5,8 @@ pipeline {
         string(name: 'DOMAIN', defaultValue: '', description: 'Domain to deploy and issue a TLS cert for. Blank = the host of APP_URL in .env.production')
         string(name: 'CERTBOT_EMAIL', defaultValue: '', description: 'Contact address Let\'s Encrypt registers for renewal notices (first cert only). Blank = CERTBOT_EMAIL in .env.production')
         booleanParam(name: 'RUN_MIGRATIONS', defaultValue: false, description: 'Run `drizzle-kit migrate` against the production DB before swapping containers (journaled migrations 0000-0004 only)')
+        booleanParam(name: 'PUBLISH_IMAGE', defaultValue: false, description: 'After a successful deploy, push the image just built to a container registry so others can run it without building (see docs/docker.md). Needs the `container-registry-publish` credential.')
+        string(name: 'IMAGE_REPO', defaultValue: 'ghcr.io/slicktdog08/personal-finance-tracker', description: 'Registry repository PUBLISH_IMAGE pushes to (tags :latest and :<commit>).')
         booleanParam(name: 'APPLY_SQL', defaultValue: true, description: 'Apply every hand-written migration in drizzle/ not yet recorded in the sql_migrations table (scripts/apply-sql.ts --pending) before swapping containers. Already-applied files are skipped, so leaving this on is safe.')
     }
 
@@ -107,6 +109,33 @@ pipeline {
         stage("Deploy") {
             steps {
                 sh "docker compose up -d --force-recreate"
+            }
+        }
+
+        stage("Publish Image") {
+            // Off by default. Runs only after Deploy succeeded, so a published :latest is always
+            // an image that booted here. The image holds no configuration or credentials
+            // (.dockerignore excludes .env*), which is what makes it safe to publish.
+            when { expression { return params.PUBLISH_IMAGE == true } }
+            steps {
+                // A Jenkins "Username with password" credential: the registry user and an
+                // access token allowed to push packages.
+                withCredentials([usernamePassword(credentialsId: 'container-registry-publish', usernameVariable: 'REG_USER', passwordVariable: 'REG_TOKEN')]) {
+                    sh '''
+                        IMAGE_ID=$(docker compose images -q personal-billing | head -1)
+                        [ -n "$IMAGE_ID" ] || { echo "No built image found for personal-billing"; exit 1; }
+                        REGISTRY=${IMAGE_REPO%%/*}
+                        SHA=$(git rev-parse --short HEAD)
+
+                        echo "$REG_TOKEN" | docker login "$REGISTRY" -u "$REG_USER" --password-stdin
+                        trap 'docker logout "$REGISTRY"' EXIT
+
+                        docker tag "$IMAGE_ID" "$IMAGE_REPO:latest"
+                        docker tag "$IMAGE_ID" "$IMAGE_REPO:$SHA"
+                        docker push "$IMAGE_REPO:latest"
+                        docker push "$IMAGE_REPO:$SHA"
+                    '''
+                }
             }
         }
 

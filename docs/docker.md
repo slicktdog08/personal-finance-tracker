@@ -4,18 +4,19 @@ The image holds the whole app: the web server, the schema, the migration runner 
 command-line tools. It carries no configuration and no credentials — everything is supplied
 when it runs — so the same image works for anyone.
 
-```
-ghcr.io/slicktdog08/personal-finance-tracker:latest
-```
-
 ## One machine, everything included
 
 [`compose.selfhost.yml`](../compose.selfhost.yml) runs MySQL and the app together.
 
 ```bash
+git clone https://github.com/slicktdog08/personal-finance-tracker && cd personal-finance-tracker
 docker compose -f compose.selfhost.yml up -d
 docker compose -f compose.selfhost.yml logs -f app   # watch the first boot
 ```
+
+The first `up` builds the image from the clone, which takes a few minutes. If a
+[published image](#how-the-image-gets-published) is available, `docker compose -f
+compose.selfhost.yml pull` fetches it instead.
 
 On start the app container:
 
@@ -38,7 +39,7 @@ Put these in a `.env` file next to the compose file. All are optional for a loca
 | `APP_PORT` | `3000` | Port on the host |
 | `APP_URL` | `http://localhost:3000` | Your public origin. Set it to the `https://` address once you add a reverse proxy; session cookies become `Secure` automatically |
 | `SYNC_TOKEN_ENCRYPTION_KEY` | *(unset)* | `openssl rand -hex 32`. Only needed for [bank sync](importing.md#3-bank-sync) |
-| `PFT_IMAGE` | `…:latest` | Pin a version, e.g. `ghcr.io/slicktdog08/personal-finance-tracker:1.2.0` |
+| `PFT_IMAGE` | `…:latest` | Use another image name or tag, e.g. a published `:<commit>` tag |
 | `DEMO_MODE` | `0` | `1` = sample data and automatic sign-in. **Wipes the database on every start** |
 
 The app listens on `127.0.0.1` only. To reach it from other devices on your network, change
@@ -49,7 +50,7 @@ type in the browser (for example `http://192.168.1.20:3000`).
 
 ```bash
 # upgrade
-docker compose -f compose.selfhost.yml pull && docker compose -f compose.selfhost.yml up -d
+git pull && docker compose -f compose.selfhost.yml up -d --build
 
 # reset a forgotten password
 docker compose -f compose.selfhost.yml exec app npm run auth -- passwd you@example.com
@@ -65,16 +66,17 @@ docker compose -f compose.selfhost.yml down -v
 
 ### Build it yourself
 
-No published image for your platform, or you changed the code:
+Changed the code, or want to rebuild after a `git pull`:
 
 ```bash
-git clone https://github.com/slicktdog08/personal-finance-tracker && cd personal-finance-tracker
 docker compose -f compose.selfhost.yml up -d --build
 ```
 
 ## Just the app container
 
-Already have MySQL? Run only the app and point it at your database:
+Already have MySQL? Run only the app and point it at your database. This uses the
+[published image](#how-the-image-gets-published); to use your own build, run
+`docker build -t finance .` in a clone and put `finance` on the last line.
 
 ```bash
 docker run -d --name finance -p 127.0.0.1:3000:3000 \
@@ -100,8 +102,18 @@ nginx + Let's Encrypt walkthrough.
 
 ## How the image gets published
 
-[`.github/workflows/docker-publish.yml`](../.github/workflows/docker-publish.yml) builds for
-amd64 and arm64 and pushes to GitHub Container Registry: `:latest` on every push to `main`,
-and `:X.Y.Z` for a `vX.Y.Z` tag. Forks publish to their own namespace with no changes. After
-the first publish, set the package's visibility to **Public** on GitHub (Packages → the
-package → Package settings) so `docker pull` works without logging in.
+The same Jenkins pipeline that deploys the app ([`JenkinsFile`](../JenkinsFile)) can push the
+image it just built. Run the job with **PUBLISH_IMAGE** ticked: after the deploy succeeds it
+tags the image `:latest` and `:<commit>` and pushes both to `IMAGE_REPO`.
+
+One-time setup:
+
+1. In Jenkins, add a *Username with password* credential with the ID
+   `container-registry-publish`: your registry user and an access token allowed to push
+   packages.
+2. After the first push, make the package public in the registry's settings so `docker pull`
+   works without logging in.
+
+The image is built for the architecture of the Jenkins host. On another architecture (for
+example a Raspberry Pi when the host is x86), use [Build it yourself](#build-it-yourself).
+Running a fork? Set `IMAGE_REPO` to your own repository and `PFT_IMAGE` to match.

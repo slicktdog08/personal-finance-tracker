@@ -14,10 +14,10 @@ can read your real numbers.
 
 **[Try the demo](docs/demo.md)** · **[Get started](docs/getting-started.md)** · **[Feature tour](docs/features.md)**
 
-## Run it in two minutes
+## Run it with Docker
 
 ```bash
-curl -O https://raw.githubusercontent.com/slicktdog08/personal-finance-tracker/main/compose.selfhost.yml
+git clone https://github.com/slicktdog08/personal-finance-tracker && cd personal-finance-tracker
 docker compose -f compose.selfhost.yml up -d
 ```
 
