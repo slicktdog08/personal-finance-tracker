@@ -11,6 +11,8 @@ import {
   billStatuses,
   paymentTypes,
   accountBalances,
+  assets,
+  assetValues,
   categoryMappings,
   categories,
   transferDismissals,
@@ -55,6 +57,7 @@ import {
   CASH_ACCOUNT_TYPES,
   LIABILITY_ACCOUNT_TYPES,
   WALLET_ACCOUNT_TYPES,
+  RETIREMENT_ACCOUNT_TYPES,
   BUDGET_EXCLUDED_CATEGORIES,
   CASH_SOURCE_CATEGORY,
   SAVINGS_CATEGORY,
@@ -637,6 +640,15 @@ export interface BalanceTrendPoint {
   cash: number | null; // checking + savings; null when no snapshot on/before month-end
   credit: number | null; // credit cards owed
   loans: number | null; // loans outstanding
+  // Owned but not spendable — counted in net worth only. 0 (not null) before anything was
+  // recorded: an asset you didn't track yet isn't a gap in the record the way a debt is.
+  retirement: number; // 401(k)/IRA balances
+  assets: number; // car, house, … at their latest recorded value
+}
+
+/** Net worth for one trend month: cash + retirement + assets − cards − loans. */
+export function netWorthOf(t: Pick<BalanceTrendPoint, "cash" | "credit" | "loans" | "retirement" | "assets">): number {
+  return (t.cash ?? 0) + t.retirement + t.assets - (t.credit ?? 0) - (t.loans ?? 0);
 }
 
 // Per-month totals for cash on hand, credit owed, and loans outstanding — each computed "as of"
@@ -645,7 +657,7 @@ export interface BalanceTrendPoint {
 // category is null for a month when no snapshot exists on/before that month's end (leading gap).
 export async function getBalanceTrends(): Promise<BalanceTrendPoint[]> {
   await requireSession();
-  const [periodRows, acctRows, balRows] = await Promise.all([
+  const [periodRows, acctRows, balRows, assetRows] = await Promise.all([
     db
       .select({ label: periods.label, year: periods.year, month: periods.month })
       .from(periods)
@@ -659,7 +671,29 @@ export async function getBalanceTrends(): Promise<BalanceTrendPoint[]> {
       })
       .from(accountBalances)
       .orderBy(asc(accountBalances.asOf), asc(accountBalances.id)),
+    db
+      .select({ assetId: assetValues.assetId, value: assetValues.value, asOf: assetValues.asOf })
+      .from(assetValues)
+      .orderBy(asc(assetValues.asOf), asc(assetValues.id)),
   ]);
+
+  // Asset values per asset, ascending — same "latest snapshot ≤ month-end" rule as balances.
+  const byAsset = new Map<number, { asOf: string; balance: number }[]>();
+  for (const v of assetRows) {
+    const n = toNum(v.value);
+    if (n == null) continue;
+    const arr = byAsset.get(v.assetId);
+    if (arr) arr.push({ asOf: v.asOf, balance: n });
+    else byAsset.set(v.assetId, [{ asOf: v.asOf, balance: n }]);
+  }
+  const latestBy = (snaps: { asOf: string; balance: number }[], end: string): number | null => {
+    let bal: number | null = null;
+    for (const s of snaps) {
+      if (s.asOf <= end) bal = s.balance;
+      else break;
+    }
+    return bal;
+  };
 
   const typeOf = new Map(acctRows.map((a) => [a.id, a.accountType ?? ""]));
 
@@ -678,21 +712,61 @@ export async function getBalanceTrends(): Promise<BalanceTrendPoint[]> {
     let cash: number | null = null;
     let credit: number | null = null;
     let loans: number | null = null;
+    let retirement = 0;
+    let assetTotal = 0;
     for (const [accountId, snaps] of byAccount) {
       // Latest snapshot with as_of ≤ month-end (ascending, so the last match before we break).
-      let bal: number | null = null;
-      for (const s of snaps) {
-        if (s.asOf <= end) bal = s.balance;
-        else break;
-      }
+      const bal = latestBy(snaps, end);
       if (bal == null) continue;
       const t = typeOf.get(accountId) ?? "";
       if (CASH_ACCOUNT_TYPES.includes(t)) cash = (cash ?? 0) + bal;
       else if (t === "Credit") credit = (credit ?? 0) + bal;
       else if (t === "Loan") loans = (loans ?? 0) + Math.max(0, bal);
+      else if (RETIREMENT_ACCOUNT_TYPES.includes(t)) retirement += bal;
     }
-    return { label: p.label, year: p.year, month: p.month, cash, credit, loans };
+    for (const snaps of byAsset.values()) assetTotal += latestBy(snaps, end) ?? 0;
+    return { label: p.label, year: p.year, month: p.month, cash, credit, loans, retirement, assets: assetTotal };
   });
+}
+
+// Every asset with its value history (newest first) and latest value. Values are what it's
+// worth, not what's owed — a car loan is a separate Loan account on Debts.
+export async function getAssets() {
+  await requireSession();
+  const [rows, vals] = await Promise.all([
+    db.select().from(assets).orderBy(desc(assets.active), asc(assets.name)),
+    db.select().from(assetValues).orderBy(desc(assetValues.asOf), desc(assetValues.id)),
+  ]);
+  const byAsset = new Map<number, (typeof vals)[number][]>();
+  for (const v of vals) {
+    const list = byAsset.get(v.assetId);
+    if (list) list.push(v);
+    else byAsset.set(v.assetId, [v]);
+  }
+  return rows.map((a) => {
+    const values = byAsset.get(a.id) ?? [];
+    return { ...a, values, value: values[0] ? toNum(values[0].value) : null, asOf: values[0]?.asOf ?? null };
+  });
+}
+export type AssetWithValues = Awaited<ReturnType<typeof getAssets>>[number];
+
+/** Latest balance of every Retirement-type account (null when none recorded). */
+export async function getRetirementAccounts() {
+  await requireSession();
+  const accts = await db
+    .select({ id: accounts.id, label: accounts.label, institution: accounts.institution, accountNumber: accounts.accountNumber, active: accounts.active })
+    .from(accounts)
+    .where(inArray(accounts.accountType, [...RETIREMENT_ACCOUNT_TYPES]))
+    .orderBy(asc(accounts.label));
+  if (!accts.length) return [];
+  const bals = await db
+    .select({ accountId: accountBalances.accountId, balance: accountBalances.balance, asOf: accountBalances.asOf })
+    .from(accountBalances)
+    .where(inArray(accountBalances.accountId, accts.map((a) => a.id)))
+    .orderBy(desc(accountBalances.asOf), desc(accountBalances.id));
+  const latest = new Map<number, { balance: string; asOf: string }>();
+  for (const b of bals) if (!latest.has(b.accountId)) latest.set(b.accountId, b);
+  return accts.map((a) => ({ ...a, balance: toNum(latest.get(a.id)?.balance ?? null), asOf: latest.get(a.id)?.asOf ?? null }));
 }
 
 // Payments attributed to each liability account via its linked bill (transaction → bill_instance

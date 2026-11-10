@@ -2,12 +2,14 @@ import { Money, StatTile } from "@/components/ds";
 import { Sparkline } from "@/components/charts/Sparkline";
 import { formatMoney } from "@/server/lib/money";
 
-/** Cash minus everything owed, month by month — the one line that says whether the rebuild is working. */
+/** Cash + retirement + assets minus everything owed, month by month — the one line that says whether the rebuild is working. */
 export function NetWorth({
   now,
   prev,
   prevLabel,
   cash,
+  retirement = 0,
+  assets = 0,
   credit,
   loans,
   trend,
@@ -18,6 +20,10 @@ export function NetWorth({
   /** "Sep" — what the delta is measured against. */
   prevLabel?: string | null;
   cash: number;
+  /** 401(k)/IRA — owned, not spendable. */
+  retirement?: number;
+  /** Car, house, … at latest recorded value. */
+  assets?: number;
   credit: number;
   loans: number;
   trend: { label: string; value: number | null }[];
@@ -39,7 +45,18 @@ export function NetWorth({
         }
         sub={
           <>
-            Cash <Money value={cash} kind="neutral" /> · Cards <Money value={credit} kind="neutral" /> · Loans <Money value={loans} kind="neutral" />
+            Cash <Money value={cash} kind="neutral" />
+            {retirement !== 0 && (
+              <>
+                {" "}· Retirement <Money value={retirement} kind="neutral" />
+              </>
+            )}
+            {assets !== 0 && (
+              <>
+                {" "}· Assets <Money value={assets} kind="neutral" />
+              </>
+            )}{" "}
+            · Cards <Money value={credit} kind="neutral" /> · Loans <Money value={loans} kind="neutral" />
           </>
         }
       />

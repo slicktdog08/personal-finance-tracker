@@ -4,7 +4,7 @@ import { BarsChart } from "@/components/charts/BarsChart";
 import { TrendLineChart } from "@/components/charts/TrendLineChart";
 import { DeltaBars } from "@/components/charts/DeltaBars";
 import { Card, EmptyState, Money, PageHeader, StatTile } from "@/components/ds";
-import { getBalanceTrends, getCashflowByPeriod } from "@/server/queries";
+import { getBalanceTrends, getCashflowByPeriod, netWorthOf } from "@/server/queries";
 import { formatMoney, toNum } from "@/server/lib/money";
 import { currentPeriodLabel, shortMonthLabel } from "@/server/lib/period";
 import { todayIso } from "@/server/lib/pay-schedule";
@@ -48,7 +48,7 @@ export default async function TrendsPage({ searchParams }: { searchParams: Promi
   // Months exist as periods long before any balance was recorded in them, and an axis that opens
   // with a year of blank months squeezes the part that has data into a corner — so it starts
   // where the record actually starts.
-  const opened = tracked.findIndex((t) => t.cash != null || t.credit != null || t.loans != null);
+  const opened = tracked.findIndex((t) => t.cash != null || t.credit != null || t.loans != null || t.retirement !== 0 || t.assets !== 0);
   const recorded = opened < 0 ? [] : tracked.slice(opened);
   // The range toggle trims the window to its last N months (Max keeps the whole record).
   const lastLabel = currentLabel ?? recorded[recorded.length - 1]?.label;
@@ -65,7 +65,7 @@ export default async function TrendsPage({ searchParams }: { searchParams: Promi
     value:
       t.cash == null || (hasCredit && t.credit == null) || (hasLoans && t.loans == null)
         ? null
-        : t.cash - (t.credit ?? 0) - (t.loans ?? 0),
+        : netWorthOf(t),
   }));
 
   const defined = net.flatMap((p, i) => (p.value == null ? [] : [{ ...p, value: p.value, i }]));
@@ -141,9 +141,13 @@ export default async function TrendsPage({ searchParams }: { searchParams: Promi
   const best = definedDeltas.reduce((a, b) => (b.value > a.value ? b : a), definedDeltas[0]);
   const worst = definedDeltas.reduce((a, b) => (b.value < a.value ? b : a), definedDeltas[0]);
 
-  // ---- What it's made of: cash against everything owed ----
+  // ---- What it's made of: cash (and what's owned but not spendable) against everything owed ----
+  const hasRetirement = months.some((t) => t.retirement !== 0);
+  const hasAssets = months.some((t) => t.assets !== 0);
   const compositionSeries = [
     { name: "Cash", color: "var(--mp-accent)", values: months.map((t) => t.cash ?? 0) },
+    ...(hasRetirement ? [{ name: "Retirement", color: "#8b5cf6", values: months.map((t) => t.retirement) }] : []),
+    ...(hasAssets ? [{ name: "Assets", color: "#d97706", values: months.map((t) => t.assets) }] : []),
     ...(hasCredit ? [{ name: "Cards", color: "var(--mp-money-owed)", values: months.map((t) => t.credit ?? 0) }] : []),
     ...(hasLoans ? [{ name: "Loans", color: "var(--mp-money-pending)", values: months.map((t) => t.loans ?? 0) }] : []),
   ];
@@ -186,6 +190,18 @@ export default async function TrendsPage({ searchParams }: { searchParams: Promi
             sub={
               <>
                 Cash <Money value={latestMonth?.cash ?? 0} kind="neutral" />
+                {(latestMonth?.retirement ?? 0) !== 0 && (
+                  <>
+                    {" "}
+                    · Retirement <Money value={latestMonth!.retirement} kind="neutral" />
+                  </>
+                )}
+                {(latestMonth?.assets ?? 0) !== 0 && (
+                  <>
+                    {" "}
+                    · Assets <Money value={latestMonth!.assets} kind="neutral" />
+                  </>
+                )}
                 {totalOwedNow > 0 && (
                   <>
                     {" "}

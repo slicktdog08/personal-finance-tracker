@@ -7,7 +7,7 @@ import { relativeTime } from "@/lib/sync-format";
 import { formatMoney, toNum } from "@/server/lib/money";
 import { formatDate } from "@/server/lib/period";
 import { monthlyInterest, payoffProgress } from "@/server/lib/debt";
-import { ACCOUNT_TYPES, CASH_ACCOUNT_TYPES, CREDIT_ACCOUNT_TYPES, LIABILITY_ACCOUNT_TYPES } from "@/constants/enums";
+import { ACCOUNT_TYPES, CASH_ACCOUNT_TYPES, CREDIT_ACCOUNT_TYPES, LIABILITY_ACCOUNT_TYPES, RETIREMENT_ACCOUNT_TYPES } from "@/constants/enums";
 import { updateAccount, addAccountBalance, deleteAccountBalance } from "@/server/actions/accounts";
 import { Field, Glyph, Icon, IconButton, Input, Money, ProgressBar, Select, Button, cx } from "@/components/ds";
 import { accountGlyph, accountMaskLine } from "./account-glyph";
@@ -57,6 +57,8 @@ export function AccountCard({
   const isCash = CASH_ACCOUNT_TYPES.includes(type);
   const isCredit = CREDIT_ACCOUNT_TYPES.includes(type);
   const isLiability = LIABILITY_ACCOUNT_TYPES.includes(type);
+  // A 401(k)/IRA records a balance exactly like cash does — it's just not spendable.
+  const isRetirement = RETIREMENT_ACCOUNT_TYPES.includes(type);
   const latest = balances[0];
   // These change rarely; pre-fill from the most recent known value so recording a new balance
   // doesn't require re-typing them (freshest non-null wins).
@@ -211,10 +213,13 @@ export function AccountCard({
             )}
           </div>
 
-          {isCash && (
+          {(isCash || isRetirement) && (
             <div className="space-y-3">
               <div className="flex items-baseline justify-between gap-3">
-                <div className="text-sm font-medium">Cash on hand</div>
+                <div className="text-sm font-medium">
+                  {isRetirement ? "Balance" : "Cash on hand"}
+                  {isRetirement && <span className="ml-2 text-xs font-normal text-fg-3">counts toward net worth, not cash on hand</span>}
+                </div>
                 <div className="text-right">
                   <span className="text-lg font-semibold">{latest ? <Money value={latest.balance} kind="neutral" /> : "—"}</span>
                   {latest && <span className="ml-2 text-xs text-fg-3">as of {formatDate(latest.asOf)}</span>}
@@ -376,9 +381,9 @@ export function AccountCard({
             </div>
           )}
 
-          {!isCash && !isLiability && (
+          {!isCash && !isLiability && !isRetirement && (
             <p className="text-xs text-fg-3">
-              Set the type to Checking, Savings or Cash to track its balance here, or Credit or Loan to move it to Debts.
+              Set the type to Checking, Savings, Cash or Retirement to track its balance here, or Credit or Loan to move it to Debts.
             </p>
           )}
         </div>
