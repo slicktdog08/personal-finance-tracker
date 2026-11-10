@@ -11,6 +11,3 @@ services:
       - .env.production
     ports:
       - "127.0.0.1:${PORT}:${PORT}"
-    # Optional: keep your advisor profile on the host instead of baking it into the image.
-    # volumes:
-    #   - /srv/personal-billing/advisor-profile.json:/app/config/advisor-profile.json:ro

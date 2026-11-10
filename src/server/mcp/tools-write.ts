@@ -22,6 +22,7 @@ import { billInstances, budgetLines, transactions } from "@/server/db/schema";
 import { eq, inArray } from "drizzle-orm";
 import { todayIso } from "@/server/lib/pay-schedule";
 import { toNum } from "@/server/lib/money";
+import { getAdvisorProfile, saveAdvisorProfile } from "./advisor-context";
 
 // Every write here is additive or a status/label flip the UI can undo. Deletes, imports,
 // merges and rule edits stay in the app on purpose — an advisor should never be one
@@ -320,6 +321,34 @@ export function registerWriteTools(server: McpServer) {
         apr: apr ?? null,
         minPayment: minPayment ?? null,
       });
+    },
+  );
+  server.registerTool(
+    "update_advisor_profile",
+    {
+      title: "Update the advisor profile",
+      description:
+        "Rewrite parts of the standing profile get_advisor_context returns (who the user is, the plan in motion, data caveats, how to advise). Each list you pass REPLACES that list — send the full new list, not just additions; omitted fields are kept. updatedOn is set to today. Keep bullets short and factual. Show the user the before → after and ask before calling.",
+      inputSchema: z.object({
+        name: z.string().max(60).optional(),
+        situation: z.array(z.string().min(1).max(400)).max(30).optional(),
+        plan: z.array(z.string().min(1).max(400)).max(30).optional(),
+        dataCaveats: z.array(z.string().min(1).max(400)).max(30).optional(),
+        advisorStyle: z.array(z.string().min(1).max(400)).max(30).optional(),
+      }),
+      annotations: { ...WRITE, idempotentHint: true },
+    },
+    async (patch) => {
+      const before = await getAdvisorProfile();
+      const after = await saveAdvisorProfile({
+        name: patch.name ?? before.name,
+        updatedOn: todayIso(),
+        situation: patch.situation ?? before.situation,
+        plan: patch.plan ?? before.plan,
+        dataCaveats: patch.dataCaveats ?? before.dataCaveats,
+        advisorStyle: patch.advisorStyle ?? before.advisorStyle,
+      });
+      return ok({ before, after });
     },
   );
 }

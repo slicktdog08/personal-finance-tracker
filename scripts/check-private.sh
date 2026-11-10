@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # Blocks a commit that adds personal data. Two layers:
 #   1. Staged files that must never be tracked (.env files, the advisor profile, private dirs).
-#   2. Added lines matching your own patterns in .private-patterns (git-ignored, one
-#      case-insensitive extended regex per line, # for comments) — e.g. your account last-4s,
-#      card names, employer, street, exact paycheck amount.
+#   2. Added lines matching your own patterns — one case-insensitive extended regex per line,
+#      # for comments — e.g. your account last-4s, card names, employer, street, paycheck.
+#      Read from ~/.config/personal-finance-tracker/private-patterns (outside the repo, so every
+#      clone and worktree is covered with nothing to copy) and from .private-patterns at the repo
+#      root (git-ignored) if present; PRIVATE_PATTERNS_FILE overrides the home-directory path.
 #
 # Runs from .githooks/pre-commit once you `git config core.hooksPath .githooks`
 # (npm install does this for you). Bypass for a false positive: git commit --no-verify.
@@ -21,16 +23,15 @@ while IFS= read -r f; do
   fi
 done < <(git diff --cached --name-only --diff-filter=ACMR)
 
-if [ -f .private-patterns ]; then
-  patterns=$(grep -vE '^\s*(#|$)' .private-patterns || true)
-  if [ -n "$patterns" ]; then
-    hits=$(git diff --cached -U0 --diff-filter=ACMR -- . ':!package-lock.json' \
-      | grep -E '^\+[^+]' | grep -iEf <(printf '%s\n' "$patterns") || true)
-    if [ -n "$hits" ]; then
-      echo "✗ Staged changes match .private-patterns:"
-      printf '%s\n' "$hits" | cut -c1-160 | sed 's/^/    /'
-      fail=1
-    fi
+home_patterns="${PRIVATE_PATTERNS_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/personal-finance-tracker/private-patterns}"
+patterns=$(cat "$home_patterns" .private-patterns 2>/dev/null | grep -vE '^\s*(#|$)' || true)
+if [ -n "$patterns" ]; then
+  hits=$(git diff --cached -U0 --diff-filter=ACMR -- . ':!package-lock.json' \
+    | grep -E '^\+[^+]' | grep -iEf <(printf '%s\n' "$patterns") || true)
+  if [ -n "$hits" ]; then
+    echo "✗ Staged changes match your private patterns:"
+    printf '%s\n' "$hits" | cut -c1-160 | sed 's/^/    /'
+    fail=1
   fi
 fi
 

@@ -632,6 +632,16 @@ export const uiLayouts = mysqlTable("ui_layouts", {
     .onUpdateNow(),
 });
 
+// Private per-install settings (JSON per key) that would otherwise be git-ignored files — the
+// advisor profile lives here (key `advisor_profile`), so deploys and fresh clones need no copies.
+export const appSettings = mysqlTable("app_settings", {
+  settingKey: varchar("setting_key", { length: 64 }).primaryKey(),
+  value: json("value").notNull(),
+  updatedAt: timestamp("updated_at")
+    .default(sql`CURRENT_TIMESTAMP`)
+    .onUpdateNow(),
+});
+
 // Which hand-written drizzle/*.sql files have been applied. Created and written only by
 // scripts/apply-sql.ts (the Jenkins APPLY_SQL stage runs it with --pending on every deploy);
 // declared here so drizzle-kit push doesn't treat it as a stray table. The app never reads it.
