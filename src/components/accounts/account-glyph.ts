@@ -6,6 +6,7 @@ const GLYPHS: Record<string, { icon: IconName; color: string }> = {
   Checking: { icon: "landmark", color: "#0ea5e9" },
   Savings: { icon: "piggy-bank", color: "#22c55e" },
   Cash: { icon: "wallet", color: "#84cc16" },
+  Retirement: { icon: "trending-up", color: "#8b5cf6" },
   Credit: { icon: "credit-card", color: "#c4562f" },
   Loan: { icon: "landmark", color: "#c4562f" },
   Other: { icon: "building-2", color: "#6366f1" },

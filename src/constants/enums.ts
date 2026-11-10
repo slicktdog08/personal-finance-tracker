@@ -206,7 +206,7 @@ export const PAY_FREQUENCY_META: Record<
   },
 };
 
-export const ACCOUNT_TYPES = ["Checking", "Savings", "Cash", "Credit", "Loan", "Other"] as const;
+export const ACCOUNT_TYPES = ["Checking", "Savings", "Cash", "Retirement", "Credit", "Loan", "Other"] as const;
 export type AccountType = (typeof ACCOUNT_TYPES)[number];
 export const CASH_ACCOUNT_TYPES: readonly string[] = ["Checking", "Savings", "Cash"];
 // A physical-cash wallet (the "9999 Cash" account): no bank feed, every row is hand-entered,
@@ -218,6 +218,24 @@ export const WALLET_ACCOUNT_TYPES: readonly string[] = ["Cash"];
 // over exactly these. Credit additionally has a credit limit → utilization; Loan does not.
 export const CREDIT_ACCOUNT_TYPES: readonly string[] = ["Credit"];
 export const LIABILITY_ACCOUNT_TYPES: readonly string[] = ["Credit", "Loan"];
+// 401(k), 403(b), IRA, HSA-invested — money you own but can't spend this month without penalty.
+// It counts toward net worth, never toward cash on hand / safe-to-spend. Balances go in the same
+// account_balances ledger as everything else (record them by hand, or let bank sync feed them).
+export const RETIREMENT_ACCOUNT_TYPES: readonly string[] = ["Retirement"];
+
+// ---- Assets ------------------------------------------------------------------------------
+// Things you own that hold value but aren't money: a car, a house, equipment. Each one has a
+// dated value ledger (asset_values) and counts toward net worth, never toward cash on hand.
+// Stored as VARCHAR on assets.kind so a new kind is a new entry here, no migration.
+export const ASSET_KINDS = ["vehicle", "property", "equipment", "collectible", "other"] as const;
+export type AssetKind = (typeof ASSET_KINDS)[number];
+export const ASSET_KIND_META: Record<AssetKind, { label: string; icon: "car" | "house" | "briefcase" | "sparkles" | "tag" }> = {
+  vehicle: { label: "Vehicle", icon: "car" },
+  property: { label: "Property", icon: "house" },
+  equipment: { label: "Equipment", icon: "briefcase" },
+  collectible: { label: "Collectible", icon: "sparkles" },
+  other: { label: "Other", icon: "tag" },
+};
 
 // ---- Budgets ------------------------------------------------------------------------------
 // A budget "mode" is the generator that fills in the month's plan. Stored as VARCHAR on
