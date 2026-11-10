@@ -6,6 +6,7 @@ import { db } from "@/server/db";
 import { syncAccounts, syncEnrollments } from "@/server/db/schema";
 import { requireSession } from "@/server/auth/session";
 import { hasTokenKey } from "@/server/lib/sync/crypto";
+import { DEMO_LINK_DISABLED, isDemoMode } from "@/server/lib/demo/mode";
 import { getProvider, isKnownProvider, registeredProviderIds } from "@/server/lib/sync/provider";
 import {
   getSyncSettings,
@@ -59,6 +60,8 @@ export interface ConnectConfig {
   simplefinEnvToken: boolean;
   // Plaid needs its own keys; null when PLAID_API_CLIENT_ID / PLAID_API_SECRET aren't set.
   plaid: { env: string } | null;
+  // DEMO_MODE: only the built-in Demo Bank exists and linking a real bank is refused.
+  demo: boolean;
 }
 
 export async function getConnectConfig(): Promise<ConnectConfig> {
@@ -67,6 +70,9 @@ export async function getConnectConfig(): Promise<ConnectConfig> {
   const problems: string[] = [];
   if (!providers.length) problems.push("No bank provider is registered (see src/server/lib/sync/provider.ts).");
   if (!hasTokenKey()) problems.push("SYNC_TOKEN_ENCRYPTION_KEY is missing or not 32 bytes of hex.");
+  if (isDemoMode()) {
+    return { providers, ready: problems.length === 0, problems, simplefinEnvToken: false, plaid: null, demo: true };
+  }
   const { plaidConfigured, plaidEnv } = await import("@/server/lib/plaid");
   let plaid: ConnectConfig["plaid"] = null;
   if (plaidConfigured()) {
@@ -82,6 +88,7 @@ export async function getConnectConfig(): Promise<ConnectConfig> {
     problems,
     simplefinEnvToken: Boolean(process.env.SIMPLE_FIN_SETUP_TOKEN?.trim()),
     plaid,
+    demo: false,
   };
 }
 
@@ -97,6 +104,7 @@ export interface ConnectSuccess {
 // list (pre-mapped, disabled until confirmed).
 export async function finishEnrollment(input: ConnectSuccess): Promise<Result<{ enrollmentDbId: number; mapped: number; unmapped: number }>> {
   await requireSession();
+  if (isDemoMode()) return { ok: false, error: DEMO_LINK_DISABLED };
   if (!isKnownProvider(input.provider)) return { ok: false, error: "Unknown provider." };
   if (!input.accessToken?.trim() || !input.enrollmentId?.trim()) return { ok: false, error: "Missing token or enrollment id." };
   try {
@@ -132,6 +140,7 @@ export async function linkSimplefin(input: {
   reconnectEnrollmentDbId?: number;
 }): Promise<Result<{ enrollmentDbId: number; mapped: number; unmapped: number }>> {
   await requireSession();
+  if (isDemoMode()) return { ok: false, error: DEMO_LINK_DISABLED };
   const token = input.token?.trim() || process.env.SIMPLE_FIN_SETUP_TOKEN?.trim() || "";
   if (!token) return { ok: false, error: "Paste the Setup Token from SimpleFIN Bridge (or set SIMPLE_FIN_SETUP_TOKEN)." };
   if (!hasTokenKey()) return { ok: false, error: "SYNC_TOKEN_ENCRYPTION_KEY is missing or not 32 bytes of hex — set it before linking." };

@@ -2,10 +2,9 @@ node_modules
 .next
 .git
 .gitignore
-.env
-.env.local
-.env.development
-.env.development.local
+# No env file ever enters the image: it is configured at run time (env_file / -e), so a
+# published image carries no credentials and no install-specific settings.
+.env*
 *.md
 planning
 notion_data
@@ -13,3 +12,8 @@ temp
 .setting
 .claude
 tsconfig.tsbuildinfo
+design
+private
+docs
+# Git-ignored personal file (income, debts, goals). Only the committed example ships.
+config/advisor-profile.json

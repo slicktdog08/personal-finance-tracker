@@ -127,10 +127,17 @@ export class SyncProviderError extends Error {
 }
 
 // Lazy registry so importing the contract never pulls in a provider's transport code.
-const PROVIDERS: Record<string, () => Promise<SyncProvider>> = {
-  simplefin: async () => (await import("../simplefin")).simplefinProvider,
-  plaid: async () => (await import("../plaid")).plaidProvider,
-};
+//
+// Demo mode (DEMO_MODE=1) swaps the whole registry for the in-process Demo Bank: a public demo
+// must have no path to a real aggregator, so the real providers are not merely hidden there —
+// they are not registered, and `getProvider("simplefin")` throws.
+const PROVIDERS: Record<string, () => Promise<SyncProvider>> =
+  process.env.DEMO_MODE === "1"
+    ? { demo: async () => (await import("../demo/provider")).demoProvider }
+    : {
+        simplefin: async () => (await import("../simplefin")).simplefinProvider,
+        plaid: async () => (await import("../plaid")).plaidProvider,
+      };
 
 export async function getProvider(id: string): Promise<SyncProvider> {
   const load = PROVIDERS[id];

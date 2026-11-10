@@ -15,6 +15,7 @@ export const SOURCE_LABELS: Record<string, string> = {
   manual: "Entered by hand",
   simplefin: "Bank sync (SimpleFIN)",
   plaid: "Bank sync (Plaid)",
+  demo: "Bank sync (Demo Bank)",
 };
 
 export function sourceLabel(source: string | null | undefined): string {

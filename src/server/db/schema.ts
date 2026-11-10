@@ -642,6 +642,21 @@ export const appSettings = mysqlTable("app_settings", {
     .onUpdateNow(),
 });
 
+// Built-in sign-in (AUTH_PROVIDER=local, the default when no Cognito pool is configured).
+// A single-user app, so in practice this holds one row; the first-run screen creates it and
+// refuses to create a second. Unused when Cognito handles sign-in. `password_hash` is a
+// self-describing scrypt string (src/server/auth/local/password.ts).
+export const users = mysqlTable("users", {
+  id: int("id").autoincrement().primaryKey(),
+  email: varchar("email", { length: 255 }).notNull().unique("uq_users_email"),
+  name: varchar("name", { length: 120 }),
+  passwordHash: varchar("password_hash", { length: 255 }).notNull(),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: timestamp("updated_at")
+    .default(sql`CURRENT_TIMESTAMP`)
+    .onUpdateNow(),
+});
+
 // Which hand-written drizzle/*.sql files have been applied. Created and written only by
 // scripts/apply-sql.ts (the Jenkins APPLY_SQL stage runs it with --pending on every deploy);
 // declared here so drizzle-kit push doesn't treat it as a stray table. The app never reads it.

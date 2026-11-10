@@ -1,5 +1,6 @@
 import { BrandMark, Wordmark } from "@/components/ds";
 import { LoginForm } from "@/components/auth/LoginForm";
+import { getLoginMode } from "@/server/auth/login-mode";
 
 export const dynamic = "force-dynamic";
 
@@ -23,7 +24,7 @@ export default async function LoginPage({
 }: {
   searchParams: Promise<SP>;
 }) {
-  const sp = await searchParams;
+  const [sp, mode] = await Promise.all([searchParams, getLoginMode()]);
 
   return (
     <div className="flex items-center justify-center px-4 py-12 sm:py-20">
@@ -34,9 +35,13 @@ export default async function LoginPage({
           <div className="text-sm text-fg-3">Cuentas claras.</div>
         </div>
         <div className="rounded-card border border-line bg-surface p-6 shadow-hairline">
-          <LoginForm next={safeNext(sp.next)} />
+          <LoginForm next={safeNext(sp.next)} mode={mode} />
         </div>
-        <p className="text-center text-xs text-fg-3">Private, single-user. Your data stays on your server.</p>
+        <p className="text-center text-xs text-fg-3">
+          {mode.kind === "demo"
+            ? "Public demo. Nothing here is real, so poke at anything."
+            : "Private, single-user. Your data stays on your server."}
+        </p>
       </div>
     </div>
   );
