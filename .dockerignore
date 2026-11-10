@@ -15,3 +15,5 @@ tsconfig.tsbuildinfo
 design
 private
 docs
+# Git-ignored personal file (income, debts, goals). Only the committed example ships.
+config/advisor-profile.json
