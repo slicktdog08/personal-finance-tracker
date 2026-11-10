@@ -4,7 +4,10 @@
 //
 // The bank's current balance lags spending: charges still pending aren't in it yet. So "today" is
 // that balance plus the card's pending activity (pending charges add, pending credits/payments
-// subtract) — the same figure as credit limit − available credit.
+// subtract) — the same figure as credit limit − available credit. A payment still pending on the
+// account it's paid FROM (checking, linked to the card's bill) hasn't reached the card at all yet,
+// so it comes off too; otherwise it would count as "paid" for the plan while the balance it pays
+// down still looks untouched.
 //
 // Which balance it "should be at" depends on the month's budgeted payoff payment:
 //   - not made yet → the month's starting balance (the payoff is still to come, on top of this)
@@ -12,7 +15,7 @@
 //                    bulk payment would hide every charge made after it.
 // "Made" = payments linked to the card's bill this month reach the planned amount.
 //
-//   today  = balance + pending
+//   today  = balance + pending − pendingPayments
 //   target = planPaid ? start + interest − planned : start
 //   owe    = today − target        (never below 0)
 
@@ -31,6 +34,8 @@ export interface CardRebalanceInput {
   nowAsOf: string | null;
   /** Net pending activity on the card: charges minus credits. */
   pending: number;
+  /** Payments still pending on another account (linked to this card's bill), not yet on the card. */
+  pendingPayments?: number;
   /** This month's budget line for the card, if it has one. */
   plan?: RebalancePlan | null;
 }
@@ -46,7 +51,8 @@ export interface RebalancePlan {
 export interface CardRebalanceRow extends CardRebalanceInput {
   start: number;
   balance: number;
-  /** balance + pending: what's really on the card right now. */
+  pendingPayments: number;
+  /** balance + pending − pendingPayments: what's really on the card right now. */
   now: number;
   /** today − start: positive = the balance grew this month. */
   change: number;
@@ -82,13 +88,14 @@ export function cardRebalance(cards: CardRebalanceInput[]): CardRebalance {
       missing.push(c.label);
       continue;
     }
-    const now = round2(c.balance + c.pending);
+    const pendingPayments = c.pendingPayments ?? 0;
+    const now = round2(c.balance + c.pending - pendingPayments);
     const change = round2(now - c.start);
     const expected = expectedBalance(c.start, c.plan);
     const planPaid = expected != null && c.plan!.paid >= c.plan!.planned;
     const target = planPaid ? expected! : c.start;
     const owe = round2(Math.max(0, now - target));
-    rows.push({ ...c, start: c.start, balance: c.balance, now, change, expected, planPaid, target, owe });
+    rows.push({ ...c, start: c.start, balance: c.balance, pendingPayments, now, change, expected, planPaid, target, owe });
   }
   // Biggest payment first; cards at or under their starting balance fall to the bottom.
   rows.sort((a, b) => b.owe - a.owe || b.now - a.now);
@@ -105,19 +112,26 @@ export interface RebalanceCard {
   active: boolean;
   balance: string | number | null;
   asOf: string | null;
+  /** The card's bill: pending payments linked to it from other accounts are on their way. */
+  billId?: number | null;
 }
 
 /** The slice of a pending transaction the rebalance needs (see getPendingTransactions). */
 export interface RebalancePending {
+  id?: number;
   accountId: number | null;
   amount: string | number;
   direction: string;
+  billId?: number | null;
+  transferPartnerId?: number | null;
 }
 
 /**
  * Builds the rebalance from raw rows: active credit cards, their start-of-month balances, and every
- * pending transaction (netted per card — Debit adds, Credit subtracts). Shared by the dashboard
- * widget and the MCP tool so both report the same figure.
+ * pending transaction (netted per card — Debit adds, Credit subtracts). A pending Debit on another
+ * account linked to a card's bill is a payment on its way to that card and comes off its balance —
+ * unless its transfer twin is already pending on the card, which counts it once already. Shared by
+ * the dashboard widget, the budget page and the MCP tool so all report the same figure.
  */
 export function cardRebalanceFrom(
   liabilities: RebalanceCard[],
@@ -131,6 +145,18 @@ export function cardRebalanceFrom(
     const amt = (toNum(t.amount) ?? 0) * (t.direction === "Credit" ? -1 : 1);
     pendingByAccount.set(t.accountId, (pendingByAccount.get(t.accountId) ?? 0) + amt);
   }
+  const cardByBill = new Map<number, number>();
+  for (const a of liabilities) if (a.billId != null) cardByBill.set(a.billId, a.id);
+  const pendingById = new Map(pendingTxns.filter((t) => t.id != null).map((t) => [t.id!, t]));
+  const paymentsByCard = new Map<number, number>();
+  for (const t of pendingTxns) {
+    if (t.billId == null || t.direction !== "Debit") continue;
+    const cardId = cardByBill.get(t.billId);
+    if (cardId == null || t.accountId === cardId) continue; // the card's own linked rows are charges
+    const twin = t.transferPartnerId != null ? pendingById.get(t.transferPartnerId) : undefined;
+    if (twin?.accountId === cardId) continue; // already netted into the card's own pending
+    paymentsByCard.set(cardId, (paymentsByCard.get(cardId) ?? 0) + (toNum(t.amount) ?? 0));
+  }
   return cardRebalance(
     liabilities
       .filter((a) => a.accountType === "Credit" && a.active)
@@ -142,6 +168,7 @@ export function cardRebalanceFrom(
         balance: toNum(a.balance),
         nowAsOf: a.asOf,
         pending: round2(pendingByAccount.get(a.id) ?? 0),
+        pendingPayments: round2(paymentsByCard.get(a.id) ?? 0),
         plan: plans.get(a.id) ?? null,
       })),
   );
@@ -179,6 +206,8 @@ export interface CardStanding {
   total: number;
   /** Net pending on the card, already inside `now` (and so inside toCover / toPlan). */
   pending: number;
+  /** Payments pending on another account toward this card, already taken off `now`. */
+  pendingPayments: number;
   /** Balance the plan expects by month end; null when there's no plan payment. */
   expected: number | null;
 }
@@ -187,5 +216,5 @@ export function cardStanding(row: CardRebalanceRow): CardStanding {
   const toCover = row.owe;
   const expected = row.expected;
   const toPlan = expected != null ? round2(Math.max(0, Math.max(0, row.now - expected) - toCover)) : 0;
-  return { toCover, toPlan, total: round2(toCover + toPlan), pending: row.pending, expected };
+  return { toCover, toPlan, total: round2(toCover + toPlan), pending: row.pending, pendingPayments: row.pendingPayments, expected };
 }

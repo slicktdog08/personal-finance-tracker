@@ -112,6 +112,10 @@ button.mp-badge:hover{filter:brightness(.97)}
 .mp-seg button:hover{color:var(--mp-text-1)}
 .mp-seg button[aria-pressed="true"]{background:var(--mp-bg-surface);color:var(--mp-text-1);box-shadow:var(--mp-shadow-2)}
 .mp-seg--block{display:flex}.mp-seg--block button{flex:1}
+/* Link segments (a server page's ?param toggle) look exactly like button segments. */
+.mp-seg a{display:inline-flex;align-items:center;height:28px;padding:0 12px;border-radius:6px;color:var(--mp-text-2);font:500 var(--mp-text-sm)/1 var(--mp-font-sans);white-space:nowrap;text-decoration:none}
+.mp-seg a:hover{color:var(--mp-text-1)}
+.mp-seg a[aria-current="true"]{background:var(--mp-bg-surface);color:var(--mp-text-1);box-shadow:var(--mp-shadow-2)}
 .mp-range{--pct:0%;--rc:var(--mp-accent);appearance:none;-webkit-appearance:none;width:100%;height:28px;background:transparent;margin:0}
 .mp-range::-webkit-slider-runnable-track{height:6px;border-radius:999px;background:linear-gradient(to right,var(--rc) 0 var(--pct),var(--mp-track) var(--pct) 100%)}
 .mp-range::-moz-range-track{height:6px;border-radius:999px;background:var(--mp-track)}
