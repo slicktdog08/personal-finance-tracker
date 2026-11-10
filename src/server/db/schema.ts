@@ -335,6 +335,38 @@ export const accountBalances = mysqlTable(
   (t) => [index("idx_ab_acct").on(t.accountId), index("idx_ab_date").on(t.asOf)],
 );
 
+// Something owned that holds value but isn't money (a car, a house). Counts toward net worth,
+// never toward cash on hand. Its value over time lives in `asset_values` — a dated-snapshot
+// ledger just like account_balances. `purchase_price`/`acquired_on` are static facts for context.
+export const assets = mysqlTable("assets", {
+  id: int("id").autoincrement().primaryKey(),
+  name: varchar("name", { length: 96 }).notNull(),
+  kind: varchar("kind", { length: 32 }).notNull().default("other"),
+  purchasePrice: decimal("purchase_price", { precision: 12, scale: 2 }),
+  acquiredOn: date("acquired_on", { mode: "string" }),
+  notes: text("notes"),
+  active: boolean("active").notNull().default(true),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: timestamp("updated_at")
+    .default(sql`CURRENT_TIMESTAMP`)
+    .onUpdateNow(),
+});
+
+export const assetValues = mysqlTable(
+  "asset_values",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    assetId: int("asset_id")
+      .notNull()
+      .references(() => assets.id, { onDelete: "cascade" }),
+    value: decimal("value", { precision: 12, scale: 2 }).notNull(),
+    asOf: date("as_of", { mode: "string" }).notNull(),
+    note: varchar("note", { length: 255 }),
+    createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`),
+  },
+  (t) => [index("idx_av_asset").on(t.assetId), index("idx_av_date").on(t.asOf)],
+);
+
 // A debt is the financial face of a bill (one marked is_debt) — a loan being repaid.
 // Static facts live here; the balance/APR/min-payment that change over time live in
 // `debt_balances` (a dated-snapshot ledger, exactly like account_balances). 1:1 with a bill.
@@ -600,6 +632,16 @@ export const uiLayouts = mysqlTable("ui_layouts", {
     .onUpdateNow(),
 });
 
+// Private per-install settings (JSON per key) that would otherwise be git-ignored files — the
+// advisor profile lives here (key `advisor_profile`), so deploys and fresh clones need no copies.
+export const appSettings = mysqlTable("app_settings", {
+  settingKey: varchar("setting_key", { length: 64 }).primaryKey(),
+  value: json("value").notNull(),
+  updatedAt: timestamp("updated_at")
+    .default(sql`CURRENT_TIMESTAMP`)
+    .onUpdateNow(),
+});
+
 // Which hand-written drizzle/*.sql files have been applied. Created and written only by
 // scripts/apply-sql.ts (the Jenkins APPLY_SQL stage runs it with --pending on every deploy);
 // declared here so drizzle-kit push doesn't treat it as a stray table. The app never reads it.
@@ -837,6 +879,8 @@ export type CategoryMapping = typeof categoryMappings.$inferSelect;
 export type BillStatusRow = typeof billStatuses.$inferSelect;
 export type PaymentTypeRow = typeof paymentTypes.$inferSelect;
 export type AccountBalance = typeof accountBalances.$inferSelect;
+export type Asset = typeof assets.$inferSelect;
+export type AssetValue = typeof assetValues.$inferSelect;
 export type Debt = typeof debts.$inferSelect;
 export type DebtBalance = typeof debtBalances.$inferSelect;
 export type Category = typeof categories.$inferSelect;

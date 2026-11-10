@@ -31,6 +31,7 @@ import {
   getLiabilityAccounts,
   getLiabilityStartBalances,
   getBalanceTrends,
+  netWorthOf,
   getTopTransactions,
   getUncategorizedCount,
   getAccountSyncInfo,
@@ -510,9 +511,13 @@ export default async function DashboardPage({
     value:
       t.cash == null || (hasRecordedCredit && t.credit == null) || (hasRecordedDebt && t.loans == null)
         ? null
-        : t.cash - (t.credit ?? 0) - (t.loans ?? 0),
+        : netWorthOf(t),
   }));
-  const netNow = cashTotal - creditOwed - debtOwed;
+  // Retirement + assets as of the selected month's end (the same as-of rule as the cards above).
+  const selTrend = allBalanceTrends.find((t) => t.label === selected.label);
+  const retirementNow = selTrend?.retirement ?? 0;
+  const assetsNow = selTrend?.assets ?? 0;
+  const netNow = cashTotal + retirementNow + assetsNow - creditOwed - debtOwed;
   const netPrev = trendHi > 0 ? netTrend[trendHi - 1].value : null;
 
   // ---- Category small multiples: the six biggest categories over the trailing months ----
@@ -640,6 +645,8 @@ export default async function DashboardPage({
           prev={netPrev}
           prevLabel={trendHi > 0 ? shortMonthLabel(balanceTrends[trendHi - 1].label).replace(/ '\d\d$/, "") : null}
           cash={cashTotal}
+          retirement={retirementNow}
+          assets={assetsNow}
           credit={creditOwed}
           loans={debtOwed}
           trend={netTrend}

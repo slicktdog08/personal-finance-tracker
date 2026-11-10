@@ -26,9 +26,8 @@ COPY --from=builder /app/.next ./.next
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/package.json ./package.json
 COPY --from=builder /app/next.config.ts ./
-# Advisor profile for the MCP connector. config/advisor-profile.json is git-ignored; the
-# committed example keeps the directory present so this COPY never fails. In production you
-# can instead mount the file and point ADVISOR_PROFILE_PATH at it (see docker-compose.yml).
+# Optional fallback advisor profile. The real one lives in the database (app_settings), so
+# normally only the committed example is here; the directory exists so this COPY never fails.
 COPY --from=builder /app/config ./config
 
 # Migration surface: lets the deploy run `drizzle-kit migrate` in a one-off

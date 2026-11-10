@@ -6,6 +6,9 @@ import { currentPeriodLabel, fail, money, money0, ok, resolvePeriodLabel, traili
 import {
   getAccounts,
   getBalanceTrends,
+  netWorthOf,
+  getAssets,
+  getRetirementAccounts,
   getBudgetView,
   getCashHeld,
   getCashOnHand,
@@ -68,17 +71,17 @@ export function registerReadTools(server: McpServer) {
     {
       title: "Advisor context",
       description:
-        "Call this FIRST in any advisory conversation. Returns the standing financial plan (income, debt strategy, rent target, emergency fund rules), known data caveats, today's date and the latest tracked month. Static text — cheap to call.",
+        "Call this FIRST in any advisory conversation. Returns the standing financial plan (income, debt strategy, rent target, emergency fund rules), known data caveats, today's date and the latest tracked month. Cheap to call. If the plan here is out of date, offer to fix it with update_advisor_profile.",
       inputSchema: z.object({}),
       annotations: READ_ONLY,
     },
     async () => {
-      const latest = await getLatestPeriod();
+      const [latest, profile] = await Promise.all([getLatestPeriod(), getAdvisorProfile()]);
       return ok({
         today: todayIso(),
         currentPeriod: currentPeriodLabel(),
         latestTrackedPeriod: latest?.label ?? null,
-        ...getAdvisorProfile(),
+        ...profile,
       });
     },
   );
@@ -96,7 +99,7 @@ export function registerReadTools(server: McpServer) {
       const label = resolvePeriodLabel(period);
       if (!label) return fail(`Invalid period "${period}". Use YYYY-MM.`);
       const today = todayIso();
-      const [cash, pocket, liabilities, bills, goals, schedule, uncategorized] = await Promise.all([
+      const [cash, pocket, liabilities, bills, goals, schedule, uncategorized, retirementAccts, assetRows] = await Promise.all([
         getCashOnHand(),
         getCashHeld(label),
         getLiabilityAccounts(),
@@ -104,7 +107,15 @@ export function registerReadTools(server: McpServer) {
         getGoalsWithProgress(),
         getPaySchedule(),
         getUncategorizedCount(),
+        getRetirementAccounts(),
+        getAssets(),
       ]);
+
+      // Owned but not spendable — net worth only, never cash.
+      const retirement = retirementAccts.map((a) => ({ accountId: a.id, label: a.label, institution: a.institution, balance: money(a.balance), asOf: a.asOf }));
+      const retirementTotal = retirement.reduce((s, a) => s + (a.balance ?? 0), 0);
+      const ownedAssets = assetRows.map((a) => ({ assetId: a.id, name: a.name, kind: a.kind, value: money(a.value), asOf: a.asOf }));
+      const assetsTotal = ownedAssets.reduce((s, a) => s + (a.value ?? 0), 0);
 
       const cashAccounts = cash.map((a) => ({
         accountId: a.id,
@@ -154,6 +165,9 @@ export function registerReadTools(server: McpServer) {
           creditUtilization: creditLimit > 0 ? Math.round((creditUsed / creditLimit) * 1000) / 10 : null,
         },
         netCashPosition: money0(cashTotal + pocket.closing - debtTotal),
+        retirement: { accounts: retirement, total: money0(retirementTotal), note: "Not spendable; counts toward net worth only." },
+        assets: { items: ownedAssets, total: money0(assetsTotal), note: "Resale value; not spendable; counts toward net worth only." },
+        netWorth: money0(cashTotal + retirementTotal + assetsTotal - debtTotal),
         bills: bills
           ? {
               count: bills.length,
@@ -690,7 +704,7 @@ export function registerReadTools(server: McpServer) {
     {
       title: "Balance trends",
       description:
-        "Month-end cash on hand, credit-card debt and loan balances for every tracked month — the net-worth trajectory. Null means no snapshot existed by that month's end.",
+        "Month-end cash on hand, retirement (401k/IRA) balances, asset values (car, house), credit-card debt and loan balances for every tracked month — the net-worth trajectory (net = cash + retirement + assets − credit − loans). Retirement and assets are NOT spendable cash. Null means no snapshot existed by that month's end.",
       inputSchema: z.object({ months: z.number().int().min(1).max(36).default(12) }),
       annotations: READ_ONLY,
     },
@@ -702,7 +716,9 @@ export function registerReadTools(server: McpServer) {
           cash: money(r.cash),
           credit: money(r.credit),
           loans: money(r.loans),
-          net: r.cash == null ? null : money0(r.cash - (r.credit ?? 0) - (r.loans ?? 0)),
+          retirement: money0(r.retirement),
+          assets: money0(r.assets),
+          net: r.cash == null ? null : money0(netWorthOf(r)),
         })),
       });
     },

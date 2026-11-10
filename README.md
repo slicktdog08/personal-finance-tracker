@@ -128,12 +128,12 @@ this?", "How did this month go?", "What's my fastest path out of debt?"
 
 - **15 read tools:** snapshot, month summaries, spending and balance trends, debts and payoff
   projections, cash projection, budget, goals and transaction search.
-- **8 write tools that only add or edit, never delete:** categorize, split, update bill
+- **9 write tools that only add or edit, never delete:** categorize, split, update bill
   status, add a goal contribution, adjust a budget line, set a debt target, add a transaction,
-  record a balance. Claude has to tell you exactly what will change and wait for your OK.
+  record a balance, update the advisor profile. Claude has to tell you exactly what will change and wait for your OK.
 - **Built-in prompts:** `monthly_review`, `can_i_afford`, `debt_payoff_plan` and
   `budget_check_in`.
-- **A private advisor profile** (`config/advisor-profile.json`, never committed). It gives
+- **A private advisor profile**, stored in your database (never in the repo). It gives
   Claude standing context, such as your situation, your plan, and what money is off-limits,
   so every conversation starts from where you are.
 - **Secure sign-in.** Claude signs in through your own Cognito user pool using OAuth, so your
@@ -230,8 +230,10 @@ It never commits anything personal.
 5. **Set up Cognito** ([below](#cognito-sign-in)), then create your user.
 6. **Run:** `npm run dev`, open http://localhost:3000, and sign in.
 7. *(Optional)* **Advisor profile:**
-   `cp config/advisor-profile.example.json config/advisor-profile.json` and describe your
-   situation, goals and plan.
+   `cp config/advisor-profile.example.json config/advisor-profile.json`, describe your
+   situation, goals and plan, then `npx tsx scripts/advisor-profile.ts import` to store it in
+   the database (the file can go after that). Or just ask the claude.ai advisor to save it — it
+   has an `update_advisor_profile` tool.
 
 Then go to **Import** and load a bank CSV, or add accounts under **Accounts**.
 
@@ -278,7 +280,7 @@ for deployment. `.env.example` documents each one.
 | `COGNITO_MCP_CLIENT_ID` | | The second app client, for the Claude connector |
 | `APP_URL` | prod | Your public origin (`https://finance.example.com`), used in the OAuth discovery documents |
 | `PORT` | prod | Port the container listens on (default setup: `9010`) |
-| `ADVISOR_PROFILE_PATH` | | Location of the advisor profile. Default: `config/advisor-profile.json` |
+| `ADVISOR_PROFILE_PATH` | | Fallback advisor-profile file, used only when the database has none. Default: `config/advisor-profile.json` |
 | `SYNC_TOKEN_ENCRYPTION_KEY` | sync | `openssl rand -hex 32`. Encrypts stored bank tokens |
 | `SYNC_SCHEDULER` | sync | `1` starts the in-process sync scheduler. Leave unset in development |
 | `SYNC_CRON_SECRET` | | Bearer token for `POST /api/sync/run` if you'd rather trigger syncs from cron |
@@ -307,7 +309,6 @@ nginx proxies to it with TLS from Let's Encrypt.
 git clone https://github.com/slicktdog08/personal-finance-tracker && cd personal-finance-tracker
 cp .env.example .env.production        # fill in real values (PORT, DATABASE_URL, Cognito, APP_URL)
 cp .env.production .env                # docker compose reads PORT from .env
-cp config/advisor-profile.example.json config/advisor-profile.json   # optional, then edit
 
 docker compose build
 docker compose run --rm --no-deps --entrypoint '' personal-billing \
@@ -339,13 +340,12 @@ swap the container → prune old images.
 
 One-time setup in Jenkins:
 1. Create a **Secret file** credential `personal-billing-env-production` containing `.env.production`.
-2. *(Optional)* Create a **Secret file** credential `personal-billing-advisor-profile`
-   containing your `advisor-profile.json`. The workspace is wiped on each run, so the
-   pipeline restores it from this credential.
-3. Create an **SSH credential** `vps-deploy-key` that can log in to the host as `deployer`.
-4. Point a Pipeline job at this repo (script path `JenkinsFile`) and set the `DOMAIN` and
-   `CERTBOT_EMAIL` parameters.
-5. Create the DNS A record **before** the first run, because certbot validates over HTTP.
+   Put `APP_URL`, `CERTBOT_EMAIL` and `SERVER_PUBLIC_IP` in it too: the pipeline reads the
+   domain, certbot address and nginx IP from there, so nothing personal sits in this repo.
+2. Create an **SSH credential** `vps-deploy-key` that can log in to the host as `deployer`.
+3. Point a Pipeline job at this repo (script path `JenkinsFile`). The `DOMAIN` and
+   `CERTBOT_EMAIL` parameters can stay blank.
+4. Create the DNS A record **before** the first run, because certbot validates over HTTP.
 
 `APPLY_SQL` (on by default) applies each new `drizzle/*.sql` exactly once and stops the
 deploy if one fails. `RUN_MIGRATIONS` runs `drizzle-kit migrate` for the early journaled
@@ -356,7 +356,7 @@ migrations, which a fresh install doesn't need.
 Deploy the `Dockerfile` with a managed MySQL. Set the environment variables in the
 platform's dashboard. Because `NEXT_PUBLIC_*` values are inlined at build time, they must be
 available as **build** variables too. Run `npm run db:init` once against the new database.
-Mount or bake in `config/advisor-profile.json` if you use the advisor.
+The advisor profile lives in the database, so there is nothing else to mount.
 
 ### Updating
 
@@ -442,23 +442,26 @@ drizzle/           SQL migrations
 scripts/           db init, migration runner, seeding, bank-sync CLI, test-db helpers
 tests/             unit/, e2e/, db/schema.sql (fresh-install + test schema)
 planning/          design docs and per-feature docs (start at planning/README.md)
-config/            advisor-profile.example.json (your real profile sits beside it, ignored)
+config/            advisor-profile.example.json (template for scripts/advisor-profile.ts import)
 ```
 
 **Keeping personal data out of the repo.** This code is public, but the database holds your
-real finances, so everything personal lives in git-ignored files:
+real finances. Personal context the app needs (the advisor profile) lives in the database too,
+in `app_settings`, so a fresh clone or deploy needs nothing copied in. The rest lives in
+git-ignored files:
 
 | Ignored | Holds |
 |---|---|
 | `.env*` (except the two `.example` files) | Credentials |
-| `config/advisor-profile.json` | The advisor's profile of you |
+| `config/advisor-profile.json` | Optional file version of the advisor profile (the DB copy wins) |
 | `planning/progress/`, `planning/projects/` | Dev logs and side projects that quote real numbers |
 | `private/`, `notion_data/`, `temp/`, `.setting/` | Statements, exports, scratch files |
 
 `npm ci` installs a pre-commit hook (`.githooks/pre-commit` → `scripts/check-private.sh`).
 It blocks those files if they're ever force-added. It also blocks any added line that matches
-patterns you list in `.private-patterns`, a git-ignored file with one regex per line (account
-last-4s, card names, employer and so on). `CLAUDE.md` tells Claude Code to use illustrative
+patterns you list in `~/.config/personal-finance-tracker/private-patterns` (or a git-ignored
+`.private-patterns` in the repo), one regex per line (account last-4s, card names, employer
+and so on). Keeping it in your home directory means every clone and worktree is covered. `CLAUDE.md` tells Claude Code to use illustrative
 values in code, tests and docs.
 
 ## Documentation

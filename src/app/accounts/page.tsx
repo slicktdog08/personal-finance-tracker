@@ -3,9 +3,11 @@ import { Card, EmptyState, Glyph, Icon, Money, PageHeader, StatTile, buttonClass
 import { SetupNotice } from "@/components/SetupNotice";
 import { AccountCard } from "@/components/accounts/AccountCard";
 import { AddAccount } from "@/components/accounts/AddAccount";
+import { AddAsset } from "@/components/accounts/AddAsset";
+import { AssetCard } from "@/components/accounts/AssetCard";
 import { SyncNowButton } from "@/components/accounts/SyncNowButton";
 import { accountGlyph, accountMaskLine } from "@/components/accounts/account-glyph";
-import { CASH_ACCOUNT_TYPES, LIABILITY_ACCOUNT_TYPES } from "@/constants/enums";
+import { CASH_ACCOUNT_TYPES, LIABILITY_ACCOUNT_TYPES, RETIREMENT_ACCOUNT_TYPES } from "@/constants/enums";
 import { relativeTime } from "@/lib/sync-format";
 import { formatMoney, toNum } from "@/server/lib/money";
 import { todayIso } from "@/server/lib/pay-schedule";
@@ -13,16 +15,17 @@ import {
   getAccounts,
   getAccountBalances,
   getAccountUsageCounts,
-  getAccountLastTxnDates, getAccountSyncInfo } from "@/server/queries";
+  getAccountLastTxnDates, getAccountSyncInfo, getAssets } from "@/server/queries";
 
 export const dynamic = "force-dynamic";
 
 const wholeUsd = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
 
 export default async function AccountsPage() {
-  let accounts, balances, usage, lastTxn, syncInfo;
+  let assets, accounts, balances, usage, lastTxn, syncInfo;
   try {
-    [accounts, balances, usage, lastTxn, syncInfo] = await Promise.all([
+    [assets, accounts, balances, usage, lastTxn, syncInfo] = await Promise.all([
+      getAssets(),
       getAccounts(),
       getAccountBalances(),
       getAccountUsageCounts(),
@@ -70,7 +73,11 @@ export default async function AccountsPage() {
   const isLiability = (t: string | null) => LIABILITY_ACCOUNT_TYPES.includes(t ?? "");
   const cashAccounts = accounts.filter((a) => CASH_ACCOUNT_TYPES.includes(a.accountType ?? ""));
   // Non-cash, non-liability accounts (Other / no type yet) still get a full card here.
-  const otherAccounts = accounts.filter((a) => !CASH_ACCOUNT_TYPES.includes(a.accountType ?? "") && !isLiability(a.accountType));
+  const isRetirement = (t: string | null) => RETIREMENT_ACCOUNT_TYPES.includes(t ?? "");
+  const retirementAccounts = accounts.filter((a) => isRetirement(a.accountType));
+  const otherAccounts = accounts.filter(
+    (a) => !CASH_ACCOUNT_TYPES.includes(a.accountType ?? "") && !isLiability(a.accountType) && !isRetirement(a.accountType),
+  );
   const creditAccounts = accounts.filter((a) => a.accountType === "Credit");
   const loanAccounts = accounts.filter((a) => a.accountType === "Loan");
 
@@ -80,16 +87,28 @@ export default async function AccountsPage() {
   const owedAt = (date?: string) =>
     creditAccounts.reduce((s, a) => s + (balanceAsOf(a.id, date) ?? 0), 0) +
     loanAccounts.reduce((s, a) => s + Math.max(0, balanceAsOf(a.id, date) ?? 0), 0);
+  // Owned but not spendable: 401(k)/IRA balances and assets (car, house) at their latest value.
+  // Both add to net worth; neither is cash on hand.
+  const retirementAt = (date?: string) => retirementAccounts.reduce((s, a) => s + (balanceAsOf(a.id, date) ?? 0), 0);
+  const assetValueAsOf = (a: (typeof assets)[number], date?: string) =>
+    toNum(a.values.find((v) => !date || v.asOf <= date)?.value ?? null);
+  const assetsAt = (date?: string) => assets.reduce((s, a) => s + (assetValueAsOf(a, date) ?? 0), 0);
+  const netAt = (date?: string) => cashAt(date) + retirementAt(date) + assetsAt(date) - owedAt(date);
   const cashOnHand = cashAt();
   const owed = owedAt();
-  const netWorth = cashOnHand - owed;
+  const retirementTotal = retirementAt();
+  const assetsTotal = assetsAt();
+  const netWorth = netAt();
 
   // Net worth 30 days ago — only when every account counted today already had a balance then,
   // so an account that started being tracked recently doesn't read as a jump.
   const then = new Date(Date.parse(todayIso()) - 30 * 86_400_000).toISOString().slice(0, 10);
-  const counted = [...cashAccounts, ...creditAccounts, ...loanAccounts].filter((a) => balanceAsOf(a.id) != null);
-  const comparable = counted.length > 0 && counted.every((a) => balanceAsOf(a.id, then) != null);
-  const netDelta = comparable ? netWorth - (cashAt(then) - owedAt(then)) : null;
+  const counted = [...cashAccounts, ...retirementAccounts, ...creditAccounts, ...loanAccounts].filter((a) => balanceAsOf(a.id) != null);
+  const comparable =
+    counted.length > 0 &&
+    counted.every((a) => balanceAsOf(a.id, then) != null) &&
+    assets.every((a) => a.values.length === 0 || assetValueAsOf(a, then) != null);
+  const netDelta = comparable ? netWorth - netAt(then) : null;
 
   const syncFor = (id: number) => {
     const s = syncInfo.get(id);
@@ -167,10 +186,11 @@ export default async function AccountsPage() {
     <div className="space-y-5">
       <PageHeader
         title="Accounts"
-        description="Every account in one ledger. Debts and cash share the same balance history."
+        description="Every account and asset in one ledger. Cash, retirement, assets and debts share the same balance history."
         actions={
           <>
             {canSync && <SyncNowButton />}
+            <AddAsset />
             <AddAccount />
           </>
         }
@@ -188,6 +208,15 @@ export default async function AccountsPage() {
           <StatTile
             label="Net worth"
             value={<Money value={netWorth} kind="neutral" />}
+            sub={
+              retirementTotal || assetsTotal ? (
+                <>
+                  incl. {[retirementTotal ? `${wholeUsd.format(retirementTotal)} retirement` : null, assetsTotal ? `${wholeUsd.format(assetsTotal)} assets` : null]
+                    .filter(Boolean)
+                    .join(" · ")}
+                </>
+              ) : undefined
+            }
             delta={
               netDelta != null && Math.round(netDelta) !== 0
                 ? {
@@ -208,6 +237,37 @@ export default async function AccountsPage() {
             icon="landmark"
             title="No cash accounts yet"
             body="Add your checking, savings or wallet to track cash on hand over time."
+          />
+        )}
+      </Card>
+
+      {retirementAccounts.length > 0 && (
+        <Card title="Retirement" meta={`${count(retirementAccounts.length)} · ${wholeUsd.format(retirementTotal)}`}>
+          {retirementAccounts.map(card)}
+        </Card>
+      )}
+
+      <Card title="Assets" meta={assets.length ? `${assets.length} · ${wholeUsd.format(assetsTotal)}` : undefined}>
+        {assets.map((a) => (
+          <AssetCard
+            key={a.id}
+            asset={{
+              id: a.id,
+              name: a.name,
+              kind: a.kind,
+              purchasePrice: a.purchasePrice,
+              acquiredOn: a.acquiredOn,
+              notes: a.notes,
+              values: a.values.map((v) => ({ id: v.id, value: v.value, asOf: v.asOf, note: v.note })),
+            }}
+          />
+        ))}
+        {assets.length === 0 && (
+          <EmptyState
+            compact
+            icon="car"
+            title="No assets yet"
+            body="Add a car, a house or anything else worth money. Its value counts toward net worth, not cash on hand."
           />
         )}
       </Card>

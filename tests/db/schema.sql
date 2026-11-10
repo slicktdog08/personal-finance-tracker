@@ -68,6 +68,30 @@ CREATE TABLE `accounts` (
 DROP TABLE IF EXISTS `bill_instances`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
+CREATE TABLE `asset_values` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `asset_id` int(11) NOT NULL,
+  `value` decimal(12,2) NOT NULL,
+  `as_of` date NOT NULL,
+  `note` varchar(255) DEFAULT NULL,
+  `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_av_asset` (`asset_id`),
+  KEY `idx_av_date` (`as_of`),
+  CONSTRAINT `asset_values_asset_id_fk` FOREIGN KEY (`asset_id`) REFERENCES `assets` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE `assets` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `name` varchar(96) NOT NULL,
+  `kind` varchar(32) NOT NULL DEFAULT 'other',
+  `purchase_price` decimal(12,2) DEFAULT NULL,
+  `acquired_on` date DEFAULT NULL,
+  `notes` text,
+  `active` tinyint(1) NOT NULL DEFAULT '1',
+  `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 CREATE TABLE `bill_instances` (
   `id` int(11) NOT NULL AUTO_INCREMENT,
   `period_id` int(11) NOT NULL,
@@ -602,6 +626,13 @@ CREATE TABLE `ui_layouts` (
   `layout` json NOT NULL,
   `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`layout_key`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE `app_settings` (
+  `setting_key` varchar(64) NOT NULL,
+  `value` json NOT NULL,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`setting_key`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 /*!40101 SET character_set_client = @saved_cs_client */;
 /*!40103 SET TIME_ZONE=@OLD_TIME_ZONE */;
