@@ -3,6 +3,7 @@ import type { McpServer } from "@modelcontextprotocol/server";
 import { registerReadTools } from "./tools-read";
 import { registerWriteTools } from "./tools-write";
 import { registerSyncTools } from "./tools-sync";
+import { registerAdvisorTools } from "./tools-advisor";
 import { registerPrompts } from "./prompts";
 import { getAdvisorProfile } from "./advisor-context";
 
@@ -22,6 +23,7 @@ export const SERVER_INSTRUCTIONS = [
   "Start every advisory conversation with get_advisor_context, then get_financial_snapshot. Prefer the aggregate tools (get_period_summary, get_spending_trends, get_debts, get_card_rebalance, get_cash_projection) over paging through raw transactions.",
   "Amounts are USD dollars (numbers). Dates are YYYY-MM-DD; months are YYYY-MM. Liability balances are amounts OWED.",
   "Write tools change real records. Before calling any of them, say exactly what will change (ids, amounts, before → after) and wait for the user's confirmation. Never chain a write onto an unconfirmed plan.",
+  "Exception: the advisor-channel tools (get_advisor_inbox, start_advisor_run, save_insights, reply_to_advisor_thread, finish_advisor_run) write only your own notes and run log in the app, never financial records, so they need no confirmation. When the app fired you as a routine, call get_advisor_inbox with the payload first and follow the playbook it returns.",
   "When a tool returns {error: ...}, read it and adjust (it usually lists the valid names or ids) rather than retrying the same call.",
 ].join("\n");
 
@@ -29,5 +31,6 @@ export function registerBillingServer(server: McpServer) {
   registerReadTools(server);
   registerWriteTools(server);
   registerSyncTools(server);
+  registerAdvisorTools(server);
   registerPrompts(server);
 }

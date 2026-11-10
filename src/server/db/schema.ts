@@ -8,6 +8,7 @@ import {
   boolean,
   date,
   text,
+  mediumtext,
   timestamp,
   json,
   char,
@@ -747,6 +748,85 @@ export const syncRuns = mysqlTable(
   (t) => [index("idx_sr_started").on(t.startedAt)],
 );
 
+// ---------------------------------------------------------------------------
+// AI advisor channel (drizzle/0027_add_advisor.sql). The app fires a Claude Code routine and
+// the routine reports back through the MCP connector (src/server/mcp/tools-advisor.ts). Only
+// the advisor tools and the Insights / Advisor pages write these; the ledger never reads them.
+// ---------------------------------------------------------------------------
+export const advisorThreads = mysqlTable(
+  "advisor_threads",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    title: varchar("title", { length: 160 }).notNull(),
+    createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: timestamp("updated_at")
+      .default(sql`CURRENT_TIMESTAMP`)
+      .onUpdateNow(),
+  },
+  (t) => [index("idx_at_updated").on(t.updatedAt)],
+);
+
+export const advisorRuns = mysqlTable(
+  "advisor_runs",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    kind: varchar("kind", { length: 16 }).notNull(), // insights | checkin | chat
+    trigger: varchar("trigger_source", { length: 16 }).notNull().default("app"), // app | cron | manual
+    status: varchar("status", { length: 12 }).notNull().default("queued"), // queued | running | ok | failed
+    routine: varchar("routine", { length: 96 }),
+    threadId: int("thread_id").references(() => advisorThreads.id, { onDelete: "set null" }),
+    sessionUrl: varchar("session_url", { length: 512 }),
+    summary: text("summary"),
+    report: mediumtext("report"),
+    insightsSaved: int("insights_saved").notNull().default(0),
+    startedAt: timestamp("started_at").default(sql`CURRENT_TIMESTAMP`),
+    finishedAt: timestamp("finished_at"),
+  },
+  (t) => [index("idx_ar_started").on(t.startedAt), index("idx_ar_kind_status").on(t.kind, t.status)],
+);
+
+export const advisorInsights = mysqlTable(
+  "advisor_insights",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    dedupeKey: varchar("dedupe_key", { length: 96 }).notNull(),
+    category: varchar("category", { length: 24 }).notNull().default("other"),
+    severity: varchar("severity", { length: 8 }).notNull().default("info"), // info | watch | act
+    status: varchar("status", { length: 12 }).notNull().default("new"), // new | seen | done | dismissed
+    title: varchar("title", { length: 200 }).notNull(),
+    body: text("body").notNull(),
+    amount: decimal("amount", { precision: 12, scale: 2 }),
+    periodLabel: varchar("period_label", { length: 7 }),
+    search: varchar("search", { length: 120 }),
+    transactionIds: json("transaction_ids").$type<number[]>(),
+    occurrences: int("occurrences").notNull().default(1),
+    runId: int("run_id").references(() => advisorRuns.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`),
+    lastSeenAt: timestamp("last_seen_at").default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: timestamp("updated_at")
+      .default(sql`CURRENT_TIMESTAMP`)
+      .onUpdateNow(),
+  },
+  (t) => [uniqueIndex("uq_ai_key").on(t.dedupeKey), index("idx_ai_status").on(t.status, t.lastSeenAt)],
+);
+
+export const advisorMessages = mysqlTable(
+  "advisor_messages",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    threadId: int("thread_id")
+      .notNull()
+      .references(() => advisorThreads.id, { onDelete: "cascade" }),
+    role: varchar("role", { length: 10 }).notNull(), // user | assistant
+    body: mediumtext("body").notNull(),
+    status: varchar("status", { length: 10 }).notNull().default("pending"), // pending | answered | failed
+    runId: int("run_id").references(() => advisorRuns.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`),
+    answeredAt: timestamp("answered_at"),
+  },
+  (t) => [index("idx_am_thread").on(t.threadId, t.id), index("idx_am_pending").on(t.role, t.status)],
+);
+
 export type Period = typeof periods.$inferSelect;
 export type Bill = typeof bills.$inferSelect;
 export type Account = typeof accounts.$inferSelect;
@@ -773,3 +853,7 @@ export type SyncEnrollment = typeof syncEnrollments.$inferSelect;
 export type SyncAccount = typeof syncAccounts.$inferSelect;
 export type SyncRun = typeof syncRuns.$inferSelect;
 export type SyncIgnored = typeof syncIgnored.$inferSelect;
+export type AdvisorThread = typeof advisorThreads.$inferSelect;
+export type AdvisorRun = typeof advisorRuns.$inferSelect;
+export type AdvisorInsight = typeof advisorInsights.$inferSelect;
+export type AdvisorMessage = typeof advisorMessages.$inferSelect;

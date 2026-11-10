@@ -119,6 +119,8 @@ import {
   Sun,
   Moon,
   Store,
+  MessageCircle,
+  Send,
   type LucideIcon,
 } from "lucide-react";
 
@@ -229,6 +231,8 @@ const ICONS = {
   split: Split,
   layers: Layers,
   inbox: Inbox,
+  "message-circle": MessageCircle,
+  send: Send,
   history: History,
   "panel-left-close": PanelLeftClose,
   "panel-left-open": PanelLeftOpen,
