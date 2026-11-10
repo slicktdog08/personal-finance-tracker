@@ -17,6 +17,7 @@ CREATE TABLE `advisor_threads` (
   PRIMARY KEY (`id`),
   KEY `idx_at_updated` (`updated_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+--> statement-breakpoint
 
 CREATE TABLE `advisor_runs` (
   `id` int NOT NULL AUTO_INCREMENT,
@@ -36,6 +37,7 @@ CREATE TABLE `advisor_runs` (
   KEY `idx_ar_kind_status` (`kind`, `status`),
   CONSTRAINT `fk_ar_thread` FOREIGN KEY (`thread_id`) REFERENCES `advisor_threads` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+--> statement-breakpoint
 
 CREATE TABLE `advisor_insights` (
   `id` int NOT NULL AUTO_INCREMENT,
@@ -59,6 +61,7 @@ CREATE TABLE `advisor_insights` (
   KEY `idx_ai_status` (`status`, `last_seen_at`),
   CONSTRAINT `fk_ai_run` FOREIGN KEY (`run_id`) REFERENCES `advisor_runs` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+--> statement-breakpoint
 
 CREATE TABLE `advisor_messages` (
   `id` int NOT NULL AUTO_INCREMENT,
