@@ -31,7 +31,7 @@ import type { PayFrequency } from "@/constants/enums";
 import { round2, paydaysInMonth, type DebtInput } from "@/server/lib/budget";
 import { planMonth, projectCash, type CashProjection, type MonthSegment, type ProjectionPending } from "@/server/lib/cash-projection";
 import { isPayrollDescription, type ObservedDeposit } from "@/server/lib/payday-reconcile";
-import { splitCardPayments } from "@/server/lib/debt";
+import { repaymentRebalance, splitCardPayments } from "@/server/lib/debt";
 import { cardRebalanceFrom, cardStanding, rebalancePlans, type CardStanding } from "@/server/lib/card-rebalance";
 import {
   and,
@@ -880,6 +880,9 @@ export async function getPendingTransactions() {
       accountId: transactions.accountId,
       account: sql<string | null>`COALESCE(NULLIF(${accounts.label}, ''), ${accounts.institution})`,
       accountNumber: accounts.accountNumber,
+      // The card rebalance treats a pending payment linked to a card's bill as on its way to it.
+      billId: transactions.billId,
+      transferPartnerId: transactions.transferPartnerId,
     })
     .from(transactions)
     .leftJoin(accounts, eq(accounts.id, transactions.accountId))
@@ -1994,6 +1997,71 @@ export async function getCashflowByPeriod() {
 // instead of inflating the total. Derives sign from amount + direction (amount is
 // always the positive magnitude) rather than the unreliable net_amount column.
 // Categories that net to <= 0 (pure income/deposits, fully cancelled pairs) drop out.
+const DEBT_REPAYMENT_CATEGORY = "Debt Repayment";
+
+/**
+ * The part of a month's Debt Repayment debits that only paid back that month's new charges on
+ * credit cards (repaymentRebalance). Split-aware like getCategorySpend: a row counts its own share
+ * when it's filed as Debt Repayment, and any piece split off into Debt Repayment counts too.
+ */
+async function debtRepaymentRebalance(periodLabel: string): Promise<number> {
+  const cards = await db
+    .select({ id: accounts.id, billId: accounts.billId })
+    .from(accounts)
+    .where(eq(accounts.accountType, "Credit"));
+  if (!cards.length) return 0;
+  const st = splitByTxn();
+  const repayDebit = and(eq(periods.label, periodLabel), eq(transactions.direction, "Debit"), notTransferCond);
+  const [charged, ownRows, pieceRows] = await Promise.all([
+    liabilityChargesForPeriod(periodLabel, cards.map((c) => c.id)),
+    db
+      .select({
+        billId: transactions.billId,
+        accountId: transactions.accountId,
+        total: sql<string>`COALESCE(SUM(GREATEST(${transactions.amount} - COALESCE(${st.split}, 0), 0)), 0)`,
+      })
+      .from(transactions)
+      .innerJoin(periods, eq(periods.id, transactions.periodId))
+      .leftJoin(st, eq(st.txnId, transactions.id))
+      .where(and(repayDebit, eq(transactions.category, DEBT_REPAYMENT_CATEGORY)))
+      .groupBy(transactions.billId, transactions.accountId),
+    db
+      .select({
+        billId: transactions.billId,
+        accountId: transactions.accountId,
+        total: sql<string>`COALESCE(SUM(${transactionSplits.amount}), 0)`,
+      })
+      .from(transactionSplits)
+      .innerJoin(transactions, eq(transactions.id, transactionSplits.txnId))
+      .innerJoin(periods, eq(periods.id, transactions.periodId))
+      .where(and(eq(periods.label, periodLabel), eq(transactions.direction, "Debit"), eq(transactionSplits.category, DEBT_REPAYMENT_CATEGORY)))
+      .groupBy(transactions.billId, transactions.accountId),
+  ]);
+  const cardByBill = new Map(cards.filter((c) => c.billId != null).map((c) => [c.billId!, c.id]));
+  const paidBy = new Map<number, number>();
+  let unlinked = 0;
+  for (const r of [...ownRows, ...pieceRows]) {
+    const amt = toNum(r.total) ?? 0;
+    if (r.billId == null) {
+      unlinked += amt;
+      continue;
+    }
+    const cardId = cardByBill.get(r.billId);
+    // Linked to a loan's bill (no new charges to pay back), or a row on the card itself.
+    if (cardId == null || r.accountId === cardId) continue;
+    paidBy.set(cardId, (paidBy.get(cardId) ?? 0) + amt);
+  }
+  return repaymentRebalance(
+    cards.map((c) => ({ paid: paidBy.get(c.id) ?? 0, charged: charged.get(c.id) ?? 0 })),
+    unlinked,
+  );
+}
+
+/**
+ * Net spending per category for a month (or all time). Debt Repayment counts only real paydown in
+ * a month: payments that just covered that month's new card charges come off it (see
+ * debtRepaymentRebalance) — those purchases already sit in their own categories.
+ */
 export async function getCategorySpend(periodLabel?: string) {
   await requireSession();
   const conds: SQL[] = [notTransferCond];
@@ -2038,6 +2106,13 @@ export async function getCategorySpend(periodLabel?: string) {
   const byCat = new Map<string | null, number>();
   for (const r of [...ownRows, ...pieceRows]) {
     byCat.set(r.category, round2((byCat.get(r.category) ?? 0) + (toNum(r.total) ?? 0)));
+  }
+  // Paying a card back for what was charged to it this month isn't new spending — those
+  // purchases are already in their own categories. Debt Repayment keeps only the real paydown.
+  const repaid = byCat.get(DEBT_REPAYMENT_CATEGORY);
+  if (periodLabel && repaid != null && repaid > 0) {
+    const rebalance = await debtRepaymentRebalance(periodLabel);
+    byCat.set(DEBT_REPAYMENT_CATEGORY, round2(Math.max(0, repaid - rebalance)));
   }
   const rows: { category: string | null; total: string }[] = [...byCat]
     .filter(([, total]) => total > 0)
@@ -2711,7 +2786,9 @@ export async function getBudgetView(periodLabel: string): Promise<BudgetView | n
       category: l.category,
       accountId: l.accountId,
       planned: toNum(l.planned) ?? 0,
-      minimum: toNum(l.minimum),
+      // The account's minimum as of the month wins over the one copied onto the line when it was
+      // added: minimums change month to month, and a stale copy floored the plan above the real one.
+      minimum: isDebt ? toNum(now?.minPayment) ?? toNum(l.minimum) : toNum(l.minimum),
       isTarget: !!l.isTarget,
       locked: !!l.locked,
       sortOrder: l.sortOrder,

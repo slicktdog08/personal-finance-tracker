@@ -13,7 +13,28 @@ export const dynamic = "force-dynamic";
 
 export const metadata = { title: "Trends" };
 
-export default async function TrendsPage() {
+// The window the charts cover, as ?range=. Max is everything since the record began.
+const RANGES = [
+  { value: "3m", label: "3M", months: 3 },
+  { value: "6m", label: "6M", months: 6 },
+  { value: "1y", label: "1Y", months: 12 },
+  { value: "2y", label: "2Y", months: 24 },
+  { value: "max", label: "Max", months: null },
+] as const;
+type Range = (typeof RANGES)[number]["value"];
+const DEFAULT_RANGE: Range = "max";
+
+/** "2026-11" minus n months → "2026-08"-style label (n − 1 back, so the window holds n months). */
+function windowStartLabel(current: string, months: number): string {
+  const [y, m] = current.split("-").map(Number);
+  const idx = y * 12 + (m - 1) - (months - 1);
+  return `${Math.floor(idx / 12)}-${String((idx % 12) + 1).padStart(2, "0")}`;
+}
+
+export default async function TrendsPage({ searchParams }: { searchParams: Promise<{ range?: string }> }) {
+  const sp = await searchParams;
+  const range: Range = RANGES.some((r) => r.value === sp.range) ? (sp.range as Range) : DEFAULT_RANGE;
+  const rangeMonths = RANGES.find((r) => r.value === range)!.months;
   let balanceTrends, cashflow;
   try {
     [balanceTrends, cashflow] = await Promise.all([getBalanceTrends(), getCashflowByPeriod()]);
@@ -28,7 +49,11 @@ export default async function TrendsPage() {
   // with a year of blank months squeezes the part that has data into a corner — so it starts
   // where the record actually starts.
   const opened = tracked.findIndex((t) => t.cash != null || t.credit != null || t.loans != null);
-  const months = opened < 0 ? [] : tracked.slice(opened);
+  const recorded = opened < 0 ? [] : tracked.slice(opened);
+  // The range toggle trims the window to its last N months (Max keeps the whole record).
+  const lastLabel = currentLabel ?? recorded[recorded.length - 1]?.label;
+  const cutoff = rangeMonths != null && lastLabel ? windowStartLabel(lastLabel, rangeMonths) : null;
+  const months = cutoff ? recorded.filter((t) => t.label >= cutoff) : recorded;
 
   // Same guard as the dashboard: a month only counts once every kind of balance it's made of has
   // been recorded, so the months before debts were tracked don't read as a small positive net
@@ -47,10 +72,31 @@ export default async function TrendsPage() {
   const latest = defined[defined.length - 1];
   const latestMonth = latest ? months[latest.i] : null;
 
+  if (defined.length < 2 && range !== "max") {
+    return (
+      <div className="space-y-6">
+        <Header range={range} />
+        <EmptyState
+          icon="chart-line"
+          title="Not enough history in this range"
+          body={
+            <>
+              Trends need balances recorded in at least two months of the window.{" "}
+              <Link href="/trends?range=max" className="text-accent-text hover:underline">
+                Show everything
+              </Link>
+              .
+            </>
+          }
+        />
+      </div>
+    );
+  }
+
   if (defined.length < 2) {
     return (
       <div className="space-y-6">
-        <Header />
+        <Header range={range} />
         <EmptyState
           icon="chart-line"
           title="Not enough history yet"
@@ -127,7 +173,7 @@ export default async function TrendsPage() {
 
   return (
     <div className="space-y-6">
-      <Header />
+      <Header range={range} />
 
       <Card>
         <div className="mp-grid mp-grid--keep2" style={{ "--cols": 4 } as React.CSSProperties}>
@@ -208,10 +254,19 @@ export default async function TrendsPage() {
   );
 }
 
-function Header() {
+function Header({ range }: { range: Range }) {
   return (
     <PageHeader
       title="Trends"
+      actions={
+        <nav className="mp-seg" aria-label="Time range">
+          {RANGES.map((r) => (
+            <Link key={r.value} href={r.value === DEFAULT_RANGE ? "/trends" : `/trends?range=${r.value}`} aria-current={r.value === range ? "true" : undefined} scroll={false}>
+              {r.label}
+            </Link>
+          ))}
+        </nav>
+      }
       description={
         <>
           Net worth month by month — whether the plan is working, and what moved it. Balances are the snapshots recorded on{" "}
