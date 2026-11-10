@@ -24,6 +24,7 @@ planning/features/<feature-slug>.md      e.g. csv-import.md, savings-goals.md, d
 | Pending transactions | [pending-transactions.md](pending-transactions.md) | Hand-entered pending charges; fuzzy match + merge with the posted row on import |
 | Budget | [budget.md](budget.md) | Monthly plan vs. actual from transactions; debt-snowball generator; payoff projection |
 | Transaction splits | [transaction-splits.md](transaction-splits.md) | Split one transaction across categories; the row's category keeps the remainder |
+| AI advisor | [ai-advisor.md](ai-advisor.md) | Insights, check-ins and chat run on a Claude Code routine fired from the app (no API key); results return over MCP |
 
 _Keep this table in sync when you add a feature doc._
 
