@@ -31,11 +31,17 @@ export function CardRebalance({ data }: { data: CardRebalanceData }) {
             className="sm:border-b-0!"
             lead={<Glyph icon="credit-card" color="var(--mp-money-owed)" size="sm" />}
             title={r.label}
-            tooltip={`Started the month at ${r.start.toFixed(2)} (${dayLabel(r.startAsOf)})${r.planPaid ? `; payoff paid, so the plan's ${r.target.toFixed(2)} is the target` : ""}; balance ${r.balance.toFixed(2)} as of ${dayLabel(r.nowAsOf)}${r.pending ? ` ${r.pending > 0 ? "+" : "−"} ${Math.abs(r.pending).toFixed(2)} pending` : ""} = ${r.now.toFixed(2)}`}
+            tooltip={`Started the month at ${r.start.toFixed(2)} (${dayLabel(r.startAsOf)})${r.planPaid ? `; payoff paid, so the plan's ${r.target.toFixed(2)} is the target` : ""}; balance ${r.balance.toFixed(2)} as of ${dayLabel(r.nowAsOf)}${r.pending ? ` ${r.pending > 0 ? "+" : "−"} ${Math.abs(r.pending).toFixed(2)} pending` : ""}${r.pendingPayments ? ` − ${r.pendingPayments.toFixed(2)} payment on its way` : ""} = ${r.now.toFixed(2)}`}
             sub={
               <>
                 {r.planPaid ? "After payoff" : "Started"} <Money value={r.target} kind="neutral" whole /> · now{" "}
                 <Money value={r.now} kind="neutral" whole />
+                {r.pendingPayments > 0 && (
+                  <>
+                    {" "}
+                    (<Money value={r.pendingPayments} kind="pending" whole /> payment pending)
+                  </>
+                )}
               </>
             }
             end={r.owe > 0 ? <Money value={r.owe} kind="owed" /> : <span className="text-fg-3">Not over</span>}

@@ -58,3 +58,25 @@ export function splitCardPayments(
   const round2 = (n: number) => Math.round(n * 100) / 100;
   return { rebalance: round2(Math.min(paid, c)), payoff: round2(Math.max(0, paid - c)) };
 }
+
+// How much of a month's "Debt Repayment" spending only paid back that month's own card charges —
+// the part to take OFF the category so the same dollars aren't counted twice (once in the
+// categories the purchases landed in, and again when checking paid the card back). Per card,
+// payments linked to its bill rebalance up to its new charges (splitCardPayments). Debt Repayment
+// that isn't linked to any bill is assumed to be a card payment too, and rebalances whatever new
+// charges the linked payments left uncovered. Payments linked to a loan's (or other) bill aren't
+// passed in — a loan takes no new charges, so all of that is real paydown.
+//
+//   rebalance = Σ min(paid_i, charged_i) + min(unlinked, Σ max(0, charged_i − paid_i))
+export function repaymentRebalance(cards: { paid: number; charged: number }[], unlinked: number): number {
+  const round2 = (n: number) => Math.round(n * 100) / 100;
+  let linked = 0;
+  let headroom = 0;
+  for (const c of cards) {
+    const charged = Math.max(0, c.charged);
+    const paid = Math.max(0, c.paid);
+    linked += Math.min(paid, charged);
+    headroom += Math.max(0, charged - paid);
+  }
+  return round2(linked + Math.min(Math.max(0, unlinked), headroom));
+}
