@@ -1,9 +1,10 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import Link from "next/link";
 import { ImportWizard } from "@/components/import/ImportWizard";
 import { PdfImportWizard } from "@/components/import/PdfImportWizard";
-import { Button, PageHeader, SubTabs } from "@/components/ds";
+import { Button, Icon, PageHeader, SubTabs, type IconName } from "@/components/ds";
 import { resyncTransactionPeriods } from "@/server/actions/transactions";
 import type { CategoryOption } from "@/server/queries";
 import type { CategoryRule } from "@/server/lib/categorize";
@@ -47,6 +48,8 @@ export function ImportTabs({
       ) : (
         <PdfImportWizard accounts={accounts} categoryOptions={categoryOptions} rules={rules} />
       )}
+
+      <OtherWays />
     </div>
   );
 }
@@ -75,5 +78,55 @@ function ResyncPeriodsButton() {
         Re-sync months
       </Button>
     </span>
+  );
+}
+
+// Files are one way in, not the only one. People land here looking for "how do I get my
+// transactions into this", so the page also points at the routes that aren't a file upload.
+const OTHER_WAYS: { icon: IconName; title: string; body: string; href: string; cta: string }[] = [
+  {
+    icon: "refresh-cw",
+    title: "Connect a bank",
+    body: "Link accounts through SimpleFIN or Plaid and transactions, pending charges and balances arrive on their own.",
+    href: "/settings/sync",
+    cta: "Bank Sync settings",
+  },
+  {
+    icon: "plus",
+    title: "Type one in",
+    body: "Add a single transaction by hand — a cash purchase, or a pending charge that will settle into the bank's version later.",
+    href: "/transactions",
+    cta: "Open Activity",
+  },
+  {
+    icon: "message-circle",
+    title: "Ask Claude",
+    body: "With the MCP connector set up, Claude can record a transaction or a balance for you, after showing you what it will add.",
+    href: "/advisor",
+    cta: "Advisor",
+  },
+];
+
+function OtherWays() {
+  return (
+    <section aria-labelledby="other-ways" className="space-y-3 border-t border-line pt-5">
+      <h2 id="other-ways" className="text-sm font-semibold text-fg-2">
+        Other ways to get transactions in
+      </h2>
+      <ul className="grid gap-3 sm:grid-cols-3">
+        {OTHER_WAYS.map((w) => (
+          <li key={w.href} className="rounded-card border border-line bg-surface p-4">
+            <div className="flex items-center gap-2 text-sm font-medium">
+              <Icon name={w.icon} size={16} className="text-fg-3" />
+              {w.title}
+            </div>
+            <p className="mt-1.5 text-sm text-fg-2">{w.body}</p>
+            <Link href={w.href} className="mt-2 inline-block text-sm font-medium text-accent-text hover:underline">
+              {w.cta} →
+            </Link>
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }

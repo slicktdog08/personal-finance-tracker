@@ -1,0 +1,53 @@
+# The public demo: the app in DEMO_MODE plus its own throwaway MySQL. Nothing here touches a
+# real database, a real user pool or a real bank, and it needs no secrets — see docs/demo.md.
+#
+#   DEMO_URL=https://demo.example.com docker compose -p pft-demo -f docker-compose.demo.yml up -d --build
+#
+# The app wipes and reseeds the database every time it starts and again every
+# DEMO_RESET_MINUTES, so the MySQL volume is disposable.
+services:
+  db:
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: demo
+      MYSQL_USER: demo
+      # Not secrets: this database holds only generated sample data and is reachable only
+      # from the app container on the compose network (no port is published).
+      MYSQL_PASSWORD: demo-sample-data
+      MYSQL_ROOT_PASSWORD: demo-sample-data-root
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    volumes:
+      - pft-demo-db:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  app:
+    image: ${PFT_IMAGE:-pft-demo:local}
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: mysql://demo:demo-sample-data@db:3306/demo
+      DEMO_MODE: "1"
+      DEMO_RESET_MINUTES: ${DEMO_RESET_MINUTES:-60}
+      DEMO_EMAIL: ${DEMO_EMAIL:-demo@example.com}
+      DEMO_PASSWORD: ${DEMO_PASSWORD:-demo-password}
+      # The public https origin once nginx is in front; cookies turn Secure when it is https.
+      APP_URL: ${DEMO_URL:-http://localhost:9011}
+      # Encrypts the pretend bank token of the built-in "Demo Bank". Protects nothing real,
+      # which is the only reason a fixed value may live in a committed file.
+      SYNC_TOKEN_ENCRYPTION_KEY: ${SYNC_TOKEN_ENCRYPTION_KEY:-00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff}
+    ports:
+      # Loopback only: nginx is the way in.
+      - "127.0.0.1:${DEMO_PORT:-9011}:3000"
+
+volumes:
+  pft-demo-db:

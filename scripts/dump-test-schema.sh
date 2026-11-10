@@ -31,7 +31,7 @@ docker run --rm --platform linux/amd64 \
   -e H="$DB_HOST" -e P="$DB_PORT" -e U="$DB_USER" -e PW="$DB_PASS" -e D="$DB_NAME" -e T="$CONFIG_TABLES" \
   mysql:5.7 sh -c '
     set -e
-    FLAGS="-h $H -P $P -u $U -p$PW --single-transaction --no-tablespaces --set-gtid-purged=OFF --skip-add-locks --skip-comments"
+    FLAGS="-h $H -P $P -u $U -p$PW --single-transaction --no-tablespaces --set-gtid-purged=OFF --skip-add-locks --skip-comments --default-character-set=utf8mb4"
     mysqldump $FLAGS --no-data "$D"
     echo
     mysqldump $FLAGS --no-create-info --complete-insert "$D" $T

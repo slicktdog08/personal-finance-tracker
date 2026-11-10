@@ -14,6 +14,8 @@
     "db:studio": "drizzle-kit studio",
     "db:init": "tsx scripts/init-db.ts && tsx scripts/apply-sql.ts --pending",
     "seed": "tsx scripts/seed-history.ts",
+    "seed:demo": "tsx scripts/seed-demo.ts",
+    "auth": "tsx --require ./tests/stubs.cjs scripts/auth.ts",
     "sync": "tsx --require ./tests/stubs.cjs scripts/bank-sync.ts",
     "test:e2e": "node --require ./tests/env-test.cjs --require ./tests/stubs-session.cjs --import tsx --test --test-concurrency=1 \"tests/e2e/**/*.test.ts\"",
     "test:all": "npm run test && npm run test:e2e",

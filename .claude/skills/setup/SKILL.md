@@ -1,6 +1,6 @@
 ---
 name: setup
-description: Interactive first-time setup for this finance tracker — creates .env.local, checks the MySQL database and schema, seeds lookup tables, walks through AWS Cognito, and interviews the user to write their private advisor profile (stored in the database). Use when someone has just cloned the repo, asks how to get it running, or wants to (re)write their advisor profile.
+description: Interactive first-time setup for this finance tracker — creates .env.local, checks the MySQL database and schema, seeds lookup tables, sets up sign-in (built-in by default, AWS Cognito optionally), and interviews the user to write their private advisor profile (stored in the database). Use when someone has just cloned the repo, asks how to get it running, or wants to (re)write their advisor profile.
 ---
 
 # Setup
@@ -15,7 +15,7 @@ This app holds someone's real finances. Everything personal stays in **git-ignor
 
 | File | Holds |
 |------|-------|
-| `.env.local` / `.env.production` | DB password, Cognito IDs, encryption keys |
+| `.env.local` / `.env.production` | DB password, encryption keys, Cognito IDs if used |
 | `app_settings.advisor_profile` (database) | Income, debts, goals, life situation |
 | `notion_data/` | Optional Notion export for `npm run seed` |
 
@@ -41,8 +41,8 @@ If `.env.local` is missing, copy it from `.env.example`. Then ask for, and fill 
 2. `DATABASE_MIGRATION_URL` — only if the runtime user lacks CREATE/ALTER.
 3. `SYNC_TOKEN_ENCRYPTION_KEY` — generate it yourself with `openssl rand -hex 32`;
    don't ask the user for one.
-4. Cognito values (Step 5) — leave the `XXXX` placeholders for now if they haven't set
-   Cognito up yet, and tell them the app won't start until they're real.
+4. Sign-in needs nothing here: built-in accounts are the default (Step 5). Leave the
+   Cognito lines commented out unless they ask for Cognito.
 5. `APP_URL` — only needed once deployed behind a proxy; delete the example value for local dev.
 
 ## Step 3 — Database and schema
@@ -69,24 +69,29 @@ Ask how they track money today:
   Then `npm run seed`.
 - **Starting fresh** → skip.
 
-## Step 5 — AWS Cognito (sign-in)
+## Step 5 — Sign-in
 
-Every page needs a signed-in Cognito user; there is no self-signup. Follow
-README → "Authentication → One-time Cognito setup" with them:
+Default: **built-in accounts** — nothing to configure. The first visit to the app shows a
+"Create your account" form; that account is the owner and the form never appears again.
+Don't create the account for them or ask for their password; they type it in the browser.
+(Headless alternative: `npm run auth -- create you@example.com`, which prompts for the
+password in their terminal.)
 
-1. Create (or reuse) a user pool and a **public** app client (no secret). Put the region,
-   pool ID and client ID in `.env.local`.
-2. Enable `ALLOW_USER_PASSWORD_AUTH` + `ALLOW_REFRESH_TOKEN_AUTH` on the client.
-3. Create their user with `admin-create-user`, using the email they give you.
-
-If they have the AWS CLI configured you can run these for them after confirming each
-command; otherwise give the console path.
+Only if they ask for **AWS Cognito** (they already run a pool, want MFA or emailed resets,
+or want the claude.ai connector, which needs OAuth): follow `docs/authentication.md` →
+"AWS Cognito" with them — create a pool and a public app client, enable
+`ALLOW_USER_PASSWORD_AUTH` + `ALLOW_REFRESH_TOKEN_AUTH`, uncomment the three pool variables
+in `.env.local`, and create their user with `admin-create-user`. If they have the AWS CLI
+configured you can run these after confirming each command; otherwise give the console path.
 
 ## Step 6 — Run it
 
-`npm run dev`, then have them sign in at http://localhost:3000 with the temporary password
-(they'll be asked to choose a new one). If the page errors, read the server output and fix
-the env value it names.
+`npm run dev`, then have them open http://localhost:3000 and create their account (or, with
+Cognito, sign in with the temporary password and choose a new one). If the page errors, read
+the server output and fix the env value it names.
+
+If they want to look around before entering anything real, offer sample data on a
+**scratch** database: `npm run seed:demo`. Never run it against a database with their data.
 
 ## Step 7 — Advisor profile (for the Claude MCP connector)
 
@@ -110,7 +115,8 @@ store it with `npx tsx scripts/advisor-profile.ts import` and delete the file �
 copy is what the app reads, so deploys and new clones pick it up with nothing to copy. Later
 edits can go through the claude.ai advisor itself (`update_advisor_profile` tool).
 
-Optional next step: the claude.ai connector — README → "Claude MCP connector".
+Optional next step: connecting Claude — `docs/claude-mcp.md` (bearer token with built-in
+accounts, OAuth with Cognito).
 
 ## Step 8 — Tests (optional)
 

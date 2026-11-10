@@ -1,5 +1,6 @@
 import { after, NextResponse, type NextRequest } from "next/server";
 import { handleWebhook } from "@/server/lib/sync/webhook";
+import { isDemoMode } from "@/server/lib/demo/mode";
 
 // Inbound provider webhooks ("new transactions", "enrollment broken"). Public in the proxy
 // allowlist — authentication is the provider's HMAC signature over the raw body, verified
@@ -10,6 +11,8 @@ export const dynamic = "force-dynamic";
 // helper only exists in .next/types, so a cold `tsc --noEmit` (no build yet) couldn't resolve it.
 export async function POST(request: NextRequest, ctx: { params: Promise<{ provider: string }> }) {
   const { provider } = await ctx.params;
+  // The demo has no real bank behind it, so nothing legitimate ever calls this there.
+  if (isDemoMode()) return NextResponse.json({ ok: false, reason: "demo" }, { status: 404 });
   const raw = await request.text();
   let outcome;
   try {
