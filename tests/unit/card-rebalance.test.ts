@@ -90,6 +90,54 @@ describe("cardRebalance", () => {
     assert.equal(r.owe, 155.1);
   });
 
+  test("a payment pending on checking, linked to the card's bill, comes off the card", () => {
+    const acct = (id: number, billId: number | null) => ({
+      id,
+      label: `Card ${id}`,
+      institution: null,
+      accountNumber: "0000" + id,
+      accountType: "Credit",
+      active: true,
+      balance: "1500.00",
+      asOf: "2026-10-10",
+      billId,
+    });
+    const start = new Map([
+      [1, { balance: 1000, asOf: "2026-09-30" }],
+      [2, { balance: 1000, asOf: "2026-09-30" }],
+    ]);
+    const r = cardRebalanceFrom(
+      [acct(1, 11), acct(2, 12)],
+      start,
+      [
+        // $400 from checking (account 99) toward card 1's bill, not on the card yet.
+        { id: 501, accountId: 99, amount: "400.00", direction: "Debit", billId: 11 },
+        // Card 2's payment already shows pending on the card itself (its transfer twin): counted once.
+        { id: 502, accountId: 99, amount: "200.00", direction: "Debit", billId: 12, transferPartnerId: 503 },
+        { id: 503, accountId: 2, amount: "200.00", direction: "Credit", transferPartnerId: 502 },
+        // A pending charge linked to a card's bill on the card itself is a charge, not a payment.
+        { id: 504, accountId: 1, amount: "10.00", direction: "Debit", billId: 11 },
+      ],
+    );
+    const byId = new Map(r.rows.map((x) => [x.accountId, x]));
+    assert.equal(byId.get(1)!.pendingPayments, 400);
+    assert.equal(byId.get(1)!.now, 1110);
+    assert.equal(byId.get(1)!.owe, 110);
+    assert.equal(byId.get(2)!.pendingPayments, 0);
+    assert.equal(byId.get(2)!.now, 1300);
+  });
+
+  test("a pending payoff counts toward the plan without inflating what's owed", () => {
+    // Start 3000, charged 100 since; the 2000 payoff is pending on checking. Paid (2000) reaches the
+    // plan, so the target is 1000 — and today is 3100 − 2000 = 1100, so only the new 100 is owed.
+    const r = cardRebalance([
+      card({ start: 3000, balance: 3100, pendingPayments: 2000, plan: { planned: 2000, apr: null, paid: 2000 } }),
+    ]);
+    assert.equal(r.rows[0].planPaid, true);
+    assert.equal(r.rows[0].now, 1100);
+    assert.equal(r.owe, 100);
+  });
+
   describe("with the month's payoff plan", () => {
     const plan = { planned: 2000, apr: null, paid: 0 };
 

@@ -48,6 +48,9 @@ export function AmountSlider({
         aria-label={ariaLabel}
         onChange={onChange}
         onPointerUp={(e) => commit(Number((e.target as HTMLInputElement).value))}
+        // Touch browsers can end a drag without a pointerup (the gesture turns into a scroll and is
+        // cancelled) — commit on touchend too, or the drag only ever previews.
+        onTouchEnd={(e) => commit(Number((e.target as HTMLInputElement).value))}
         onKeyUp={(e) => {
           if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End", "PageUp", "PageDown"].includes(e.key))
             commit(Number((e.target as HTMLInputElement).value));

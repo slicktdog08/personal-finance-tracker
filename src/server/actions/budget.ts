@@ -2,7 +2,7 @@
 
 import { db } from "@/server/db";
 import { budgets, budgetLines, periods, accountBalances } from "@/server/db/schema";
-import { and, desc, eq, inArray, ne, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, ne, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import {
   BUDGET_MODES,
@@ -273,7 +273,17 @@ async function applyRebalance(
   const others = lines
     .filter((l) => l.id !== target.id)
     .reduce((s, l) => s + (toNum(l.planned) ?? 0), 0);
-  const min = toNum(target.minimum) ?? 0;
+  // The account's latest minimum wins over the copy taken when the line was added (see getBudgetView).
+  const [minSnap] =
+    target.accountId != null
+      ? await db
+          .select({ minPayment: accountBalances.minPayment })
+          .from(accountBalances)
+          .where(and(eq(accountBalances.accountId, target.accountId), isNotNull(accountBalances.minPayment)))
+          .orderBy(desc(accountBalances.asOf), desc(accountBalances.id))
+          .limit(1)
+      : [];
+  const min = toNum(minSnap?.minPayment) ?? toNum(target.minimum) ?? 0;
   let planned = Math.max(min, round2(income - others));
   // Balance not passed in → look up the account's latest snapshot ourselves.
   let bal = targetBalance;
@@ -382,4 +392,21 @@ export async function setBudgetLinePlanned(
     ok: true,
     absorbed: [...updates].map(([id, to]) => ({ id, label: byId.get(id)!.label, from: toNum(byId.get(id)!.planned) ?? 0, to })),
   };
+}
+
+/**
+ * Lock or unlock several lines of one budget in a single write — "Adjust" (open every everyday
+ * envelope) and "Done" (lock them all). One round trip and one revalidation instead of one per
+ * line, which on a phone left the page frozen while a dozen refreshes queued up behind each other.
+ */
+export async function setBudgetLinesLocked(budgetId: number, lineIds: number[], locked: boolean): Promise<Result> {
+  await requireSession();
+  const ids = lineIds.filter((id) => Number.isInteger(id));
+  if (!ids.length) return { ok: true };
+  await db
+    .update(budgetLines)
+    .set({ locked: !!locked })
+    .where(and(eq(budgetLines.budgetId, budgetId), inArray(budgetLines.id, ids)));
+  revalidateBudget();
+  return { ok: true };
 }

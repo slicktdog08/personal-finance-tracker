@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useOptimistic, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -11,6 +11,7 @@ import {
   deleteBudgetLine,
   setBudgetTarget,
   setBudgetLinePlanned,
+  setBudgetLinesLocked,
 } from "@/server/actions/budget";
 import { SAVINGS_CATEGORY, type DebtStrategy } from "@/constants/enums";
 import { formatMoney } from "@/server/lib/money";
@@ -70,6 +71,24 @@ export function BudgetView({
   const [err, setErr] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [confirmDel, setConfirmDel] = useState(false);
+  // Opening/locking an envelope and changing its amount show at once; the server's answer (a
+  // revalidated page) replaces the guess when it lands. Without this every tap waited on a full
+  // page refresh, and taps made meanwhile were computed from the stale amount and dropped.
+  const [lines, patchLines] = useOptimistic(
+    view.lines,
+    (cur: BudgetLineRow[], p: { ids: number[]; locked?: boolean; planned?: number }) =>
+      cur.map((l) =>
+        p.ids.includes(l.id)
+          ? { ...l, ...(p.locked !== undefined ? { locked: p.locked } : {}), ...(p.planned !== undefined ? { planned: p.planned } : {}) }
+          : l,
+      ),
+  );
+  // A line is saving while the optimistic copy is ahead of what the server last sent.
+  const serverLine = new Map(view.lines.map((l) => [l.id, l]));
+  const saving = (l: BudgetLineRow) => {
+    const s = serverLine.get(l.id);
+    return !!s && (s.locked !== l.locked || s.planned !== l.planned);
+  };
   const run: Run = (fn) =>
     start(async () => {
       setErr(null);
@@ -82,6 +101,7 @@ export function BudgetView({
   const setPlanned = (line: BudgetLineRow, v: number) =>
     start(async () => {
       setErr(null);
+      patchLines({ ids: [line.id], planned: v });
       const r = await setBudgetLinePlanned(view.id, line.id, v);
       if (!r.ok) {
         setErr(r.error ?? "Failed");
@@ -89,25 +109,31 @@ export function BudgetView({
       }
       else setNote(r.absorbed?.length ? r.absorbed.map((a) => `${a.label} ${formatMoney(a.from)} → ${formatMoney(a.to)}`).join(" · ") : null);
     });
-  const toggle = (l: BudgetLineRow) => run(() => updateBudgetLine(l.id, { locked: !l.locked }));
-  const lockAll = () =>
-    start(async () => {
-      for (const l of view.lines.filter((x) => !x.locked)) await updateBudgetLine(l.id, { locked: true });
-      setNote(null);
+  const toggle = (l: BudgetLineRow) =>
+    run(async () => {
+      patchLines({ ids: [l.id], locked: !l.locked });
+      return updateBudgetLine(l.id, { locked: !l.locked });
     });
+  const setLocked = (ids: number[], locked: boolean) =>
+    run(async () => {
+      if (!ids.length) return;
+      patchLines({ ids, locked });
+      return setBudgetLinesLocked(view.id, ids, locked);
+    });
+  const lockAll = () => {
+    setNote(null);
+    setLocked(lines.filter((x) => !x.locked).map((l) => l.id), true);
+  };
 
-  const debtLines = view.lines.filter((l) => l.kind === "debt");
-  const spendLines = view.lines.filter((l) => l.kind === "category");
-  const savingsLines = view.lines.filter((l) => l.kind === "savings");
+  const debtLines = lines.filter((l) => l.kind === "debt");
+  const spendLines = lines.filter((l) => l.kind === "category");
+  const savingsLines = lines.filter((l) => l.kind === "savings");
   const target = debtLines.find((l) => l.isTarget) ?? null;
   const isSink = (l: BudgetLineRow) => view.autoRebalance && l.isTarget;
 
   // "Adjust" opens every everyday envelope so they trade with each other (the pool rule below);
   // the target and the debt lines stay as they were.
-  const adjustAll = () =>
-    start(async () => {
-      for (const l of spendLines.filter((x) => x.locked)) await updateBudgetLine(l.id, { locked: false });
-    });
+  const adjustAll = () => setLocked(spendLines.filter((x) => x.locked).map((l) => l.id), false);
 
   const sum = (ls: BudgetLineRow[], k: "planned" | "actual") => ls.reduce((s, l) => s + l[k], 0);
   const income = view.plannedIncome;
@@ -160,7 +186,7 @@ export function BudgetView({
   };
 
   // The open envelopes = the pool. The dock says where the next change lands.
-  const open = view.lines.filter((l) => !l.locked && !isSink(l));
+  const open = lines.filter((l) => !l.locked && !isSink(l));
   const dock =
     open.length === 0
       ? null
@@ -173,7 +199,7 @@ export function BudgetView({
         : { message: `${open.map((l) => l.label).join(" ↔ ")}`, detail: note ?? `What you add to one comes out of the other${open.length > 2 ? "s, in proportion" : ""}.` };
 
   const controlFor = (l: BudgetLineRow, min: number, max: number, color: string) => (
-    <AmountControl value={l.planned} min={min} max={max} step={25} sliderStep={5} color={color} disabled={pending} ariaLabel={`Planned for ${l.label}`} onCommit={(v) => setPlanned(l, v)} />
+    <AmountControl value={l.planned} min={min} max={max} step={25} sliderStep={5} color={color} ariaLabel={`Planned for ${l.label}`} onCommit={(v) => setPlanned(l, v)} />
   );
 
   return (
@@ -302,7 +328,8 @@ export function BudgetView({
                 </Link>
               }
             >
-              <Money value={view.unassignedDebtPayments} kind="neutral" /> of Debt Repayment isn&apos;t linked to a bill yet.
+              <Money value={view.unassignedDebtPayments} kind="neutral" />
+              {" of Debt Repayment isn't linked to a bill yet."}
             </Notice>
           ) : undefined
         }
@@ -368,7 +395,7 @@ export function BudgetView({
               }
               open={!l.locked && !isSink(l)}
               auto={isSink(l)}
-              pending={pending}
+              pending={saving(l)}
               onToggle={() => toggle(l)}
               onRemove={() => run(() => deleteBudgetLine(l.id))}
               control={
@@ -421,7 +448,7 @@ export function BudgetView({
             used={l.actual}
             marker={paceFrac != null ? l.planned * paceFrac : null}
             open={!l.locked}
-            pending={pending}
+            pending={saving(l)}
             onToggle={() => toggle(l)}
             onRemove={() => run(() => deleteBudgetLine(l.id))}
             control={controlFor(l, 0, Math.max(200, Math.ceil(Math.max(l.planned * 2, l.actual * 1.2) / 50) * 50), l.color ?? COLORS.spend)}
@@ -460,7 +487,7 @@ export function BudgetView({
               )
             }
             open={!l.locked}
-            pending={pending}
+            pending={saving(l)}
             onToggle={() => toggle(l)}
             onRemove={() => run(() => deleteBudgetLine(l.id))}
             control={controlFor(l, 0, Math.max(1000, Math.ceil((l.planned * 2) / 50) * 50), l.color ?? COLORS.savings)}
@@ -621,14 +648,27 @@ function AddEnvelope({ kind, view, categories, pending, run }: { kind: "category
 /**
  * "You're behind on this card": the dashboard's card-rebalance figure (balance + pending vs. the
  * month's start, or vs. the plan's balance once the payoff is paid) plus what the plan still expects — server/lib/card-rebalance.ts `cardStanding`.
- * Pending is included, as on the dashboard, and said so.
+ * Pending is included, as on the dashboard, and said so — charges pending on the card, and a
+ * payment linked to its bill that's still pending on the account it's paid from.
  */
 function CardBehind({ standing: s }: { standing: NonNullable<BudgetLineRow["standing"]> }) {
+  const notes = [
+    s.pending > 0 && (
+      <span key="charges">
+        incl. <Money value={s.pending} kind="neutral" sign="none" /> pending
+      </span>
+    ),
+    s.pendingPayments > 0 && (
+      <span key="payments">
+        after the <Money value={s.pendingPayments} kind="neutral" sign="none" /> payment pending
+      </span>
+    ),
+  ].filter(Boolean);
   const pending =
-    s.pending > 0 ? (
+    notes.length > 0 ? (
       <>
         {" "}
-        (incl. <Money value={s.pending} kind="neutral" sign="none" /> pending)
+        ({notes.flatMap((el, i) => (i ? ["; ", el] : [el]))})
       </>
     ) : null;
   return (
