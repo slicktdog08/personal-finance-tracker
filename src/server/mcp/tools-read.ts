@@ -71,17 +71,17 @@ export function registerReadTools(server: McpServer) {
     {
       title: "Advisor context",
       description:
-        "Call this FIRST in any advisory conversation. Returns the standing financial plan (income, debt strategy, rent target, emergency fund rules), known data caveats, today's date and the latest tracked month. Static text — cheap to call.",
+        "Call this FIRST in any advisory conversation. Returns the standing financial plan (income, debt strategy, rent target, emergency fund rules), known data caveats, today's date and the latest tracked month. Cheap to call. If the plan here is out of date, offer to fix it with update_advisor_profile.",
       inputSchema: z.object({}),
       annotations: READ_ONLY,
     },
     async () => {
-      const latest = await getLatestPeriod();
+      const [latest, profile] = await Promise.all([getLatestPeriod(), getAdvisorProfile()]);
       return ok({
         today: todayIso(),
         currentPeriod: currentPeriodLabel(),
         latestTrackedPeriod: latest?.label ?? null,
-        ...getAdvisorProfile(),
+        ...profile,
       });
     },
   );

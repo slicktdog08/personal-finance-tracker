@@ -1,6 +1,6 @@
 ---
 name: setup
-description: Interactive first-time setup for this finance tracker — creates .env.local, checks the MySQL database and schema, seeds lookup tables, walks through AWS Cognito, and interviews the user to write their private advisor profile (config/advisor-profile.json). Use when someone has just cloned the repo, asks how to get it running, or wants to (re)write their advisor profile.
+description: Interactive first-time setup for this finance tracker — creates .env.local, checks the MySQL database and schema, seeds lookup tables, walks through AWS Cognito, and interviews the user to write their private advisor profile (stored in the database). Use when someone has just cloned the repo, asks how to get it running, or wants to (re)write their advisor profile.
 ---
 
 # Setup
@@ -16,7 +16,7 @@ This app holds someone's real finances. Everything personal stays in **git-ignor
 | File | Holds |
 |------|-------|
 | `.env.local` / `.env.production` | DB password, Cognito IDs, encryption keys |
-| `config/advisor-profile.json` | Income, debts, goals, life situation |
+| `app_settings.advisor_profile` (database) | Income, debts, goals, life situation |
 | `notion_data/` | Optional Notion export for `npm run seed` |
 
 - Never write real values into a tracked file (README, `.env.example`, code, tests, docs).
@@ -90,8 +90,8 @@ the env value it names.
 
 ## Step 7 — Advisor profile (for the Claude MCP connector)
 
-The MCP server (`/api/mcp`) prepends `config/advisor-profile.json` to every advisory
-conversation. Offer to write it; if they decline, skip — the advisor then asks for context.
+The MCP server (`/api/mcp`) prepends the advisor profile — the `advisor_profile` row of the
+`app_settings` table — to every advisory conversation. Offer to write it; if they decline, skip — the advisor then asks for context.
 
 Interview them briefly, one topic at a time, and accept "skip" for any of them:
 
@@ -104,10 +104,11 @@ Interview them briefly, one topic at a time, and accept "skip" for any of them:
   shouldn't trust.
 - **Style** — keep the defaults from the example unless they want changes.
 
-Write it in the shape of `config/advisor-profile.example.json`, short factual bullet
-strings, `updatedOn` = today. Show them the result and confirm before saving. Remind them
-to bump `updatedOn` when the plan changes, and that for Docker deploys the file is either
-baked in from `config/` at build time or mounted (see `docker-compose.yml`).
+Write it to `config/advisor-profile.json` in the shape of `config/advisor-profile.example.json`
+(short factual bullet strings, `updatedOn` = today), show them the result and confirm, then
+store it with `npx tsx scripts/advisor-profile.ts import` and delete the file — the database
+copy is what the app reads, so deploys and new clones pick it up with nothing to copy. Later
+edits can go through the claude.ai advisor itself (`update_advisor_profile` tool).
 
 Optional next step: the claude.ai connector — README → "Claude MCP connector".
 
@@ -120,7 +121,7 @@ Optional next step: the claude.ai connector — README → "Claude MCP connector
 ## Step 9 — Personal-data guard (if they'll commit to a public fork)
 
 `npm ci` points git at `.githooks/`, whose pre-commit runs `scripts/check-private.sh`. Offer
-to create `.private-patterns` (git-ignored): one case-insensitive regex per line for terms
+to create `~/.config/personal-finance-tracker/private-patterns` (outside the repo, so every clone and worktree is covered): one case-insensitive regex per line for terms
 that would identify them — account last-4s, card names, employer, street, exact paycheck.
 Build it from what they told you in Step 7, show it, and save on confirmation. Test with
 `npm run check:private`.
