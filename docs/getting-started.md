@@ -15,7 +15,7 @@ Just want to look around first? Try the [demo](demo.md), or run your own copy wi
 ## 1. Docker (the short way)
 
 ```bash
-curl -O https://raw.githubusercontent.com/slicktdog08/personal-finance-tracker/main/compose.selfhost.yml
+git clone https://github.com/slicktdog08/personal-finance-tracker && cd personal-finance-tracker
 docker compose -f compose.selfhost.yml up -d
 ```
 

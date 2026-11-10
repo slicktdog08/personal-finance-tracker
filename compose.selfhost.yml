@@ -4,7 +4,7 @@
 #   open http://localhost:3000        # the first visit creates your account
 #
 # The app container creates the schema on first boot and applies new migrations on every
-# start, so upgrading is `docker compose -f compose.selfhost.yml pull && ... up -d`.
+# start, so upgrading is `git pull && docker compose -f compose.selfhost.yml up -d --build`.
 # Your data lives in the `pft-db` volume; `down` keeps it, `down -v` deletes it.
 #
 # Settings come from an optional `.env` beside this file (see docs/docker.md):
@@ -12,7 +12,7 @@
 #   APP_PORT                        host port (default 3000)
 #   APP_URL                         your https:// origin once it is behind a reverse proxy
 #   SYNC_TOKEN_ENCRYPTION_KEY       `openssl rand -hex 32`, only needed for bank sync
-#   PFT_IMAGE                       pin a version instead of :latest
+#   PFT_IMAGE                       use a different image name or tag
 services:
   db:
     image: mysql:8.4
@@ -35,7 +35,7 @@ services:
 
   app:
     image: ${PFT_IMAGE:-ghcr.io/slicktdog08/personal-finance-tracker:latest}
-    # No published image for your platform, or you changed the code? `--build` uses this.
+    # Built from this checkout when the image isn't already on the machine.
     build: .
     restart: unless-stopped
     depends_on:
