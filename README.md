@@ -139,6 +139,20 @@ this?", "How did this month go?", "What's my fastest path out of debt?"
 - **Secure sign-in.** Claude signs in through your own Cognito user pool using OAuth, so your
   data never sits with a third-party aggregator.
 
+### Insights and chat inside the app (Claude routine, no API key)
+`/insights` and `/advisor` put the advisor in the app itself. The buttons fire a
+[Claude Code routine](planning/features/ai-advisor.md) instead of calling the Anthropic API, so
+the work runs on your Claude plan, not metered API credit. The routine reads your data and
+writes its answer back through the same MCP connector.
+
+- **Insights:** findings the screens don't show (price creep, category drift, payday spikes,
+  leaks, interest cost), each with the dollar impact and the transactions behind it. Mark them
+  done or dismiss them; a dismissed finding isn't raised again.
+- **Check-ins:** the daily update lands on the Insights page, run on a schedule or on demand.
+- **Chat:** ask a question in a thread and the reply shows up there.
+- **Runs:** every routine run shows in the app with its status, how long it took and a link to
+  its Claude Code session.
+
 ## Limitations and honest downsides
 
 This is a tool I built for myself, so these are the trade-offs I live with:
@@ -268,6 +282,8 @@ for deployment. `.env.example` documents each one.
 | `SYNC_TOKEN_ENCRYPTION_KEY` | sync | `openssl rand -hex 32`. Encrypts stored bank tokens |
 | `SYNC_SCHEDULER` | sync | `1` starts the in-process sync scheduler. Leave unset in development |
 | `SYNC_CRON_SECRET` | | Bearer token for `POST /api/sync/run` if you'd rather trigger syncs from cron |
+| `CLAUDE_ADVISOR_ROUTINE_ID` | advisor | The advisor routine's trigger id (`trig_…`); see [ai-advisor.md](planning/features/ai-advisor.md) |
+| `CLAUDE_ADVISOR_ROUTINE_TOKEN` | advisor | The token generated with that routine's API trigger |
 
 ## Hosting
 

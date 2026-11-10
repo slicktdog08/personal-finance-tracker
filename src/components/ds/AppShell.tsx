@@ -23,6 +23,7 @@ const SECTIONS = {
   activity: { title: "Activity", match: ["/transactions", "/transfers", "/cash"] },
   accounts: { title: "Accounts", match: ["/accounts"] },
   plan: { title: "Plan", match: ["/budget", "/debts", "/goals", "/trends"] },
+  advisor: { title: "Advisor", match: ["/insights", "/advisor"] },
   import: { title: "Import", match: ["/import"] },
   settings: { title: "Settings", match: ["/settings"] },
 } as const;
@@ -52,13 +53,20 @@ const NAV_GROUPS: { label: string; items: NavItemDef[] }[] = [
       { id: "trends", label: "Trends", icon: "chart-line", href: "/trends", match: ["/trends"] },
     ],
   },
+  {
+    label: "Advisor",
+    items: [
+      { id: "insights", label: "Insights", icon: "sparkles", href: "/insights", match: ["/insights"] },
+      { id: "advisor", label: "Ask Claude", icon: "message-circle", href: "/advisor", match: ["/advisor"] },
+    ],
+  },
 ];
 const NAV_FOOT: NavItemDef[] = [
   { id: "import", label: "Import", icon: "upload", href: "/import", match: ["/import"] },
   { id: "settings", label: "Settings", icon: "settings", href: "/settings", match: ["/settings"] },
 ];
-// The More sheet: Accounts plus the footer pages.
-const MORE_ITEMS: NavItemDef[] = [NAV_GROUPS[1].items[1], ...NAV_FOOT];
+// The More sheet: Accounts, the advisor pages, then the footer pages.
+const MORE_ITEMS: NavItemDef[] = [NAV_GROUPS[1].items[1], ...NAV_GROUPS[3].items, ...NAV_FOOT];
 
 // Activity merges four views of the same ledger; Plan's three pages share one mobile tab.
 const ACTIVITY_TABS = [
@@ -376,7 +384,7 @@ const TabBar = memo(function TabBar({
     { id: "bills", label: pastDue ? `Bills, ${pastDue} past due` : "Bills", icon: "calendar-check", href: billsHref, on: section === "bills", dot: pastDue ? "alert" : undefined },
     { id: "activity", label: newTransactions ? `Activity, ${newTransactions} new` : "Activity", icon: "arrow-left-right", href: "/transactions", on: section === "activity", dot: newTransactions ? "new" : undefined },
     { id: "plan", label: "Plan", icon: "chart-pie", href: "/budget", on: section === "plan" },
-    { id: "more", label: "More", icon: "ellipsis", on: section === "accounts" || section === "import" || section === "settings" },
+    { id: "more", label: "More", icon: "ellipsis", on: section === "accounts" || section === "advisor" || section === "import" || section === "settings" },
   ];
   return (
     <nav className="mp-tabbar" aria-label="Primary">
