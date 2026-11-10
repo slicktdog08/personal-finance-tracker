@@ -12,7 +12,7 @@ Bills, bank transactions, debts, budgets and savings goals in one place — on y
 server, with your data in your own database. Optionally, Claude as a financial advisor that
 can read your real numbers.
 
-**[Try the demo](docs/demo.md)** · **[Get started](docs/getting-started.md)** · **[Feature tour](docs/features.md)**
+**[Try the live demo](https://finance.candycreative.digital)** · **[Get started](docs/getting-started.md)** · **[Feature tour](docs/features.md)**
 
 ## Run it with Docker
 
@@ -123,7 +123,7 @@ transfer pairing, cash tracking, recurring-bill suggestions, and AI insights.
 | [Connecting Claude](docs/claude-mcp.md) | The MCP advisor, in-app insights, the advisor profile |
 | [Hosting](docs/hosting.md) | A server, a domain, HTTPS, CI/CD |
 | [Configuration](docs/configuration.md) | Every environment variable |
-| [Demo](docs/demo.md) | What demo mode is and how to run one |
+| [Demo](docs/demo.md) | What demo mode is and how to run one ([live demo](https://finance.candycreative.digital)) |
 | [Feature tour](docs/features.md) | Everything it does, and its honest limitations |
 | [Development](docs/development.md) | Commands, tests, code layout, keeping personal data out of git |
 | [Why this exists](docs/why.md) | The story, and what got built when |
