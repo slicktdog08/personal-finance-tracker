@@ -52,6 +52,9 @@ export interface TxRow {
   accountNumber: string | null;
   accountLabel: string | null;
   billId: number | null;
+  /** The saved rule that linked `billId`, when it was linked automatically. */
+  billRuleId?: number | null;
+  accountId?: number | null;
   accountType?: string | null;
   /** Cash bookkeeping: how much of this withdrawal has been tied to purchases. */
   allocated?: string | null;
@@ -222,16 +225,20 @@ function RowActions({ t, accounts, categoryOptions, bills, basePath, deleting, o
     <>
       <EditTransaction txn={t} accounts={accounts} categoryOptions={categoryOptions} path={basePath} />
       <SplitTransaction txn={t} categoryOptions={categoryOptions} path={basePath} />
-      {/* Linked rows show their bill badge (with Unlink) beside the description instead. */}
-      {t.billId == null && (
-        <ConvertToBill
-          transactionId={t.id}
-          description={t.description}
-          billId={t.billId}
-          bills={bills}
-          path={basePath}
-        />
-      )}
+      {/* Linked rows show their bill badge (with Unlink) beside the description instead; this
+          copy stays mounted (rendering nothing once linked) so a rule editor opened on link
+          survives the row turning linked. */}
+      <ConvertToBill
+        actionOnly
+        transactionId={t.id}
+        description={t.description}
+        billId={t.billId}
+        billRuleId={t.billRuleId ?? null}
+        txn={{ accountId: t.accountId ?? null, amount: t.amount, direction: t.direction }}
+        categoryOptions={categoryOptions}
+        bills={bills}
+        path={basePath}
+      />
       <IconButton
         icon="trash-2"
         label="Delete transaction"
@@ -263,7 +270,7 @@ function ExpandButton({ id, allocated, open, onToggle }: { id: number; allocated
   );
 }
 
-function TitleBits({ t, bills, basePath }: Pick<TxRowProps, "t" | "bills" | "basePath">) {
+function TitleBits({ t, bills, basePath, categoryOptions }: Pick<TxRowProps, "t" | "bills" | "basePath" | "categoryOptions">) {
   return (
     <>
       {t.pending && <PendingBadge />}
@@ -274,6 +281,9 @@ function TitleBits({ t, bills, basePath }: Pick<TxRowProps, "t" | "bills" | "bas
           transactionId={t.id}
           description={t.description}
           billId={t.billId}
+          billRuleId={t.billRuleId ?? null}
+          txn={{ accountId: t.accountId ?? null, amount: t.amount, direction: t.direction }}
+          categoryOptions={categoryOptions}
           bills={bills}
           path={basePath}
         />
@@ -313,7 +323,7 @@ const TxTableRow = memo(function TxTableRow({
             <span className={cx("truncate font-medium", t.pending && "text-fg-2")} title={t.description}>
               {t.description}
             </span>
-            <TitleBits t={t} bills={bills} basePath={basePath} />
+            <TitleBits t={t} bills={bills} basePath={basePath} categoryOptions={categoryOptions} />
           </div>
           <NoteCell id={t.id} value={t.notes} path={basePath} />
         </td>
@@ -412,7 +422,7 @@ const TxCardRow = memo(function TxCardRow({
           </div>
           <div className="mt-1 flex min-w-0 items-start justify-between gap-2">
             <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-              <TitleBits t={t} bills={bills} basePath={basePath} />
+              <TitleBits t={t} bills={bills} basePath={basePath} categoryOptions={categoryOptions} />
               <CategoryCell
                 id={t.id}
                 value={t.category}

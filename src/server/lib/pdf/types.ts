@@ -111,4 +111,6 @@ export interface PdfCommitResult {
   balancesRecorded: number;
   /** Imported rows that replaced a hand-entered (pending) transaction. */
   merged: number;
+  /** Imported rows a saved rule linked to a recurring bill. */
+  billsLinked: number;
 }

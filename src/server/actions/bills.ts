@@ -6,6 +6,7 @@ import { and, eq, or, gt, sql, inArray } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import type { InstancePatch } from "@/server/lib/bill-types";
 import { DEFAULT_NEW_MONTH_STATUS } from "@/constants/enums";
+import { adoptBillInstances } from "@/server/lib/rules";
 import { requireSession } from "@/server/auth/session";
 
 function applyPatch(patch: InstancePatch) {
@@ -129,6 +130,8 @@ export async function addInstanceNamed(
     isDebt: defaults.isDebt,
     sortOrder: (max[0]?.m ?? -1) + 1,
   });
+  // Payments already linked to this bill (by a rule or by hand) in this month now count here.
+  await adoptBillInstances(periodId);
 
   revalidatePath(path);
   revalidatePath("/settings/bills");

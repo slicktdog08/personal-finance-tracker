@@ -4,7 +4,6 @@ import { db } from "@/server/db";
 import {
   accountBalances,
   accounts,
-  categoryMappings,
   periods,
   syncAccounts,
   syncEnrollments,
@@ -15,6 +14,7 @@ import {
   type SyncEnrollment,
 } from "@/server/db/schema";
 import { categorize, type CategoryRule } from "@/server/lib/categorize";
+import { applyRules, loadRules } from "@/server/lib/rules";
 import { dateToYearMonth } from "@/server/lib/period";
 import { todayIso } from "@/server/lib/pay-schedule";
 import { LOCAL_SOURCES } from "@/constants/sync";
@@ -658,7 +658,12 @@ async function applyPlan(plan: ReconcilePlan, providerId: string, accountId: num
       .insert(transactions)
       .values(
         chunk.map((t) => {
-          const cat = ctx.rules.length ? categorize({ description: t.description, rawCategory: t.rawCategory }, ctx.rules) : null;
+          const cat = ctx.rules.length
+            ? categorize(
+                { description: t.description, rawCategory: t.rawCategory, accountId, amount: t.amount, direction: t.direction },
+                ctx.rules,
+              )
+            : null;
           return {
             accountId,
             periodId: periodIdFor(t.txnDate, ctx.periodMap),
@@ -666,7 +671,6 @@ async function applyPlan(plan: ReconcilePlan, providerId: string, accountId: num
             description: t.description.slice(0, 512),
             category: cat?.matchedRuleId != null ? cat.category : null,
             categoryRuleId: cat?.matchedRuleId ?? null,
-            billId: cat?.matchedRuleId != null && t.status === "posted" ? cat.billId : null,
             amount: t.amount.toFixed(2),
             netAmount: null,
             direction: t.direction,
@@ -695,18 +699,40 @@ async function applyPlan(plan: ReconcilePlan, providerId: string, accountId: num
     if (u.changes.status) set.pending = u.changes.status === "pending";
     set.raw = packRaw(u.fetched);
     if ((u.redoCategory || u.promoted) && ctx.rules.length) {
-      const cat = categorize({ description: u.fetched.description, rawCategory: u.fetched.rawCategory }, ctx.rules);
-      if (cat.matchedRuleId != null) {
-        if (u.redoCategory) {
-          set.category = cat.category;
-          set.categoryRuleId = cat.matchedRuleId;
-        }
-        // Bill attribution waits for posting (D2); attach it now if the rule names one and
-        // nothing was linked by hand meanwhile.
-        if (u.promoted && cat.billId != null && u.existingBillId == null) set.billId = cat.billId;
+      const cat = categorize(
+        {
+          description: u.fetched.description,
+          rawCategory: u.fetched.rawCategory,
+          accountId,
+          amount: u.fetched.amount,
+          direction: u.fetched.direction,
+        },
+        ctx.rules,
+      );
+      if (cat.matchedRuleId != null && u.redoCategory) {
+        set.category = cat.category;
+        set.categoryRuleId = cat.matchedRuleId;
       }
+      // Bill attribution waits for posting (D2) — the bill-rule pass below picks up promoted rows.
     }
     await db.update(transactions).set(set).where(eq(transactions.id, u.id));
+  }
+
+  // Bill-link rules on the rows that are now posted: new inserts and pending rows that just
+  // posted. applyRules only links unlinked, non-pending rows, so a link made by hand stays.
+  if (ctx.rules.length) {
+    const ids = plan.updates.filter((u) => u.promoted).map((u) => u.id);
+    const insertedExt = inserts.filter((t) => t.status === "posted").map((t) => t.externalId);
+    for (let i = 0; i < insertedExt.length; i += 500) {
+      const rows = await db
+        .select({ id: transactions.id })
+        .from(transactions)
+        .where(and(eq(transactions.source, providerId), inArray(transactions.externalId, insertedExt.slice(i, i + 500))));
+      ids.push(...rows.map((r) => r.id));
+    }
+    if (ids.length) {
+      await applyRules({ rules: ctx.rules, where: inArray(transactions.id, ids), categories: false, bills: true });
+    }
   }
 
   // Expirations: carry edits, then delete.
@@ -775,19 +801,6 @@ async function recordBalance(sa: SyncAccount, accountId: number, ctx: RunContext
 // ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------
-
-async function loadRules(): Promise<CategoryRule[]> {
-  const rows = await db.select().from(categoryMappings);
-  return rows.map((r) => ({
-    id: r.id,
-    matchType: r.matchType,
-    pattern: r.pattern,
-    field: r.field,
-    category: r.category,
-    billId: r.billId,
-    priority: r.priority,
-  }));
-}
 
 async function loadPeriodMap(): Promise<Map<string, number>> {
   const rows = await db.select({ id: periods.id, year: periods.year, month: periods.month }).from(periods);

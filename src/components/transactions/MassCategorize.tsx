@@ -6,11 +6,12 @@ import {
   bulkCategorizeByMatch,
   applySavedRules,
   deleteCategoryRule,
+  type RuleEditorOptions,
 } from "@/server/actions/categorize";
 import type { MatchParams } from "@/server/lib/categorize-dto";
 import type { Suggestion } from "@/server/lib/suggest";
 import type { CategoryOption } from "@/server/queries";
-import { describeRuleMatch, type CategoryRule } from "@/server/lib/categorize";
+import { describeRuleMatch, type CategoryRule, type RuleNames } from "@/server/lib/categorize";
 import { RuleEditor } from "@/components/transactions/RuleEditor";
 import { ColorSelect } from "@/components/ColorSelect";
 import {
@@ -33,14 +34,22 @@ export function MassCategorize({
   categoryOptions,
   suggestions,
   rules,
+  names,
 }: {
   uncategorized: number;
   categoryOptions: CategoryOption[];
   suggestions: Suggestion[];
   rules: CategoryRule[];
+  /** Account and bill names, so rules read in words instead of ids. */
+  names: RuleEditorOptions;
 }) {
   const [pending, start] = useTransition();
   const [editing, setEditing] = useState<CategoryRule | null>(null);
+  const [creating, setCreating] = useState(false);
+  const ruleNames: RuleNames = {
+    account: (id) => names.accounts.find((a) => a.id === id)?.name,
+    bill: (id) => names.bills.find((b) => b.id === id)?.name,
+  };
   const [ruleMsg, setRuleMsg] = useState<string | null>(null);
   const [sugCat, setSugCat] = useState<Record<string, string>>(
     Object.fromEntries(suggestions.map((s) => [s.pattern, s.suggestedCategory ?? ""])),
@@ -102,8 +111,13 @@ export function MassCategorize({
   }
   function doAutoApply() {
     start(async () => {
-      const n = await applySavedRules(true);
-      setAutoMsg(`Applied saved rules to ${n} uncategorized transaction${n === 1 ? "" : "s"}.`);
+      const { categorized, linked } = await applySavedRules();
+      const s = (n: number) => `${n} transaction${n === 1 ? "" : "s"}`;
+      setAutoMsg(
+        categorized || linked
+          ? `Saved rules categorized ${s(categorized)} and linked ${s(linked)} to bills.`
+          : "Nothing new for the saved rules to do.",
+      );
     });
   }
 
@@ -250,13 +264,13 @@ export function MassCategorize({
             onClick={doAutoApply}
             disabled={pending || rules.length === 0}
           >
-            Apply to uncategorized
+            Apply to open transactions
           </Button>
         }
       >
         <p className="text-sm text-fg-2">
           {uncategorized.toLocaleString()} transaction{uncategorized === 1 ? " is" : "s are"} uncategorized.
-          Run every saved rule against them.
+          Run every saved rule against them, and link unlinked payments to the bills rules name.
         </p>
         {autoMsg && (
           <Notice tone="ok" className="mt-3">
@@ -266,7 +280,15 @@ export function MassCategorize({
       </Card>
 
       {/* Saved rules */}
-      <Card title="Saved rules" meta={String(rules.length)}>
+      <Card
+        title="Saved rules"
+        meta={String(rules.length)}
+        action={
+          <Button size="sm" icon="plus" onClick={() => setCreating(true)}>
+            New rule
+          </Button>
+        }
+      >
         {ruleMsg && (
           <Notice tone="ok" className="mb-3">
             {ruleMsg}
@@ -284,12 +306,24 @@ export function MassCategorize({
             {rules.map((r) => (
               <ListRow
                 key={r.id}
-                lead={<Glyph icon="wand-sparkles" color={colorOf(r.category)} size="sm" />}
-                title={<span className="font-mono text-[13px]">{describeRuleMatch(r)}</span>}
+                lead={
+                  <Glyph
+                    icon={r.billId != null && !r.category ? "receipt" : "wand-sparkles"}
+                    color={colorOf(r.category)}
+                    size="sm"
+                  />
+                }
+                title={<span className="font-mono text-[13px]">{describeRuleMatch(r, ruleNames)}</span>}
                 sub={
-                  <span className="inline-flex items-center gap-1.5">
+                  <span className="inline-flex flex-wrap items-center gap-1.5">
                     →
-                    <Badge label={r.category} color={colorOf(r.category)} size="sm" />
+                    {r.category && <Badge label={r.category} color={colorOf(r.category)} size="sm" />}
+                    {r.billId != null && (
+                      <span className="text-xs text-fg-2">
+                        link bill <span className="font-medium text-fg">{ruleNames.bill?.(r.billId) ?? `#${r.billId}`}</span>
+                      </span>
+                    )}
+                    {!r.category && r.billId == null && <span className="text-xs text-fg-3">no action</span>}
                   </span>
                 }
                 end={
@@ -312,6 +346,15 @@ export function MassCategorize({
               />
             ))}
           </div>
+        )}
+        {creating && (
+          <RuleEditor
+            open
+            onClose={() => setCreating(false)}
+            categoryOptions={categoryOptions}
+            mode={{ kind: "create" }}
+            onSaved={(e) => setRuleMsg(e.message)}
+          />
         )}
         {editing && (
           <RuleEditor
