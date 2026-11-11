@@ -85,7 +85,8 @@ Optional: [connect Claude](claude-mcp.md) as an advisor that can read your numbe
 
 ```bash
 npm run seed:demo            # refuses if the database already has transactions
-npm run seed:demo -- --reset # wipes everything first
+npm run seed:demo -- --reset # refreshes demo data it seeded before
+npm run seed:demo -- --reset --force # wipes everything first, even your own data
 ```
 
 It fills every screen with about six months of fictional history, always relative to today.
