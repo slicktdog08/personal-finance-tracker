@@ -555,6 +555,10 @@ export const budgets = mysqlTable(
     // so the snowball keeps sweeping the leftover with no manual "Rebalance" click.
     autoRebalance: boolean("auto_rebalance").notNull().default(false),
     notes: text("notes"),
+    // Set when the month is closed out: the plan is frozen (every write refuses) and `outcome`
+    // holds the report as it stood — see server/lib/budget-outcome.ts. Reopening clears both.
+    finalizedAt: timestamp("finalized_at"),
+    outcome: json("outcome"),
     createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`),
     updatedAt: timestamp("updated_at")
       .default(sql`CURRENT_TIMESTAMP`)

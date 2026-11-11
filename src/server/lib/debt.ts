@@ -59,6 +59,48 @@ export function splitCardPayments(
   return { rebalance: round2(Math.min(paid, c)), payoff: round2(Math.max(0, paid - c)) };
 }
 
+// A budget debt line's progress for the month. The line's planned payment is two parts: the
+// MINIMUM (what the lender requires, whatever was charged) and the EXTRA beyond it (payoff the
+// plan chose). New charges on the card only eat into the extra — paying the minimum is paying the
+// minimum, even if a subscription landed on the card the same month; that charge just rolls into
+// the balance. And when the month's bill is marked paid, the minimum counts as met at whatever
+// was actually paid: a loan that drafted $X against a plan copied from last month's minimum is
+// done, not "$Y short".
+//
+//   minPart   = min(planned, minimum)              extraPart = planned − minPart
+//   towardMin = min(paid, minPart)
+//   rebalance / extraPayoff = splitCardPayments(paid − towardMin, charged)
+//   actual    = towardMin + extraPayoff
+//   due       = minimumMet ? towardMin + extraPart : planned     (what the envelope measures against)
+export interface DebtLineProgress {
+  actual: number;
+  rebalance: number;
+  due: number;
+  minimumMet: boolean;
+}
+export function debtLineProgress(p: {
+  planned: number;
+  minimum: number | null;
+  paid: number;
+  charged: number;
+  billPaid: boolean;
+}): DebtLineProgress {
+  const round2 = (n: number) => Math.round(n * 100) / 100;
+  const planned = Math.max(0, p.planned);
+  const paid = Math.max(0, p.paid);
+  const minPart = Math.min(planned, Math.max(0, p.minimum ?? planned));
+  const extraPart = planned - minPart;
+  const towardMin = Math.min(paid, minPart);
+  const split = splitCardPayments(paid - towardMin, p.charged);
+  const minimumMet = paid > 0 && (paid >= minPart - 0.005 || p.billPaid);
+  return {
+    actual: round2(towardMin + split.payoff),
+    rebalance: split.rebalance,
+    due: round2(minimumMet ? towardMin + extraPart : planned),
+    minimumMet,
+  };
+}
+
 // How much of a month's "Debt Repayment" spending only paid back that month's own card charges —
 // the part to take OFF the category so the same dollars aren't counted twice (once in the
 // categories the purchases landed in, and again when checking paid the card back). Per card,
