@@ -12,6 +12,9 @@ import {
   type MatchCandidate,
 } from "@/server/actions/transactions";
 import { formatDate } from "@/server/lib/period";
+import { ruleSeedPattern, type RuleInput } from "@/server/lib/categorize";
+import type { CategoryOption } from "@/server/queries";
+import { RuleEditor } from "@/components/transactions/RuleEditor";
 
 export interface BillOption {
   id: number;
@@ -25,17 +28,30 @@ export interface BillOption {
 // statement line can cover two different bills (two cards paid through one
 // lender), so nothing is linked without being shown first.
 //
-// Once linked, the row shows which bill it belongs to and offers Unlink.
+// Once linked, the row shows which bill it belongs to and offers Unlink — plus, for a link made
+// by hand, "auto-link future payments like this", which opens the rule editor prefilled.
 export function ConvertToBill({
   transactionId,
   description,
   billId,
+  billRuleId = null,
+  txn,
+  categoryOptions = [],
   bills,
   path = "/transactions",
+  actionOnly = false,
 }: {
+  /** The row-actions copy: never shows the linked badge, but stays mounted after linking so the
+   *  "auto-link future payments" editor it opens survives the row turning linked. */
+  actionOnly?: boolean;
   transactionId: number;
   description: string;
   billId: number | null;
+  /** The saved rule that made this link (null = linked by hand). */
+  billRuleId?: number | null;
+  /** What a rule made from this row should be scoped by. */
+  txn?: { accountId: number | null; amount: string | null; direction: string };
+  categoryOptions?: CategoryOption[];
   bills: BillOption[];
   path?: string;
 }) {
@@ -50,7 +66,25 @@ export function ConvertToBill({
   const [recent, setRecent] = useState(true);
   const [lastSeen, setLastSeen] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [makeRule, setMakeRule] = useState(false);
+  // Set when the rule editor should open, prefilled for this bill.
+  const [ruleDraft, setRuleDraft] = useState<Partial<RuleInput> | null>(null);
   const btnRef = useRef<HTMLButtonElement>(null);
+  const ruleBtnRef = useRef<HTMLButtonElement>(null);
+
+  // A rule seeded from this row: same text, direction and account; pinned to this amount when
+  // the user picked "same amount" (two bills sharing one statement line differ by amount).
+  function seedRule(forBill: number, exactAmount: boolean): Partial<RuleInput> {
+    const amt = txn?.amount != null ? Math.abs(Number(txn.amount)) : null;
+    return {
+      pattern: ruleSeedPattern(description),
+      billId: forBill,
+      direction: txn?.direction === "Credit" ? "Credit" : txn?.direction === "Debit" ? "Debit" : null,
+      accountId: txn?.accountId ?? null,
+      amountMin: exactAmount && amt != null ? amt : null,
+      amountMax: exactAmount && amt != null ? amt : null,
+    };
+  }
 
   function openPanel() {
     setMode("new");
@@ -58,6 +92,7 @@ export function ConvertToBill({
     setExistingId("");
     setMatches([]);
     setChosen(new Set());
+    setMakeRule(false);
     setLoading(true);
     setOpen(true);
     previewBillConversion(transactionId).then((p) => {
@@ -99,6 +134,12 @@ export function ConvertToBill({
           : await linkTransactionToExistingBill(transactionId, Number(existingId), path, others);
       if (res.ok) {
         setOpen(false);
+        if (makeRule) {
+          // "Same amount" picked (some unticked, all ticked share the amount) → pin the amount.
+          const picked = matches.filter((m) => chosen.has(m.id));
+          const exact = picked.length < matches.length && picked.length > 0 && picked.every(sameAmount);
+          setRuleDraft(seedRule(res.billId, exact));
+        }
       } else {
         alert(res.error);
       }
@@ -117,6 +158,19 @@ export function ConvertToBill({
   const canSubmit =
     !pending && !loading && (mode === "new" ? name.trim().length > 0 : existingId !== "");
 
+  const ruleEditor = ruleDraft && (
+    <RuleEditor
+      open
+      onClose={() => setRuleDraft(null)}
+      anchorRef={billId != null && !actionOnly ? ruleBtnRef : undefined}
+      categoryOptions={categoryOptions}
+      mode={{ kind: "create", ...ruleDraft }}
+      note="Future payments matching this will be linked to the bill automatically. Narrow it by account or amount if another bill shares this statement line."
+    />
+  );
+
+  if (billId != null && actionOnly) return <>{ruleEditor}</>;
+
   // Already attributed to a bill — show which one, and a way out.
   if (billId != null) {
     const bill = bills.find((b) => b.id === billId);
@@ -125,11 +179,26 @@ export function ConvertToBill({
         <Link
           href={`/settings/bills/${billId}`}
           className="mp-badge mp-badge--outline mp-badge--sm max-w-[11rem] hover:!text-accent-text"
-          title={bill ? `Linked to ${bill.name}` : "Linked to a bill"}
+          title={
+            (bill ? `Linked to ${bill.name}` : "Linked to a bill") +
+            (billRuleId != null ? " automatically, by a saved rule" : "")
+          }
         >
-          <Icon name="link" size={11} />
+          <Icon name={billRuleId != null ? "wand-sparkles" : "link"} size={11} />
           <span className="mp-badge__label">{bill?.name ?? "Linked"}</span>
         </Link>
+        {billRuleId == null && txn && (
+          <button
+            ref={ruleBtnRef}
+            onClick={() => setRuleDraft(seedRule(billId, false))}
+            disabled={pending}
+            title="Auto-link future payments like this one (creates a rule)"
+            aria-label="Auto-link future payments like this one"
+            className="inline-flex rounded-full p-0.5 text-fg-3 hover:text-accent-text disabled:opacity-50"
+          >
+            <Icon name="wand-sparkles" size={12} />
+          </button>
+        )}
         <button
           onClick={unlink}
           disabled={pending}
@@ -139,6 +208,7 @@ export function ConvertToBill({
         >
           <Icon name="unlink" size={12} />
         </button>
+        {ruleEditor}
       </span>
     );
   }
@@ -278,6 +348,17 @@ export function ConvertToBill({
               ? "Adds this bill to the current month and links the transaction. Nothing is changed retroactively."
               : `Last seen ${lastSeen ? formatDate(lastSeen) : "a while ago"}, so it won't be added to the current month — the transactions are still linked.`}
         </p>
+        {txn && (
+          <label className="flex items-start gap-2 text-xs">
+            <input
+              type="checkbox"
+              checked={makeRule}
+              onChange={(e) => setMakeRule(e.target.checked)}
+              className="mt-0.5"
+            />
+            <span>Auto-link future payments like this (opens a rule to review)</span>
+          </label>
+        )}
         <div className="flex justify-end gap-2 pt-1">
           <button
             onClick={() => setOpen(false)}
@@ -310,6 +391,7 @@ export function ConvertToBill({
         <Icon name="receipt" size={16} />
       </button>
       {panel}
+      {ruleEditor}
     </>
   );
 }

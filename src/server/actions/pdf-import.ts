@@ -1,12 +1,13 @@
 "use server";
 
 import { db } from "@/server/db";
-import { transactions, accounts, accountBalances, categoryMappings } from "@/server/db/schema";
+import { transactions, accounts, accountBalances } from "@/server/db/schema";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { hashRows } from "@/server/lib/dedup";
 import { findPendingMatches, findSyncedDuplicates } from "@/server/lib/sync/import-guard";
 import { categorize, type CategoryRule } from "@/server/lib/categorize";
+import { accountIdsByNumber, loadRules } from "@/server/lib/rules";
 import { commitImport } from "@/server/actions/import";
 import { extractPdf } from "@/server/lib/pdf/extract";
 import { detectAndParse } from "@/server/lib/pdf/registry";
@@ -23,19 +24,6 @@ import type {
 import { requireSession } from "@/server/auth/session";
 import { attachPendingMatches } from "@/server/pending";
 
-async function loadRules(): Promise<CategoryRule[]> {
-  const ruleRows = await db.select().from(categoryMappings);
-  return ruleRows.map((r) => ({
-    id: r.id,
-    matchType: r.matchType,
-    pattern: r.pattern,
-    field: r.field,
-    category: r.category,
-    billId: r.billId,
-    priority: r.priority,
-  }));
-}
-
 // Build dedup-aware, category-aware preview rows for one statement's transactions and a
 // chosen account. Mirrors the CSV analyze in actions/import.ts so both paths dedup and
 // categorize identically.
@@ -51,6 +39,7 @@ async function analyzeRows(
   finalizeCount: number;
   errorCount: number;
 }> {
+  const accountId = (await accountIdsByNumber()).get(accountNumber) ?? null;
   const valid = txns.filter((t) => t.dateIso && t.amount != null);
   const hashes = hashRows(
     valid.map((t) => ({
@@ -95,7 +84,10 @@ async function analyzeRows(
     }
     const k = vi++;
     const hash = hashes[k];
-    const cat = categorize({ description: t.description, rawCategory: "" }, rules);
+    const cat = categorize(
+      { description: t.description, rawCategory: "", accountId, amount: t.amount, direction: t.direction },
+      rules,
+    );
     const net = t.direction === "Credit" ? t.amount : -t.amount;
     return {
       dedupHash: hash,
@@ -293,6 +285,7 @@ export async function commitPdfStatements(
   let errors = 0;
   let balancesRecorded = 0;
   let merged = 0;
+  let billsLinked = 0;
 
   // Ensure every referenced account exists (covers balance-only statements too).
   const acctNums = [...new Set(statements.map((s) => s.accountNumber).filter(Boolean))];
@@ -346,6 +339,7 @@ export async function commitPdfStatements(
       finalized += res.finalized;
       errors += res.errors;
       merged += res.merged;
+      billsLinked += res.billsLinked;
     }
     const acctId = s.accountNumber ? acctMap.get(s.accountNumber) : undefined;
     if (acctId) {
@@ -375,5 +369,5 @@ export async function commitPdfStatements(
   revalidatePath("/transactions");
   revalidatePath("/dashboard");
   revalidatePath("/import");
-  return { statements: statements.length, inserted, duplicates, finalized, errors, balancesRecorded, merged };
+  return { statements: statements.length, inserted, duplicates, finalized, errors, balancesRecorded, merged, billsLinked };
 }

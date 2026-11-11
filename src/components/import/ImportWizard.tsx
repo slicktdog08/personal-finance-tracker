@@ -478,6 +478,7 @@ export function ImportWizard({
                 {result.finalized ? ` · settled ${result.finalized} pending` : ""} · skipped {result.duplicates} duplicates ·{" "}
                 {result.errors} errors
                 {result.merged ? ` · merged ${result.merged} into pending transaction${result.merged === 1 ? "" : "s"}` : ""}
+                {result.billsLinked ? ` · linked ${result.billsLinked} to bills by rule` : ""}
                 {result.balancesRecorded
                   ? ` · recorded ${result.balancesRecorded} balance snapshot${result.balancesRecorded === 1 ? "" : "s"}`
                   : ""}
