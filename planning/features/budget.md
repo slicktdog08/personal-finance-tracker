@@ -328,3 +328,20 @@ the `goal_contributions.transaction_id` seam, not a budget column.
   [pay-schedule.md](pay-schedule.md) (income default), [cash-offsets.md](cash-offsets.md) (via
   `getCategorySpend`), [categorization.md](categorization.md) (bill linking for debt actuals).
 - Decisions: [../design/07-decisions.md](../design/07-decisions.md) D7.
+
+## Minimums, ledger ticks, and closing out a month (2026-11)
+
+- **Debt-line progress** (`debtLineProgress` in `server/lib/debt.ts`): a line's planned payment is
+  its minimum plus the extra. New charges on the card only eat into the extra — paying the minimum
+  is never reopened by a subscription that landed on the card. When the month's bill instance has a
+  settled status, the minimum counts as met at what was actually paid (a loan drafting $X against a
+  plan copied from last month's higher minimum is done). The envelope measures against `due`.
+- **Cash chart ticks from the ledger**: recorded days get rose/green ticks for posted cash-account
+  rows ≥ `CASH_MOVE_MIN` ($100), skipping moves between two cash accounts; hovering lists them. So a
+  past month shows the real bills and paychecks, not just the projected ones.
+- **Finalize** (`finalizeBudget` / `reopenBudget`, migration `0031_budget_finalize.sql`): only after
+  the month ends. Locks every line, freezes every plan write, and stores the report
+  (`server/lib/budget-outcome.ts`) in `budgets.outcome`. The report sweeps unspent envelopes back in,
+  takes out overspending, unplanned spending and debt paid beyond plan, then interest net of
+  rewards → the outcome; "by the balances" shows cash, debt and net change beside it. A finished
+  month that isn't finalized shows the same report as a live preview.

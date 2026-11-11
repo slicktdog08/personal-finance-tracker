@@ -168,6 +168,12 @@ export const transactions = mysqlTable(
     categoryRuleId: int("category_rule_id").references((): AnyMySqlColumn => categoryMappings.id, {
       onDelete: "set null",
     }),
+    // The bill-link twin of categoryRuleId: which saved rule linked billId/billInstanceId
+    // (null = linked by hand, or not linked). Rules never overwrite a hand-made link; cleared
+    // whenever the bill link is set manually; SET NULL when the rule is deleted.
+    billRuleId: int("bill_rule_id").references((): AnyMySqlColumn => categoryMappings.id, {
+      onDelete: "set null",
+    }),
     amount: decimal("amount", { precision: 12, scale: 2 }).notNull(),
     netAmount: decimal("net_amount", { precision: 12, scale: 2 }),
     direction: varchar("direction", { length: 8 }).notNull(),
@@ -208,6 +214,7 @@ export const transactions = mysqlTable(
     index("idx_tx_cat").on(t.category),
     index("idx_tx_bill").on(t.billId),
     index("idx_tx_cat_rule").on(t.categoryRuleId),
+    index("idx_tx_bill_rule").on(t.billRuleId),
     index("idx_tx_status").on(t.status),
   ],
 );
@@ -272,7 +279,14 @@ export const categoryMappings = mysqlTable("category_mappings", {
   matchType: varchar("match_type", { length: 12 }).notNull(), // contains | equals | regex
   pattern: varchar("pattern", { length: 255 }).notNull(),
   field: varchar("field", { length: 16 }).notNull().default("description"), // description | raw_category
-  category: varchar("category", { length: 48 }).notNull(),
+  // Optional extra conditions (null = any). See RULE_CONDITIONS in src/server/lib/categorize.ts.
+  accountId: int("account_id").references(() => accounts.id, { onDelete: "cascade" }),
+  direction: varchar("direction", { length: 8 }), // Debit | Credit
+  amountMin: decimal("amount_min", { precision: 12, scale: 2 }),
+  amountMax: decimal("amount_max", { precision: 12, scale: 2 }),
+  // Actions — each optional, at least one set. category: set the transaction's category;
+  // billId: link it to the bill (and that bill's instance on the transaction's month).
+  category: varchar("category", { length: 48 }),
   billId: int("bill_id").references(() => bills.id),
   priority: int("priority").notNull().default(100),
   createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`),
@@ -555,6 +569,10 @@ export const budgets = mysqlTable(
     // so the snowball keeps sweeping the leftover with no manual "Rebalance" click.
     autoRebalance: boolean("auto_rebalance").notNull().default(false),
     notes: text("notes"),
+    // Set when the month is closed out: the plan is frozen (every write refuses) and `outcome`
+    // holds the report as it stood — see server/lib/budget-outcome.ts. Reopening clears both.
+    finalizedAt: timestamp("finalized_at"),
+    outcome: json("outcome"),
     createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`),
     updatedAt: timestamp("updated_at")
       .default(sql`CURRENT_TIMESTAMP`)

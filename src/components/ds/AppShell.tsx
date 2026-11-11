@@ -178,7 +178,7 @@ export function AppShell({ billsHref, email, signOut, signOutNav, sidebarCollaps
     <div className="mp-root">
       <div className="mp-shell" data-sidebar={collapsed ? "collapsed" : "expanded"}>
         <aside className="mp-sidebar">
-          {/* The mark sits in the icon column so it stays put while the wordmark fades with the width. */}
+          {/* The mark is centred on the icon column so it stays put while the wordmark fades with the width. */}
           <SidebarBrand />
           {NAV_GROUPS.map((g) => (
             <nav key={g.label} className="mp-navgroup" aria-label={g.label}>
@@ -207,11 +207,10 @@ export function AppShell({ billsHref, email, signOut, signOutNav, sidebarCollaps
               syncLabel={sync?.label}
               signOut={signOut}
               signOutNav={signOutNav}
-              collapsed={collapsed}
-              onToggle={toggleSidebar}
             />
           </div>
         </aside>
+        <SidebarToggle collapsed={collapsed} onToggle={toggleSidebar} />
 
         <div className="mp-main">
           <TopBar section={section} syncEnabled={!!sync?.enabled} />
@@ -302,50 +301,39 @@ const SidebarFoot = memo(function SidebarFoot({
   syncLabel,
   signOut,
   signOutNav,
-  collapsed,
-  onToggle,
-}: Pick<AppShellProps, "email" | "signOut" | "signOutNav"> & { syncEnabled: boolean; syncLabel?: string; collapsed: boolean; onToggle: () => void }) {
+}: Pick<AppShellProps, "email" | "signOut" | "signOutNav"> & { syncEnabled: boolean; syncLabel?: string }) {
   return (
     <>
-      {/* Text-only rows sit in folds, so collapsing animates their height to zero instead of popping out. */}
+      {/* Every row is an icon row, so the rail keeps all of them: sync and sign-out stay one click away collapsed. */}
+      {syncEnabled && <SyncButton variant="nav" navLabel={syncLabel} />}
       {signOutNav ?? (
         <div className="mp-sidebar__fold">
           <div className="mp-sidebar__signout px-1">{signOut}</div>
         </div>
       )}
-      {(email || syncEnabled) && (
-        <div className="mp-sidebar__fold">
-          <div className="mp-sidebar__user flex items-center gap-1">
-            <div className="min-w-0 flex-1">
-              {email && (
-                <div className="truncate" title={email}>
-                  {email}
-                </div>
-              )}
-              {syncEnabled && <div className="truncate">{syncLabel}</div>}
-            </div>
-            {syncEnabled && <SyncButton className="mp-btn--sm shrink-0" />}
-          </div>
+      {/* Fades rather than folds, so the rows above never shift when the rail closes. */}
+      {email && (
+        <div className="mp-sidebar__user" title={email}>
+          {email}
         </div>
       )}
-      {/* Last in the bottom-anchored footer, so it sits in the same spot open or closed. */}
-      <button
-        type="button"
-        className="mp-navitem mp-sidebar__toggle"
-        onClick={onToggle}
-        aria-expanded={!collapsed}
-        aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-        title={collapsed ? "Expand sidebar" : undefined}
-      >
-        <span className="mp-sidebar__toggle-icon">
-          <Icon name="panel-left-close" size={18} />
-          <Icon name="panel-left-open" size={18} />
-        </span>
-        <span className="mp-navitem__label">Collapse</span>
-      </button>
     </>
   );
 }, sameExceptSlots);
+
+/**
+ * A small round handle riding the sidebar's right edge, level with the brand mark. It is a sibling
+ * of the sidebar (which clips its own overflow) and follows the edge as the width animates; the
+ * chevron always points the way the edge will move.
+ */
+const SidebarToggle = memo(function SidebarToggle({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => void }) {
+  const label = collapsed ? "Expand sidebar" : "Collapse sidebar";
+  return (
+    <button type="button" className="mp-railtoggle" onClick={onToggle} aria-expanded={!collapsed} aria-label={label} title={label}>
+      <Icon name="chevron-left" size={14} strokeWidth={2.2} />
+    </button>
+  );
+});
 
 const TopBar = memo(function TopBar({ section, syncEnabled }: { section: SectionId | null; syncEnabled: boolean }) {
   return (

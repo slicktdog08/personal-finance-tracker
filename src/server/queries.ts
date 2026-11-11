@@ -1,5 +1,5 @@
 import "server-only";
-import type { CategoryRule } from "@/server/lib/categorize";
+import { ruleFromRow, type CategoryRule } from "@/server/lib/categorize";
 import { db } from "@/server/db";
 import {
   periods,
@@ -33,7 +33,7 @@ import type { PayFrequency } from "@/constants/enums";
 import { round2, paydaysInMonth, type DebtInput } from "@/server/lib/budget";
 import { planMonth, projectCash, type CashProjection, type MonthSegment, type ProjectionPending } from "@/server/lib/cash-projection";
 import { isPayrollDescription, type ObservedDeposit } from "@/server/lib/payday-reconcile";
-import { repaymentRebalance, splitCardPayments } from "@/server/lib/debt";
+import { debtLineProgress, repaymentRebalance } from "@/server/lib/debt";
 import { cardRebalanceFrom, cardStanding, rebalancePlans, type CardStanding } from "@/server/lib/card-rebalance";
 import {
   and,
@@ -729,6 +729,60 @@ export async function getBalanceTrends(): Promise<BalanceTrendPoint[]> {
   });
 }
 
+export interface AccountTrend {
+  id: number;
+  label: string;
+  institution: string | null;
+  accountType: string;
+  active: boolean;
+  /** Month-end balance for each label passed in (same order); null before its first snapshot. */
+  values: (number | null)[];
+}
+
+// Each account's balance as of every requested month's end — the same "latest snapshot ≤
+// month-end" rule as getBalanceTrends, but kept per account so the Trends page can say which
+// accounts moved. Loans are floored at zero like the totals.
+export async function getAccountBalanceTrends(labels: string[]): Promise<AccountTrend[]> {
+  await requireSession();
+  if (!labels.length) return [];
+  const [acctRows, balRows] = await Promise.all([
+    db
+      .select({ id: accounts.id, label: accounts.label, institution: accounts.institution, accountType: accounts.accountType, active: accounts.active, accountNumber: accounts.accountNumber })
+      .from(accounts)
+      .orderBy(asc(accounts.label)),
+    db
+      .select({ accountId: accountBalances.accountId, balance: accountBalances.balance, asOf: accountBalances.asOf })
+      .from(accountBalances)
+      .orderBy(asc(accountBalances.asOf), asc(accountBalances.id)),
+  ]);
+  const byAccount = new Map<number, { asOf: string; balance: number }[]>();
+  for (const b of balRows) {
+    const n = toNum(b.balance);
+    if (n == null) continue;
+    const arr = byAccount.get(b.accountId);
+    if (arr) arr.push({ asOf: b.asOf, balance: n });
+    else byAccount.set(b.accountId, [{ asOf: b.asOf, balance: n }]);
+  }
+  const ends = labels.map((l) => {
+    const p = parsePeriodLabel(l);
+    return p ? monthBounds(p.year, p.month).end : `${l}-31`;
+  });
+  return acctRows.flatMap((a) => {
+    const snaps = byAccount.get(a.id);
+    if (!snaps) return [];
+    const type = a.accountType ?? "";
+    const values = ends.map((end) => {
+      let bal: number | null = null;
+      for (const s of snaps) {
+        if (s.asOf <= end) bal = s.balance;
+        else break;
+      }
+      return bal != null && type === "Loan" ? Math.max(0, bal) : bal;
+    });
+    return [{ id: a.id, label: a.label ?? `…${a.accountNumber}`, institution: a.institution, accountType: type, active: !!a.active, values }];
+  });
+}
+
 // Every asset with its value history (newest first) and latest value. Values are what it's
 // worth, not what's owed — a car loan is a separate Loan account on Debts.
 export async function getAssets() {
@@ -1118,6 +1172,7 @@ export async function getTransactionsPage(q: TxQuery) {
       accountLabel: accounts.label,
       periodLabel: periods.label,
       billId: transactions.billId,
+      billRuleId: transactions.billRuleId,
       accountType: accounts.accountType,
       pending: transactions.pending,
       source: transactions.source,
@@ -1984,15 +2039,7 @@ export async function getCategoryMappings() {
 // Saved rules in the plain shape client components use (no timestamps).
 export async function getCategoryRules(): Promise<CategoryRule[]> {
   const rows = await getCategoryMappings();
-  return rows.map((r) => ({
-    id: r.id,
-    matchType: r.matchType,
-    pattern: r.pattern,
-    field: r.field,
-    category: r.category,
-    billId: r.billId,
-    priority: r.priority,
-  }));
+  return rows.map(ruleFromRow);
 }
 
 export async function getImportBatches() {
@@ -2586,10 +2633,15 @@ export interface BudgetLineRow {
   locked: boolean;
   sortOrder: number;
   notes: string | null;
-  // What the month's transactions say so far. On a debt line it's the PAYOFF: payments beyond
-  // what was newly charged to the card this month (splitCardPayments) — paying back new spending
-  // only rebalances the card, and that spending already shows in its categories.
+  // What the month's transactions say so far. On a debt line it's the minimum paid plus the PAYOFF
+  // beyond it: extra payments past what was newly charged to the card this month
+  // (debtLineProgress) — paying back new spending only rebalances the card, and that spending
+  // already shows in its categories. New charges never eat into the minimum.
   actual: number;
+  // What the envelope measures `actual` against: `planned`, except once the minimum is met (paid
+  // in full, or the month's bill marked settled) the minimum part counts at what was paid.
+  due: number;
+  minimumMet: boolean;
   // Debt lines only (0 elsewhere): every linked payment this month, the new charges on the
   // liability itself, and the part of `paid` that just covered those charges.
   paid: number;
@@ -2639,6 +2691,32 @@ export interface BudgetView {
    */
   unplannedSpend: { total: number; categories: { category: string | null; amount: number }[] };
   debts: DebtInput[]; // every liability with a balance — drives the projection + "add debt"
+  /** Interest charged to liabilities this month, and rewards/cashback credited to them. */
+  carryCost: { interest: number; rewards: number };
+  /** Every active liability's balance the day before the month vs. its end (null: never recorded). */
+  debtTotals: { start: number | null; end: number | null };
+  /** When the month was closed out (ISO), else null; `outcome` is the report frozen then. */
+  finalizedAt: string | null;
+  outcome: import("@/server/lib/budget-outcome").BudgetOutcome | null;
+}
+
+/** Interest (Debits) and rewards (Credits) in the interest categories on the given liabilities. */
+async function carryCostForPeriod(periodLabel: string, accountIds: number[]): Promise<{ interest: number; rewards: number }> {
+  if (!accountIds.length) return { interest: 0, rewards: 0 };
+  const rows = await db
+    .select({ direction: transactions.direction, total: sql<string>`COALESCE(SUM(${transactions.amount}), 0)` })
+    .from(transactions)
+    .innerJoin(periods, eq(periods.id, transactions.periodId))
+    .where(
+      and(
+        eq(periods.label, periodLabel),
+        inArray(transactions.accountId, accountIds),
+        inArray(transactions.category, ["Interest", "Interest/Rewards"]),
+      ),
+    )
+    .groupBy(transactions.direction);
+  const by = (d: string) => round2(toNum(rows.find((r) => r.direction === d)?.total) ?? 0);
+  return { interest: by("Debit"), rewards: by("Credit") };
 }
 
 /** Every liability as a plain DebtInput (balance/apr/min as of `asOf`). */
@@ -2734,6 +2812,21 @@ async function liabilityChargesForPeriod(periodLabel: string, accountIds: number
   return out;
 }
 
+/** Bill ids whose instance this month carries a settled status (Paid, Autopay, …). */
+async function settledBillsForPeriod(periodLabel: string, billIds: number[]): Promise<Set<number>> {
+  if (!billIds.length) return new Set();
+  const [rows, statuses] = await Promise.all([
+    db
+      .select({ billId: billInstances.billId, status: billInstances.status })
+      .from(billInstances)
+      .innerJoin(periods, eq(periods.id, billInstances.periodId))
+      .where(and(eq(periods.label, periodLabel), inArray(billInstances.billId, billIds))),
+    db.select({ name: billStatuses.name, isSettled: billStatuses.isSettled }).from(billStatuses),
+  ]);
+  const settled = new Set(statuses.filter((s) => s.isSettled).map((s) => s.name));
+  return new Set(rows.filter((r) => r.billId != null && settled.has(r.status)).map((r) => r.billId!));
+}
+
 export async function getBudgetView(periodLabel: string): Promise<BudgetView | null> {
   await requireSession();
   const [row] = await db
@@ -2745,6 +2838,8 @@ export async function getBudgetView(periodLabel: string): Promise<BudgetView | n
       plannedIncome: budgets.plannedIncome,
       autoRebalance: budgets.autoRebalance,
       notes: budgets.notes,
+      finalizedAt: budgets.finalizedAt,
+      outcome: budgets.outcome,
       year: periods.year,
       month: periods.month,
     })
@@ -2790,9 +2885,11 @@ export async function getBudgetView(periodLabel: string): Promise<BudgetView | n
   // a meaningful pending/balance-today comparison, like the dashboard.
   const today = todayIso();
   const isCurrent = today.slice(0, 7) === periodLabel;
-  const [paidBy, chargedBy, rebalanceStart, pendingTxns] = await Promise.all([
+  const [carryCost, paidBy, chargedBy, settledBills, rebalanceStart, pendingTxns] = await Promise.all([
+    carryCostForPeriod(periodLabel, liabNow.map((l) => l.id)),
     debtPaymentsForPeriod(periodLabel, debtAccts),
     liabilityChargesForPeriod(periodLabel, debtAccts.map((a) => a.id)),
+    settledBillsForPeriod(periodLabel, debtAccts.map((a) => a.billId).filter((b): b is number => b != null)),
     isCurrent && debtAccts.length ? getLiabilityStartBalances(start, today) : Promise.resolve(null),
     isCurrent && debtAccts.length ? getPendingTransactions() : Promise.resolve([]),
   ]);
@@ -2851,7 +2948,11 @@ export async function getBudgetView(periodLabel: string): Promise<BudgetView | n
     const meta = l.category ? catMeta.get(l.category) : undefined;
     const paid = isDebt && l.accountId != null ? round2(paidBy.get(l.accountId) ?? 0) : 0;
     const charged = isDebt && l.accountId != null ? chargedBy.get(l.accountId) ?? 0 : 0;
-    const split = splitCardPayments(paid, charged);
+    const planned = toNum(l.planned) ?? 0;
+    const minimum = isDebt ? toNum(now?.minPayment) ?? toNum(l.minimum) : toNum(l.minimum);
+    const progress = isDebt
+      ? debtLineProgress({ planned, minimum, paid, charged, billPaid: now?.billId != null && settledBills.has(now.billId) })
+      : null;
     const rebalanceRow = isDebt && l.accountId != null ? rebalanceRows.get(l.accountId) : undefined;
     return {
       id: l.id,
@@ -2859,20 +2960,22 @@ export async function getBudgetView(periodLabel: string): Promise<BudgetView | n
       label: l.label,
       category: l.category,
       accountId: l.accountId,
-      planned: toNum(l.planned) ?? 0,
+      planned,
       // The account's minimum as of the month wins over the one copied onto the line when it was
       // added: minimums change month to month, and a stale copy floored the plan above the real one.
-      minimum: isDebt ? toNum(now?.minPayment) ?? toNum(l.minimum) : toNum(l.minimum),
+      minimum,
+      due: progress?.due ?? planned,
+      minimumMet: progress?.minimumMet ?? false,
       isTarget: !!l.isTarget,
       locked: !!l.locked,
       sortOrder: l.sortOrder,
       notes: l.notes,
       paid,
       charged,
-      rebalance: split.rebalance,
+      rebalance: progress?.rebalance ?? 0,
       standing: rebalanceRow ? cardStanding(rebalanceRow) : null,
-      actual: isDebt
-        ? split.payoff
+      actual: progress
+        ? progress.actual
         : l.category
           ? spendBy.get(l.category) ?? 0
           : 0,
@@ -2915,6 +3018,17 @@ export async function getBudgetView(periodLabel: string): Promise<BudgetView | n
     cash: { start: sumCash(cashStart), now: sumCash(cashNow), asOf: cashAsOf },
     unassignedDebtPayments: toNum(repay?.total) ?? 0,
     unplannedSpend: { total: round2(unplannedRows.reduce((t, c) => t + c.amount, 0)), categories: unplannedRows },
+    carryCost,
+    debtTotals: {
+      start: liabStart.some((l) => l.active && toNum(l.balance) != null)
+        ? round2(liabStart.filter((l) => l.active).reduce((t, l) => t + Math.max(0, toNum(l.balance) ?? 0), 0))
+        : null,
+      end: liabNow.some((l) => l.active && toNum(l.balance) != null)
+        ? round2(liabNow.filter((l) => l.active).reduce((t, l) => t + Math.max(0, toNum(l.balance) ?? 0), 0))
+        : null,
+    },
+    finalizedAt: row.finalizedAt ? new Date(row.finalizedAt).toISOString() : null,
+    outcome: (row.outcome as import("@/server/lib/budget-outcome").BudgetOutcome | null) ?? null,
     debts: liabNow
       .filter((l) => l.active)
       .map((l) => ({
@@ -3367,6 +3481,56 @@ export interface DailyCashPoint {
   recorded: boolean;
   /** Accounts contributing on this day (those with any snapshot on/before it). */
   accounts: number;
+  /**
+   * What actually moved cash that day, from the ledger: posted rows on cash accounts of at least
+   * CASH_MOVE_MIN (bills, card payments, paychecks), signed (+ in, − out). Moves between two cash
+   * accounts are left out — they don't change cash on hand. Biggest first.
+   */
+  moves: { label: string; amount: number; billId: number | null }[];
+}
+
+/** A ledger row this size or bigger gets a tick on the cash chart. */
+export const CASH_MOVE_MIN = 100;
+
+/** Substantial posted cash movements in [start, end], keyed by date (see DailyCashPoint.moves). */
+async function cashMovesByDay(start: string, end: string, cashIds: number[]): Promise<Map<string, DailyCashPoint["moves"]>> {
+  const out = new Map<string, DailyCashPoint["moves"]>();
+  if (!cashIds.length) return out;
+  const partner = alias(transactions, "partner");
+  const rows = await db
+    .select({
+      date: transactions.txnDate,
+      amount: transactions.amount,
+      direction: transactions.direction,
+      description: transactions.description,
+      billId: transactions.billId,
+      billName: bills.name,
+      partnerAccount: partner.accountId,
+    })
+    .from(transactions)
+    .leftJoin(bills, eq(bills.id, transactions.billId))
+    .leftJoin(partner, eq(partner.id, transactions.transferPartnerId))
+    .where(
+      and(
+        inArray(transactions.accountId, cashIds),
+        gte(transactions.txnDate, start),
+        lte(transactions.txnDate, end),
+        eq(transactions.pending, false),
+        gte(transactions.amount, String(CASH_MOVE_MIN)),
+      ),
+    );
+  const cash = new Set(cashIds);
+  for (const r of rows) {
+    if (r.partnerAccount != null && cash.has(r.partnerAccount)) continue; // checking ↔ savings
+    const amt = (toNum(r.amount) ?? 0) * (r.direction === "Credit" ? 1 : -1);
+    const label = r.billName ?? (r.direction === "Credit" && isPayrollDescription(r.description ?? "") ? "Paycheck" : (r.description ?? "").trim().slice(0, 40));
+    const day = String(r.date).slice(0, 10);
+    const list = out.get(day) ?? [];
+    list.push({ label, amount: round2(amt), billId: r.billId });
+    out.set(day, list);
+  }
+  for (const list of out.values()) list.sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount));
+  return out;
 }
 
 export async function getDailyCashOnHand(periodLabel: string): Promise<DailyCashPoint[]> {
@@ -3390,6 +3554,7 @@ export async function getDailyCashOnHand(periodLabel: string): Promise<DailyCash
   const stop = lastRecorded < end ? lastRecorded : end;
   if (stop < start) return [];
 
+  const moves = await cashMovesByDay(start, stop, accts.map((a) => a.id));
   const current = new Map<number, number>();
   let i = 0;
   for (; i < snaps.length && snaps[i].asOf < start; i++) current.set(snaps[i].accountId, toNum(snaps[i].balance) ?? 0);
@@ -3403,7 +3568,7 @@ export async function getDailyCashOnHand(periodLabel: string): Promise<DailyCash
     }
     let total = 0;
     for (const v of current.values()) total += v;
-    out.push({ date, total: round2(total), recorded, accounts: current.size });
+    out.push({ date, total: round2(total), recorded, accounts: current.size, moves: moves.get(date) ?? [] });
   }
   return out;
 }
