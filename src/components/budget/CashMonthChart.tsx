@@ -8,7 +8,7 @@ import type { CashProjection } from "@/server/lib/cash-projection";
 import type { DailyCashPoint } from "@/server/queries";
 
 type Day =
-  | { date: string; balance: number; kind: "actual"; recorded: boolean }
+  | { date: string; balance: number; kind: "actual"; recorded: boolean; moves: DailyCashPoint["moves"] }
   | { date: string; balance: number; kind: "projected"; paycheck: boolean; outflow: boolean; spread: number };
 
 /**
@@ -35,12 +35,12 @@ export function CashMonthChart({
 }) {
   const [hover, setHover] = useState<number | null>(null);
 
-  const actual: Day[] = daily.map((d) => ({ date: d.date, balance: d.total, kind: "actual", recorded: d.recorded }));
+  const actual: Day[] = daily.map((d) => ({ date: d.date, balance: d.total, kind: "actual", recorded: d.recorded, moves: d.moves ?? [] }));
   const lastActual = actual[actual.length - 1]?.date ?? null;
   const projected: Day[] = (p?.days ?? [])
     .filter((d) => d.date >= monthStart && d.date <= horizonEnd && (lastActual == null || d.date > lastActual))
     .map((d) => ({ date: d.date, balance: d.balance, kind: "projected", paycheck: d.paycheck, outflow: d.outflow, spread: d.spread }));
-  const seed: Day[] = actual.length === 0 && p ? [{ date: p.asOf < monthStart ? monthStart : p.asOf, balance: p.start, kind: "actual", recorded: false }] : [];
+  const seed: Day[] = actual.length === 0 && p ? [{ date: p.asOf < monthStart ? monthStart : p.asOf, balance: p.start, kind: "actual", recorded: false, moves: [] }] : [];
   const days: Day[] = [...seed, ...actual, ...projected];
   if (days.length < 2) return null;
 
@@ -127,7 +127,10 @@ export function CashMonthChart({
         <p key={active.date} className="h-8 text-xs leading-4 line-clamp-2 motion-safe:animate-[rise_.18s_ease-out]">
           <span className="text-fg-3">
             {active.kind === "actual" ? (
-              active.recorded ? "balance recorded" : "carried forward"
+              <>
+                {active.recorded ? "balance recorded" : "carried forward"}
+                {active.moves.length > 0 && ` · ${active.moves.map((m) => `${m.label} ${m.amount >= 0 ? "+" : "−"}${formatMoney(Math.abs(m.amount))}`).join(" · ")}`}
+              </>
             ) : (
               <>
                 projected
@@ -179,6 +182,23 @@ export function CashMonthChart({
           <polyline points={planPts} fill="none" stroke={planColor} strokeWidth="1.5" strokeOpacity="0.75" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
         )}
         {actualDays.map((d) => (d.kind === "actual" && d.recorded ? <circle key={d.date} cx={x(d.date)} cy={y(d.balance)} r="2.5" fill={color} /> : null))}
+        {/* What actually happened: a tick under each day the ledger shows a substantial bill or
+            payment going out (rose) or pay coming in (green) — the facts behind the solid line. */}
+        {actualDays.map((d) => {
+          if (d.kind !== "actual" || !d.moves.length) return null;
+          const net = d.moves.reduce((s, m) => s + m.amount, 0);
+          const out = d.moves.some((m) => m.amount < 0);
+          const inn = d.moves.some((m) => m.amount > 0);
+          const tick = (c: string, len: number, w: number, dx = 0) => (
+            <line key={`${d.date}-${c}`} x1={x(d.date) + dx} x2={x(d.date) + dx} y1={height - padBottom + 2} y2={height - padBottom + len} stroke={c} strokeWidth={w} />
+          );
+          return (
+            <g key={`m-${d.date}`}>
+              {out && tick("var(--mp-money-over)", net < -1000 ? 10 : 7, 2, inn ? -1.5 : 0)}
+              {inn && tick("var(--mp-money-income)", 10, 3, out ? 1.5 : 0)}
+            </g>
+          );
+        })}
         {projected.map((d) =>
           d.kind === "projected" && (d.paycheck || d.outflow) ? (
             <line key={d.date} x1={x(d.date)} x2={x(d.date)} y1={height - padBottom + 2} y2={height - padBottom + (d.paycheck ? 10 : 7)} stroke={d.paycheck ? "var(--mp-money-income)" : "var(--mp-money-over)"} strokeWidth={d.paycheck ? 3 : 2} />

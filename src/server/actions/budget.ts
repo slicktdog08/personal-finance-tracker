@@ -15,6 +15,10 @@ import type { PlannedLine } from "@/server/lib/budget";
 import { round2, absorbDelta } from "@/server/lib/budget";
 import { toNum } from "@/server/lib/money";
 import { requireSession } from "@/server/auth/session";
+import { getBudgetView } from "@/server/queries";
+import { outcomeFromView } from "@/server/lib/budget-outcome";
+import { monthBounds } from "@/server/lib/period";
+import { todayIso } from "@/server/lib/pay-schedule";
 
 // A budget shows on its own page and in the dashboard panel — refresh both on every write.
 function revalidateBudget() {
@@ -23,6 +27,18 @@ function revalidateBudget() {
 }
 
 type Result = { ok: boolean; error?: string; id?: number };
+
+const FROZEN = "This month is finalized. Reopen it to change the plan.";
+
+/** True when the budget is closed out — every plan write refuses until it's reopened. */
+async function isFrozen(budgetId: number): Promise<boolean> {
+  const [b] = await db.select({ f: budgets.finalizedAt }).from(budgets).where(eq(budgets.id, budgetId)).limit(1);
+  return !!b?.f;
+}
+async function isLineFrozen(lineId: number): Promise<boolean> {
+  const [l] = await db.select({ budgetId: budgetLines.budgetId }).from(budgetLines).where(eq(budgetLines.id, lineId)).limit(1);
+  return l ? isFrozen(l.budgetId) : false;
+}
 
 const money = (n: unknown): number | null => {
   const v = typeof n === "number" ? n : toNum(n as string);
@@ -115,6 +131,7 @@ export async function updateBudget(
   },
 ): Promise<void> {
   await requireSession();
+  if (await isFrozen(id)) throw new Error(FROZEN);
   const set: Record<string, unknown> = {};
   if (patch.plannedIncome !== undefined)
     set.plannedIncome = patch.plannedIncome == null ? null : String(money(patch.plannedIncome) ?? 0);
@@ -131,6 +148,7 @@ export async function updateBudget(
 /** Delete the month's plan. Lines cascade. The transactions it was measured against are untouched. */
 export async function deleteBudget(id: number): Promise<void> {
   await requireSession();
+  if (await isFrozen(id)) throw new Error(FROZEN);
   await db.delete(budgets).where(eq(budgets.id, id));
   revalidateBudget();
 }
@@ -147,6 +165,7 @@ export async function addBudgetLine(
   },
 ): Promise<Result> {
   await requireSession();
+  if (await isFrozen(budgetId)) return { ok: false, error: FROZEN };
   if (!BUDGET_LINE_KINDS.includes(input.kind as (typeof BUDGET_LINE_KINDS)[number]))
     return { ok: false, error: "Unknown line kind." };
   const label = input.label.trim();
@@ -190,6 +209,7 @@ export async function updateBudgetLine(
   patch: { planned?: number; label?: string; notes?: string | null; locked?: boolean },
 ): Promise<Result> {
   await requireSession();
+  if (await isLineFrozen(id)) return { ok: false, error: FROZEN };
   const set: Record<string, unknown> = {};
   if (patch.locked !== undefined) set.locked = !!patch.locked;
   if (patch.planned !== undefined && patch.locked === undefined) {
@@ -222,6 +242,7 @@ export async function updateBudgetLine(
 
 export async function deleteBudgetLine(id: number): Promise<void> {
   await requireSession();
+  if (await isLineFrozen(id)) throw new Error(FROZEN);
   const [line] = await db
     .select({ budgetId: budgetLines.budgetId })
     .from(budgetLines)
@@ -235,6 +256,7 @@ export async function deleteBudgetLine(id: number): Promise<void> {
 /** Move the snowball focus to another debt line. Exactly one line carries the flag. */
 export async function setBudgetTarget(budgetId: number, lineId: number): Promise<Result> {
   await requireSession();
+  if (await isFrozen(budgetId)) return { ok: false, error: FROZEN };
   const [line] = await db
     .select({ id: budgetLines.id, kind: budgetLines.kind })
     .from(budgetLines)
@@ -314,6 +336,7 @@ async function autoRebalanceIfOn(budgetId: number): Promise<void> {
 /** The manual "Rebalance extra →" button. */
 export async function rebalanceBudget(budgetId: number, targetBalance?: number | null): Promise<Result> {
   await requireSession();
+  if (await isFrozen(budgetId)) return { ok: false, error: FROZEN };
   const r = await applyRebalance(budgetId, targetBalance);
   revalidateBudget();
   return { ok: r.ok, error: r.error };
@@ -332,6 +355,7 @@ export async function moveBudgetAmount(
   amount: number,
 ): Promise<Result> {
   await requireSession();
+  if (await isFrozen(budgetId)) return { ok: false, error: FROZEN };
   const amt = money(amount);
   if (amt == null || amt <= 0) return { ok: false, error: "Enter an amount to move." };
   if (fromLineId === toLineId) return { ok: false, error: "Pick two different lines." };
@@ -366,6 +390,7 @@ export async function setBudgetLinePlanned(
   planned: number,
 ): Promise<Result & { absorbed?: { id: number; label: string; from: number; to: number }[] }> {
   await requireSession();
+  if (await isFrozen(budgetId)) return { ok: false, error: FROZEN };
   const v = money(planned);
   if (v == null || v < 0) return { ok: false, error: "Planned amount can't be negative." };
   const lines = await db.select().from(budgetLines).where(eq(budgetLines.budgetId, budgetId));
@@ -401,12 +426,49 @@ export async function setBudgetLinePlanned(
  */
 export async function setBudgetLinesLocked(budgetId: number, lineIds: number[], locked: boolean): Promise<Result> {
   await requireSession();
+  if (await isFrozen(budgetId)) return { ok: false, error: FROZEN };
   const ids = lineIds.filter((id) => Number.isInteger(id));
   if (!ids.length) return { ok: true };
   await db
     .update(budgetLines)
     .set({ locked: !!locked })
     .where(and(eq(budgetLines.budgetId, budgetId), inArray(budgetLines.id, ids)));
+  revalidateBudget();
+  return { ok: true };
+}
+
+/**
+ * Close out a finished month: freeze the plan (every write above refuses while it's set), lock
+ * every line, and keep the month's report as it stands now — the sweep of unspent envelopes,
+ * overspending, unplanned spending, debt paid vs. due, and interest net of rewards
+ * (server/lib/budget-outcome.ts). Only once the month is over: until then there's no outcome yet.
+ */
+export async function finalizeBudget(budgetId: number): Promise<Result> {
+  await requireSession();
+  const [b] = await db
+    .select({ label: periods.label, year: periods.year, month: periods.month, finalizedAt: budgets.finalizedAt })
+    .from(budgets)
+    .innerJoin(periods, eq(periods.id, budgets.periodId))
+    .where(eq(budgets.id, budgetId))
+    .limit(1);
+  if (!b) return { ok: false, error: "Budget not found." };
+  if (b.finalizedAt) return { ok: false, error: "This month is already finalized." };
+  if (todayIso() <= monthBounds(b.year, b.month).end) return { ok: false, error: "A month can be finalized once it's over." };
+  const view = await getBudgetView(b.label);
+  if (!view) return { ok: false, error: "Budget not found." };
+  const outcome = outcomeFromView(view);
+  await db.transaction(async (tx) => {
+    await tx.update(budgetLines).set({ locked: true }).where(eq(budgetLines.budgetId, budgetId));
+    await tx.update(budgets).set({ finalizedAt: new Date(), outcome }).where(eq(budgets.id, budgetId));
+  });
+  revalidateBudget();
+  return { ok: true };
+}
+
+/** Undo a close-out: the plan is editable again and the frozen report is dropped. */
+export async function reopenBudget(budgetId: number): Promise<Result> {
+  await requireSession();
+  await db.update(budgets).set({ finalizedAt: null, outcome: null }).where(eq(budgets.id, budgetId));
   revalidateBudget();
   return { ok: true };
 }
