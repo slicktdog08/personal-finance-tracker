@@ -78,7 +78,8 @@ html[data-splash="off"] .mp-splash{display:none}
 /* <LinkPending> drops a zero-size marker inside a Link. It carries data-pending while the
    navigation is in flight (useLinkStatus), so the item you tapped reads as chosen at once even
    before the route commits; the icon pulses until it does. */
-.mp-linkpending{display:inline-block;width:0;height:0;overflow:hidden}
+/* Out of flow: as a flex item it would cost its parent one gap, pushing link icons right of button icons. */
+.mp-linkpending{position:absolute;width:0;height:0;overflow:hidden}
 .mp-navitem,.mp-tab,.mp-subtabs>a,.mp-menuitem{-webkit-tap-highlight-color:transparent}
 .mp-navitem:active,.mp-menuitem:active{background:var(--mp-bg-active)}
 .mp-navitem:has(.mp-linkpending[data-pending]),.mp-menuitem:has(.mp-linkpending[data-pending]){background:var(--mp-bg-active);color:var(--mp-text-1)}

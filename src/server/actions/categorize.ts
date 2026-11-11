@@ -1,11 +1,23 @@
 "use server";
 
 import { db } from "@/server/db";
-import { transactions, categoryMappings } from "@/server/db/schema";
-import { and, eq, isNull, like, or, inArray, asc, sql, type SQL } from "drizzle-orm";
+import { transactions, categoryMappings, accounts, bills } from "@/server/db/schema";
+import { and, eq, isNull, like, or, inArray, asc, sql, type SQL, type AnyColumn } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import type { MatchParams } from "@/server/lib/categorize-dto";
-import { matchesRule, type CategoryRule, type RuleInput } from "@/server/lib/categorize";
+import { cleanRuleInput, ruleFromRow, type CategoryRule, type RuleInput } from "@/server/lib/categorize";
+import {
+  applyRules,
+  getRuleById,
+  previewRule,
+  reapplyRule,
+  ruleUsage,
+  ruleWhere,
+  undoRule,
+  type ApplyRulesResult,
+  type ReapplyResult,
+  type RulePreview,
+} from "@/server/lib/rules";
 import { requireSession } from "@/server/auth/session";
 
 function affected(res: unknown): number {
@@ -16,12 +28,8 @@ function uncategorizedCond(): SQL {
   return or(isNull(transactions.category), eq(transactions.category, "")) as SQL;
 }
 
-// Rules store the field as description | raw_category; the SQL matcher takes
-// description | category (a raw_category rule matches the current category column,
-// since imported rows keep the bank's category there when nothing else claimed it).
-function toMatchField(field: string): MatchParams["field"] {
-  return field === "raw_category" ? "category" : "description";
-}
+// The bulk screen's field vocabulary (description | category) vs the rule's (description |
+// raw_category): a raw_category rule matches the current category column.
 function toRuleField(field: MatchParams["field"]): RuleInput["field"] {
   return field === "category" ? "raw_category" : "description";
 }
@@ -43,27 +51,17 @@ function revalidateAll() {
   revalidatePath("/dashboard");
   revalidatePath("/months");
   revalidatePath("/import");
+  revalidatePath("/settings/bills");
 }
 
-async function getRule(id: number): Promise<CategoryRule | null> {
-  const [r] = await db.select().from(categoryMappings).where(eq(categoryMappings.id, id)).limit(1);
-  if (!r) return null;
-  return {
-    id: r.id,
-    matchType: r.matchType,
-    pattern: r.pattern,
-    field: r.field,
-    category: r.category,
-    billId: r.billId,
-    priority: r.priority,
-  };
-}
+// Null-safe equality (MySQL `<=>`), so "no account" only matches "no account".
+const same = (col: AnyColumn, v: unknown) => sql`${col} <=> ${v}`;
 
-// Save a rule, reusing an existing one with the same field + match + pattern so
-// clicking the same suggestion twice (or from two screens) can't pile up duplicates.
-// The category is updated in place when the rule already exists.
-async function upsertRule(input: RuleInput): Promise<CategoryRule> {
-  const pattern = input.pattern.trim();
+// Save a rule, reusing an existing one with the same CONDITIONS so clicking the same suggestion
+// twice (or from two screens) can't pile up duplicates. The actions given are written onto the
+// existing rule; an action left empty keeps whatever the rule already had.
+async function upsertRule(raw: RuleInput): Promise<CategoryRule> {
+  const input = cleanRuleInput(raw);
   const [existing] = await db
     .select({ id: categoryMappings.id })
     .from(categoryMappings)
@@ -71,27 +69,52 @@ async function upsertRule(input: RuleInput): Promise<CategoryRule> {
       and(
         eq(categoryMappings.field, input.field),
         eq(categoryMappings.matchType, input.matchType),
-        eq(categoryMappings.pattern, pattern),
+        eq(categoryMappings.pattern, input.pattern),
+        same(categoryMappings.accountId, input.accountId),
+        same(categoryMappings.direction, input.direction),
+        same(categoryMappings.amountMin, input.amountMin?.toFixed(2) ?? null),
+        same(categoryMappings.amountMax, input.amountMax?.toFixed(2) ?? null),
       ),
     )
     .limit(1);
   let id: number;
   if (existing) {
     id = existing.id;
-    await db.update(categoryMappings).set({ category: input.category }).where(eq(categoryMappings.id, id));
+    const set: Record<string, unknown> = {};
+    if (input.category) set.category = input.category;
+    if (input.billId != null) set.billId = input.billId;
+    if (Object.keys(set).length) await db.update(categoryMappings).set(set).where(eq(categoryMappings.id, id));
   } else {
-    const res = await db.insert(categoryMappings).values({
-      matchType: input.matchType,
-      pattern,
-      field: input.field,
-      category: input.category,
-    });
+    const res = await db.insert(categoryMappings).values(toRow(input));
     id = (res as unknown as [{ insertId?: number }])[0]?.insertId ?? 0;
   }
-  const rule = await getRule(id);
+  const rule = await getRuleById(id);
   if (!rule) throw new Error("Rule could not be saved.");
   return rule;
 }
+
+function toRow(input: RuleInput) {
+  return {
+    matchType: input.matchType,
+    pattern: input.pattern,
+    field: input.field,
+    accountId: input.accountId,
+    direction: input.direction,
+    amountMin: input.amountMin == null ? null : input.amountMin.toFixed(2),
+    amountMax: input.amountMax == null ? null : input.amountMax.toFixed(2),
+    category: input.category,
+    billId: input.billId,
+  };
+}
+
+// A draft rule as if saved (id 0 never matches a stamp).
+function draftRule(input: RuleInput): CategoryRule {
+  return ruleFromRow({ id: 0, priority: 100, ...toRow(input) });
+}
+
+// ---------------------------------------------------------------------------
+// The quick bulk tool on /transactions/categorize and the inline "+N like X" offers
+// ---------------------------------------------------------------------------
 
 export async function previewCategorizeMatch(
   p: MatchParams,
@@ -127,7 +150,12 @@ export async function bulkCategorizeByMatch(
         matchType: p.matchType,
         pattern: p.pattern,
         field: toRuleField(p.field),
+        accountId: null,
+        direction: null,
+        amountMin: null,
+        amountMax: null,
         category: p.category,
+        billId: null,
       })
     : null;
   const res = await db
@@ -138,27 +166,13 @@ export async function bulkCategorizeByMatch(
   return { updated: affected(res), rule };
 }
 
-// Apply every saved rule (by priority) to uncategorized transactions.
-export async function applySavedRules(onlyUncategorized = true): Promise<number> {
+// Apply every saved rule (by priority) to open transactions: categories onto uncategorized
+// rows, bill links onto unlinked posted rows.
+export async function applySavedRules(): Promise<ApplyRulesResult> {
   await requireSession();
-  const rules = await db.select().from(categoryMappings).orderBy(asc(categoryMappings.priority));
-  let total = 0;
-  for (const r of rules) {
-    const res = await db
-      .update(transactions)
-      .set({ category: r.category, categoryRuleId: r.id })
-      .where(
-        matchWhere({
-          field: toMatchField(r.field),
-          matchType: r.matchType as MatchParams["matchType"],
-          pattern: r.pattern,
-          onlyUncategorized,
-        }),
-      );
-    total += affected(res);
-  }
+  const res = await applyRules({});
   revalidateAll();
-  return total;
+  return res;
 }
 
 export async function bulkSetCategory(ids: number[], category: string | null): Promise<number> {
@@ -173,119 +187,94 @@ export async function bulkSetCategory(ids: number[], category: string | null): P
   return affected(res);
 }
 
-// How many transactions currently carry this rule's stamp — shown before deleting
-// or re-applying so the blast radius is visible.
-export async function getRuleUsage(id: number): Promise<number> {
-  await requireSession();
-  const r = await db
-    .select({ c: sql<number>`COUNT(*)` })
-    .from(transactions)
-    .where(eq(transactions.categoryRuleId, id));
-  return Number(r[0]?.c ?? 0);
+// ---------------------------------------------------------------------------
+// The full rule editor
+// ---------------------------------------------------------------------------
+
+export interface RuleEditorOptions {
+  accounts: { id: number; name: string }[];
+  bills: { id: number; name: string }[];
 }
 
-// Remove a rule. The FK clears the stamp on its transactions; with `clearCategories`
-// their category is cleared too (for "this rule was wrong, undo what it did").
+// Pick-lists for the editor's account lock and bill link. Fetched when the editor opens, so
+// the many places that host it don't each have to thread them through.
+export async function getRuleEditorOptions(): Promise<RuleEditorOptions> {
+  await requireSession();
+  const [a, b] = await Promise.all([
+    db
+      .select({ id: accounts.id, label: accounts.label, institution: accounts.institution, num: accounts.accountNumber, active: accounts.active })
+      .from(accounts)
+      .orderBy(asc(accounts.label)),
+    db.select({ id: bills.id, name: bills.name, active: bills.active }).from(bills).orderBy(asc(bills.name)),
+  ]);
+  return {
+    accounts: a
+      .sort((x, y) => Number(y.active) - Number(x.active))
+      .map((x) => ({ id: x.id, name: x.label || [x.institution, x.num].filter(Boolean).join(" ") || `Account ${x.id}` })),
+    bills: b
+      .sort((x, y) => Number(y.active) - Number(x.active))
+      .map((x) => ({ id: x.id, name: x.active ? x.name : `${x.name} (inactive)` })),
+  };
+}
+
+// What saving this draft would do right now: uncategorized rows it would categorize, unlinked
+// rows it would link to the bill.
+export async function previewRuleDraft(input: RuleInput): Promise<RulePreview> {
+  await requireSession();
+  if (!input.pattern.trim()) return { categorized: 0, linked: 0, samples: [] };
+  const draft = draftRule({ ...input, pattern: input.pattern.trim() });
+  return previewRule(draft);
+}
+
+export interface CreateRuleResult extends ApplyRulesResult {
+  rule: CategoryRule;
+}
+
+// Save a rule (reusing one with identical conditions) and apply it to what's open now.
+export async function createRule(input: RuleInput): Promise<CreateRuleResult> {
+  await requireSession();
+  const rule = await upsertRule(input);
+  const res = await applyRules({ rules: [rule], where: ruleWhere(rule) });
+  revalidateAll();
+  return { rule, ...res };
+}
+
+// How many transactions currently carry this rule's stamps — shown before deleting
+// or re-applying so the blast radius is visible.
+export async function getRuleUsage(id: number): Promise<{ categories: number; bills: number }> {
+  await requireSession();
+  return ruleUsage(id);
+}
+
+// Remove a rule. The FKs clear its stamps; with the clear options, what it set is undone too
+// (for "this rule was wrong, undo what it did").
 export async function deleteCategoryRule(
   id: number,
-  opts: { clearCategories?: boolean } = {},
-): Promise<{ cleared: number }> {
+  opts: { clearCategories?: boolean; clearBillLinks?: boolean } = {},
+): Promise<{ cleared: number; unlinked: number }> {
   await requireSession();
-  let cleared = 0;
-  if (opts.clearCategories) {
-    const res = await db
-      .update(transactions)
-      .set({ category: null, categoryRuleId: null })
-      .where(eq(transactions.categoryRuleId, id));
-    cleared = affected(res);
-  }
+  const r = await undoRule(id, { categories: !!opts.clearCategories, bills: !!opts.clearBillLinks });
   await db.delete(categoryMappings).where(eq(categoryMappings.id, id));
   revalidateAll();
-  return { cleared };
+  return { cleared: r.categorized, unlinked: r.linked };
 }
 
-export interface UpdateRuleResult {
+export interface UpdateRuleResult extends Partial<ReapplyResult> {
   rule: CategoryRule;
-  /** Stamped rows that still match and were moved to the (possibly new) category. */
-  recategorized: number;
-  /** Stamped rows the edited rule no longer matches — category and stamp cleared. */
-  cleared: number;
-  /** Uncategorized rows the edited rule newly picked up. */
-  applied: number;
 }
 
-// Edit a rule in place. With `reapply`, everything the rule previously set is
-// reconciled against the new definition (still matches → new category; no longer
-// matches → uncategorized) and uncategorized rows it now matches are categorized.
-// Rows set by hand are never touched — only rows stamped with this rule.
-export async function updateCategoryRule(
-  id: number,
-  input: RuleInput,
-  reapply: boolean,
-): Promise<UpdateRuleResult> {
+// Edit a rule in place. With `reapply`, everything the rule previously set is reconciled
+// against the new definition (still matches → new category / bill; no longer matches → undone)
+// and open rows it now matches are picked up. Values set by hand are never touched.
+export async function updateCategoryRule(id: number, raw: RuleInput, reapply: boolean): Promise<UpdateRuleResult> {
   await requireSession();
-  const pattern = input.pattern.trim();
-  if (!pattern || !input.category) throw new Error("A pattern and category are required.");
-  await db
-    .update(categoryMappings)
-    .set({
-      matchType: input.matchType,
-      pattern,
-      field: input.field,
-      category: input.category,
-    })
-    .where(eq(categoryMappings.id, id));
-  const rule = await getRule(id);
+  const input = cleanRuleInput(raw);
+  await db.update(categoryMappings).set(toRow(input)).where(eq(categoryMappings.id, id));
+  const rule = await getRuleById(id);
   if (!rule) throw new Error("Rule not found.");
-
-  let recategorized = 0;
-  let cleared = 0;
-  let applied = 0;
-  if (reapply) {
-    const stamped = await db
-      .select({
-        id: transactions.id,
-        description: transactions.description,
-        category: transactions.category,
-      })
-      .from(transactions)
-      .where(eq(transactions.categoryRuleId, id));
-    const keep: number[] = [];
-    const drop: number[] = [];
-    for (const t of stamped) {
-      // A raw_category rule is matched against the current category column (same as SQL).
-      const hit = matchesRule(rule, { description: t.description, rawCategory: t.category });
-      (hit ? keep : drop).push(t.id);
-    }
-    for (let i = 0; i < keep.length; i += 500) {
-      const res = await db
-        .update(transactions)
-        .set({ category: rule.category })
-        .where(inArray(transactions.id, keep.slice(i, i + 500)));
-      recategorized += affected(res);
-    }
-    for (let i = 0; i < drop.length; i += 500) {
-      const res = await db
-        .update(transactions)
-        .set({ category: null, categoryRuleId: null })
-        .where(inArray(transactions.id, drop.slice(i, i + 500)));
-      cleared += affected(res);
-    }
-    const res = await db
-      .update(transactions)
-      .set({ category: rule.category, categoryRuleId: rule.id })
-      .where(
-        matchWhere({
-          field: toMatchField(rule.field),
-          matchType: rule.matchType as MatchParams["matchType"],
-          pattern: rule.pattern,
-          onlyUncategorized: true,
-        }),
-      );
-    applied = affected(res);
-  }
+  const res = reapply ? await reapplyRule(rule) : {};
   revalidateAll();
-  return { rule, recategorized, cleared, applied };
+  return { rule, ...res };
 }
 
 // For inline "suggest a rule as you categorize": given a description, return the best

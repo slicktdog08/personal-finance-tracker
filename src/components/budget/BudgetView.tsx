@@ -25,6 +25,8 @@ import { FlowBar } from "@/components/budget/FlowBar";
 import { BalanceDock } from "@/components/budget/BalanceDock";
 import { AmountControl } from "@/components/budget/AmountControl";
 import { PayoffCallout } from "@/components/budget/PayoffCallout";
+import { MonthOutcome } from "@/components/budget/MonthOutcome";
+import { outcomeFromView } from "@/server/lib/budget-outcome";
 import { PLAN_COLORS as COLORS } from "@/components/budget/colors";
 
 type Run = (fn: () => Promise<{ ok: boolean; error?: string } | void>) => void;
@@ -109,8 +111,10 @@ export function BudgetView({
       }
       else setNote(r.absorbed?.length ? r.absorbed.map((a) => `${a.label} ${formatMoney(a.from)} → ${formatMoney(a.to)}`).join(" · ") : null);
     });
+  // A finalized month is read-only: nothing opens, nothing is added or removed.
+  const frozen = !!view.finalizedAt;
   const toggle = (l: BudgetLineRow) =>
-    run(async () => {
+    frozen ? undefined : run(async () => {
       patchLines({ ids: [l.id], locked: !l.locked });
       return updateBudgetLine(l.id, { locked: !l.locked });
     });
@@ -154,6 +158,8 @@ export function BudgetView({
   const inMonth = !!today && today >= mStart && today <= mEnd;
   const paceFrac = inMonth ? Number(today!.slice(8, 10)) / Number(mEnd.slice(8, 10)) : null;
   const finished = !!today && today > mEnd;
+  // The close-out report: frozen when the month was finalized, otherwise a live preview once it's over.
+  const outcome = view.outcome ?? (finished ? outcomeFromView(view) : null);
   const excess = budgetExcess({
     cashStart: view.cash.start,
     cashEnd: projectedEndCash,
@@ -210,7 +216,7 @@ export function BudgetView({
         actions={
           <>
             {nav}
-            {open.length > 0 ? (
+            {frozen ? null : open.length > 0 ? (
               <Button icon="check" onClick={lockAll} disabled={pending}>
                 Done
               </Button>
@@ -222,6 +228,8 @@ export function BudgetView({
           </>
         }
       />
+
+      {outcome && <MonthOutcome budgetId={view.id} pretty={pretty} outcome={outcome} finalizedAt={view.finalizedAt} />}
 
       {/* ---- The month at a glance ---- */}
       <Card>
@@ -235,13 +243,14 @@ export function BudgetView({
               </>
             }
             onCommit={(v) => run(() => updateBudget(view.id, { plannedIncome: v }))}
+            readOnly={frozen}
           />
           <div className="grid gap-2.5 justify-items-start sm:justify-items-end min-w-0">
             {debtLines.length > 0 && (
               <Segmented<Mode>
                 label="Debt strategy"
                 value={mode}
-                onChange={setMode}
+                onChange={frozen ? undefined : setMode}
                 options={[
                   { value: "snowball", label: "Snowball" },
                   { value: "avalanche", label: "Avalanche" },
@@ -252,7 +261,7 @@ export function BudgetView({
             <Switch
               label={`Auto-rebalance extra to ${target ? target.label : "the target"}`}
               checked={view.autoRebalance}
-              disabled={pending || !target}
+              disabled={pending || !target || frozen}
               onChange={(e) => run(() => updateBudget(view.id, { autoRebalance: e.target.checked }))}
             />
           </div>
@@ -339,8 +348,19 @@ export function BudgetView({
           const parked = l.balance != null && !isSnowballDebt({ apr: l.apr, balance: l.balance });
           const moved = l.balance != null && l.balanceStart != null && l.balance !== l.balanceStart ? l.balance - l.balanceStart : null;
           const lineExtra = Math.max(0, l.planned - min);
+          const newCharges = l.charged > 0.005 && l.minimumMet && l.rebalance <= 0;
           const note =
-            l.rebalance > 0 ? (
+            l.minimumMet && l.due < l.planned - 0.005 ? (
+              // The bill is marked paid at less than the plan copied forward — the minimum is met.
+              <span className="text-fg-3">
+                Minimum met · bill paid at <Money value={l.paid} kind="neutral" />
+              </span>
+            ) : newCharges && lineExtra <= 0 ? (
+              // New charges on a minimum-only card roll into its balance; they don't reopen the minimum.
+              <span className="text-fg-3">
+                Minimum met · <Money value={l.charged} kind="neutral" /> new charges roll into the balance
+              </span>
+            ) : l.rebalance > 0 ? (
               // Payments that only covered this month's new charges rebalance the card — that
               // spending is already in its categories, so it isn't payoff.
               <span className="text-fg-3">
@@ -382,7 +402,7 @@ export function BudgetView({
               }
               color={COLORS.debt}
               tone="pay"
-              planned={l.planned}
+              planned={l.due}
               used={l.actual}
               usedLabel="paid off"
               aside={
@@ -397,7 +417,7 @@ export function BudgetView({
               auto={isSink(l)}
               pending={saving(l)}
               onToggle={() => toggle(l)}
-              onRemove={() => run(() => deleteBudgetLine(l.id))}
+              onRemove={frozen ? undefined : () => run(() => deleteBudgetLine(l.id))}
               control={
                 <div className="space-y-3">
                   {controlFor(l, min, Math.max(500, Math.ceil(Math.max(l.planned * 1.5, l.balance ?? 0) / 50) * 50), COLORS.debt)}
@@ -423,7 +443,7 @@ export function BudgetView({
             />
           );
         })}
-        <AddEnvelope kind="debt" view={view} categories={categories} pending={pending} run={run} />
+        {!frozen && <AddEnvelope kind="debt" view={view} categories={categories} pending={pending} run={run} />}
       </Group>
 
       {/* ---- Everyday ---- */}
@@ -450,11 +470,11 @@ export function BudgetView({
             open={!l.locked}
             pending={saving(l)}
             onToggle={() => toggle(l)}
-            onRemove={() => run(() => deleteBudgetLine(l.id))}
+            onRemove={frozen ? undefined : () => run(() => deleteBudgetLine(l.id))}
             control={controlFor(l, 0, Math.max(200, Math.ceil(Math.max(l.planned * 2, l.actual * 1.2) / 50) * 50), l.color ?? COLORS.spend)}
           />
         ))}
-        <AddEnvelope kind="category" view={view} categories={categories} pending={pending} run={run} />
+        {!frozen && <AddEnvelope kind="category" view={view} categories={categories} pending={pending} run={run} />}
       </Group>
 
       {/* ---- Savings ---- */}
@@ -489,11 +509,11 @@ export function BudgetView({
             open={!l.locked}
             pending={saving(l)}
             onToggle={() => toggle(l)}
-            onRemove={() => run(() => deleteBudgetLine(l.id))}
+            onRemove={frozen ? undefined : () => run(() => deleteBudgetLine(l.id))}
             control={controlFor(l, 0, Math.max(1000, Math.ceil((l.planned * 2) / 50) * 50), l.color ?? COLORS.savings)}
           />
         ))}
-        {savingsLines.length === 0 && <AddEnvelope kind="savings" view={view} categories={categories} pending={pending} run={run} />}
+        {savingsLines.length === 0 && !frozen && <AddEnvelope kind="savings" view={view} categories={categories} pending={pending} run={run} />}
       </Group>
 
       {/* ---- Payoff ---- */}
@@ -502,7 +522,7 @@ export function BudgetView({
       {err && <Notice tone="danger">{err}</Notice>}
 
       <div className="text-xs text-fg-3">
-        {!confirmDel ? (
+        {frozen ? null : !confirmDel ? (
           <button type="button" onClick={() => setConfirmDel(true)} className="hover:text-over">
             Delete this budget
           </button>
@@ -545,12 +565,12 @@ function Group({ title, total, sub, note, children }: { title: string; total: nu
 }
 
 /** The hero: income as the page's one 48px number, editable in place. */
-function IncomeTile({ value, sub, onCommit }: { value: number | null; sub: React.ReactNode; onCommit: (v: number | null) => void }) {
+function IncomeTile({ value, sub, onCommit, readOnly = false }: { value: number | null; sub: React.ReactNode; onCommit: (v: number | null) => void; readOnly?: boolean }) {
   const [text, setText] = useState<string | null>(null);
   const label = (
     <span className="inline-flex items-center gap-1">
       Income this month
-      {text == null && <IconButton icon="pencil-line" size="sm" label="Edit income" className="-my-1.5" onClick={() => setText(value != null ? String(value) : "")} />}
+      {text == null && !readOnly && <IconButton icon="pencil-line" size="sm" label="Edit income" className="-my-1.5" onClick={() => setText(value != null ? String(value) : "")} />}
     </span>
   );
   if (text == null) return <StatTile size="hero" label={label} value={value != null ? value : "—"} sub={sub} />;

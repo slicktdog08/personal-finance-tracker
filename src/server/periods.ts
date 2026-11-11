@@ -5,6 +5,7 @@ import { and, eq, isNull, gte, lte, desc } from "drizzle-orm";
 import { periodLabel, monthBounds, dateToYearMonth } from "@/server/lib/period";
 import { DEFAULT_NEW_MONTH_STATUS } from "@/constants/enums";
 import { todayIso } from "@/server/lib/pay-schedule";
+import { adoptBillInstances } from "@/server/lib/rules";
 
 // Month lifecycle, shared by the server actions and the pages that auto-create months.
 //
@@ -67,6 +68,7 @@ export async function cloneInstances(fromPeriodId: number, year: number, month: 
         sortOrder: s.sortOrder,
       })),
     );
+    await adoptBillInstances(targetId);
   }
   return targetId;
 }

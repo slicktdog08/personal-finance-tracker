@@ -7,17 +7,19 @@ import {
   getCategoryRules,
   getSuggestedRules,
 } from "@/server/queries";
+import { getRuleEditorOptions } from "@/server/actions/categorize";
 
 export const dynamic = "force-dynamic";
 
 export default async function CategorizePage() {
-  let uncategorized, catOptions, rules, suggestions;
+  let uncategorized, catOptions, rules, suggestions, names;
   try {
-    [uncategorized, catOptions, rules, suggestions] = await Promise.all([
+    [uncategorized, catOptions, rules, suggestions, names] = await Promise.all([
       getUncategorizedCount(),
       getCategoryOptionsRich(),
       getCategoryRules(),
       getSuggestedRules(20),
+      getRuleEditorOptions(),
     ]);
   } catch (e) {
     return <SetupNotice error={e} />;
@@ -34,6 +36,7 @@ export default async function CategorizePage() {
         categoryOptions={catOptions}
         suggestions={suggestions}
         rules={rules}
+        names={names}
       />
     </div>
   );
