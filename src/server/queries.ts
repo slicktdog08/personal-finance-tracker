@@ -1,5 +1,5 @@
 import "server-only";
-import type { CategoryRule } from "@/server/lib/categorize";
+import { ruleFromRow, type CategoryRule } from "@/server/lib/categorize";
 import { db } from "@/server/db";
 import {
   periods,
@@ -1172,6 +1172,7 @@ export async function getTransactionsPage(q: TxQuery) {
       accountLabel: accounts.label,
       periodLabel: periods.label,
       billId: transactions.billId,
+      billRuleId: transactions.billRuleId,
       accountType: accounts.accountType,
       pending: transactions.pending,
       source: transactions.source,
@@ -2038,15 +2039,7 @@ export async function getCategoryMappings() {
 // Saved rules in the plain shape client components use (no timestamps).
 export async function getCategoryRules(): Promise<CategoryRule[]> {
   const rows = await getCategoryMappings();
-  return rows.map((r) => ({
-    id: r.id,
-    matchType: r.matchType,
-    pattern: r.pattern,
-    field: r.field,
-    category: r.category,
-    billId: r.billId,
-    priority: r.priority,
-  }));
+  return rows.map(ruleFromRow);
 }
 
 export async function getImportBatches() {

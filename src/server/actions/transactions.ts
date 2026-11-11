@@ -52,7 +52,7 @@ export async function linkTransactionToBill(
   await requireSession();
   await db
     .update(transactions)
-    .set({ billInstanceId })
+    .set({ billInstanceId, billRuleId: null })
     .where(eq(transactions.id, id));
   revalidatePath(path);
 }
@@ -84,7 +84,8 @@ export async function setTransactionBill(
   }
   await db
     .update(transactions)
-    .set({ billId, billInstanceId })
+    // A link set (or cleared) by hand is the user's — no rule may later claim or undo it.
+    .set({ billId, billInstanceId, billRuleId: null })
     .where(eq(transactions.id, id));
   revalidatePath(path);
   revalidatePath("/settings/bills");
@@ -295,12 +296,15 @@ async function attachToBill(opts: {
       : await instanceInPeriod(opts.billId, opts.sourcePeriodId);
   await db
     .update(transactions)
-    .set({ billId: opts.billId, billInstanceId: sourceInstanceId })
+    .set({ billId: opts.billId, billInstanceId: sourceInstanceId, billRuleId: null })
     .where(eq(transactions.id, opts.transactionId));
 
   // Link the confirmed other occurrences of the same merchant to the bill.
   if (matchIds.length) {
-    await db.update(transactions).set({ billId: opts.billId }).where(inArray(transactions.id, matchIds));
+    await db
+      .update(transactions)
+      .set({ billId: opts.billId, billRuleId: null })
+      .where(inArray(transactions.id, matchIds));
   }
 
   revalidatePath(opts.path);
