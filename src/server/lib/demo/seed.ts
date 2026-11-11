@@ -33,6 +33,7 @@ import {
   isoToMs,
   rngFor,
 } from "./bank";
+import { DEMO_SEEDED_KEY } from "./mode";
 
 const {
   accountBalances,
@@ -70,6 +71,12 @@ const {
 export interface SeedDemoOptions {
   /** Empty every user-data table first. Without it, seeding a non-empty ledger throws. */
   reset?: boolean;
+  /**
+   * With `reset`: wipe only a ledger that is empty or that this seed wrote (it carries the
+   * DEMO_SEEDED_KEY marker). Anything else throws, so a reset pointed at the wrong database
+   * stops instead of deleting real data. The demo's periodic reset always sets this.
+   */
+  onlyIfDemo?: boolean;
   /** ISO date to treat as today (default: the server's local date). */
   today?: string;
 }
@@ -294,6 +301,26 @@ async function resetData(conn: Connection | Pool): Promise<void> {
       await c.query("SET FOREIGN_KEY_CHECKS = 1");
     }
   });
+}
+
+/** Throws unless the ledger is empty or carries the marker the demo seed writes. */
+async function assertDemoLedger(db: Db): Promise<void> {
+  const [[t], [a]] = await Promise.all([
+    db.select({ c: sql<number>`COUNT(*)` }).from(transactions),
+    db.select({ c: sql<number>`COUNT(*)` }).from(accounts),
+  ]);
+  if (Number(t.c) === 0 && Number(a.c) === 0) return;
+  const marker = await db
+    .select({ key: appSettings.settingKey })
+    .from(appSettings)
+    .where(eq(appSettings.settingKey, DEMO_SEEDED_KEY))
+    .limit(1);
+  if (marker.length === 0) {
+    throw new Error(
+      `seedDemo: refusing to reset — this database holds ${t.c} transaction(s) and ${a.c} account(s) ` +
+        "that the demo seed did not write. Point the demo at its own database.",
+    );
+  }
 }
 
 async function seedLookups(db: Db): Promise<void> {
@@ -576,6 +603,7 @@ export async function seedDemo(conn: Connection | Pool, opts: SeedDemoOptions = 
   const db = drizzle(conn as Pool, { schema, mode: "default" });
 
   if (opts.reset) {
+    if (opts.onlyIfDemo) await assertDemoLedger(db);
     await resetData(conn);
   } else {
     const [[t], [a]] = await Promise.all([
@@ -916,6 +944,7 @@ export async function seedDemo(conn: Connection | Pool, opts: SeedDemoOptions = 
   // ---- advisor: a profile, a finished insights run, a check-in and one conversation ----
   const upsertSetting = (settingKey: string, value: unknown) =>
     db.insert(appSettings).values({ settingKey, value }).onDuplicateKeyUpdate({ set: { value } });
+  await upsertSetting(DEMO_SEEDED_KEY, { seededOn: today });
   await upsertSetting("advisor_profile", {
     name: "Alex",
     updatedOn: today,
