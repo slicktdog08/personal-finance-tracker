@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useId, useState } from "react";
 import { Money } from "@/components/ds";
 import { formatMoney } from "@/server/lib/money";
 
@@ -19,8 +19,24 @@ export interface TrendPoint {
  * Hover / touch snaps to a month and the readout above says the value and the change against the
  * month before. With no pointer the readout rests on the latest month.
  */
-export function TrendLineChart({ points, height = 210 }: { points: TrendPoint[]; height?: number }) {
+export function TrendLineChart({
+  points,
+  height = 210,
+  color: colorProp,
+  label = "Net worth by month",
+  goodWhen = "up",
+}: {
+  points: TrendPoint[];
+  height?: number;
+  /** Line colour; defaults to accent, or owed red once the latest value is below zero. */
+  color?: string;
+  /** Accessible name for the chart. */
+  label?: string;
+  /** For a debt series a fall is the good direction — only changes how the readout's delta reads. */
+  goodWhen?: "up" | "down";
+}) {
   const [hover, setHover] = useState<number | null>(null);
+  const gradId = useId();
 
   // Keep the original index so x stays proportional to time even when leading months are null.
   const defined = points.flatMap((p, i) => (p.value == null ? [] : [{ ...p, value: p.value, i }]));
@@ -52,7 +68,8 @@ export function TrendLineChart({ points, height = 210 }: { points: TrendPoint[];
   const activePos = hover ?? defined.length - 1;
   const prev = activePos > 0 ? defined[activePos - 1] : null;
   const delta = prev ? active.value - prev.value : null;
-  const color = last.value < 0 ? "var(--mp-money-owed)" : "var(--mp-accent)";
+  const color = colorProp ?? (last.value < 0 ? "var(--mp-money-owed)" : "var(--mp-accent)");
+  const deltaGood = delta == null || Math.abs(delta) < 0.5 ? null : (delta > 0) === (goodWhen === "up");
   const pct = (px: number) => `${(px / W) * 100}%`;
 
   // Ticks: first, last, and a handful of evenly spaced months in between (by original index).
@@ -67,7 +84,7 @@ export function TrendLineChart({ points, height = 210 }: { points: TrendPoint[];
         <span className="text-[13px] text-fg-2">{active.label}</span>
         <Money value={active.value} kind={active.value < 0 ? "over" : "neutral"} className="text-sm font-semibold" />
         {delta != null && (
-          <span>
+          <span className={deltaGood == null ? undefined : deltaGood ? "text-income" : "text-over"}>
             {delta >= 0 ? "+" : "−"}
             {formatMoney(Math.abs(delta))} vs {prev!.label}
           </span>
@@ -81,18 +98,18 @@ export function TrendLineChart({ points, height = 210 }: { points: TrendPoint[];
           preserveAspectRatio="none"
           className="block touch-none cursor-crosshair"
           role="img"
-          aria-label="Net worth by month"
+          aria-label={label}
           onPointerMove={onMove}
           onPointerDown={onMove}
           onPointerLeave={() => setHover(null)}
         >
           <defs>
-            <linearGradient id="trend-grad" x1="0" x2="0" y1="0" y2="1">
+            <linearGradient id={gradId} x1="0" x2="0" y1="0" y2="1">
               <stop offset="0" style={{ stopColor: color }} stopOpacity=".16" />
               <stop offset="1" style={{ stopColor: color }} stopOpacity="0" />
             </linearGradient>
           </defs>
-          <path d={`${line} L${x(last.i).toFixed(1)} ${H} L${x(first.i).toFixed(1)} ${H} Z`} fill="url(#trend-grad)" />
+          <path d={`${line} L${x(last.i).toFixed(1)} ${H} L${x(first.i).toFixed(1)} ${H} Z`} fill={`url(#${gradId})`} />
           {lo < 0 && hi > 0 && (
             <line x1={pad} x2={W - pad} y1={y(0)} y2={y(0)} style={{ stroke: "var(--mp-money-over)" }} strokeOpacity=".5" strokeDasharray="4 4" vectorEffect="non-scaling-stroke" />
           )}

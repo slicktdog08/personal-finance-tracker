@@ -729,6 +729,60 @@ export async function getBalanceTrends(): Promise<BalanceTrendPoint[]> {
   });
 }
 
+export interface AccountTrend {
+  id: number;
+  label: string;
+  institution: string | null;
+  accountType: string;
+  active: boolean;
+  /** Month-end balance for each label passed in (same order); null before its first snapshot. */
+  values: (number | null)[];
+}
+
+// Each account's balance as of every requested month's end — the same "latest snapshot ≤
+// month-end" rule as getBalanceTrends, but kept per account so the Trends page can say which
+// accounts moved. Loans are floored at zero like the totals.
+export async function getAccountBalanceTrends(labels: string[]): Promise<AccountTrend[]> {
+  await requireSession();
+  if (!labels.length) return [];
+  const [acctRows, balRows] = await Promise.all([
+    db
+      .select({ id: accounts.id, label: accounts.label, institution: accounts.institution, accountType: accounts.accountType, active: accounts.active, accountNumber: accounts.accountNumber })
+      .from(accounts)
+      .orderBy(asc(accounts.label)),
+    db
+      .select({ accountId: accountBalances.accountId, balance: accountBalances.balance, asOf: accountBalances.asOf })
+      .from(accountBalances)
+      .orderBy(asc(accountBalances.asOf), asc(accountBalances.id)),
+  ]);
+  const byAccount = new Map<number, { asOf: string; balance: number }[]>();
+  for (const b of balRows) {
+    const n = toNum(b.balance);
+    if (n == null) continue;
+    const arr = byAccount.get(b.accountId);
+    if (arr) arr.push({ asOf: b.asOf, balance: n });
+    else byAccount.set(b.accountId, [{ asOf: b.asOf, balance: n }]);
+  }
+  const ends = labels.map((l) => {
+    const p = parsePeriodLabel(l);
+    return p ? monthBounds(p.year, p.month).end : `${l}-31`;
+  });
+  return acctRows.flatMap((a) => {
+    const snaps = byAccount.get(a.id);
+    if (!snaps) return [];
+    const type = a.accountType ?? "";
+    const values = ends.map((end) => {
+      let bal: number | null = null;
+      for (const s of snaps) {
+        if (s.asOf <= end) bal = s.balance;
+        else break;
+      }
+      return bal != null && type === "Loan" ? Math.max(0, bal) : bal;
+    });
+    return [{ id: a.id, label: a.label ?? `…${a.accountNumber}`, institution: a.institution, accountType: type, active: !!a.active, values }];
+  });
+}
+
 // Every asset with its value history (newest first) and latest value. Values are what it's
 // worth, not what's owed — a car loan is a separate Loan account on Debts.
 export async function getAssets() {
