@@ -279,6 +279,7 @@ export async function mergeIntoPosted(
     categoryRuleId: transactions.categoryRuleId,
     billId: transactions.billId,
     billInstanceId: transactions.billInstanceId,
+    billRuleId: transactions.billRuleId,
     transferPartnerId: transactions.transferPartnerId,
     importBatchId: transactions.importBatchId,
     raw: transactions.raw,
@@ -309,6 +310,7 @@ export async function mergeIntoPosted(
       categoryRuleId,
       billId: posted.billId ?? entered.billId,
       billInstanceId: posted.billInstanceId ?? entered.billInstanceId,
+      billRuleId: posted.billId != null ? posted.billRuleId : entered.billRuleId,
       transferPartnerId: partnerId === postedId ? null : partnerId,
       pending: false,
     })

@@ -111,6 +111,8 @@ export interface CommitResult {
   balancesRecorded: number;
   /** Imported rows that replaced a hand-entered (pending) transaction instead of duplicating it. */
   merged: number;
+  /** Imported rows a saved rule linked to a recurring bill. */
+  billsLinked: number;
 }
 
 // How to map an arbitrary bank CSV's columns onto our fields.

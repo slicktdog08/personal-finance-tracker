@@ -480,7 +480,8 @@ export function PdfImportWizard({
                 {result.finalized ? ` · settled ${result.finalized} pending` : ""} · skipped {result.duplicates} duplicates ·{" "}
                 {result.errors} errors · {result.balancesRecorded} balance snapshot
                 {result.balancesRecorded === 1 ? "" : "s"} recorded
-                {result.merged ? ` · merged ${result.merged} into pending transaction${result.merged === 1 ? "" : "s"}` : ""}.
+                {result.merged ? ` · merged ${result.merged} into pending transaction${result.merged === 1 ? "" : "s"}` : ""}
+                {result.billsLinked ? ` · linked ${result.billsLinked} to bills by rule` : ""}.
               </>
             }
             action={

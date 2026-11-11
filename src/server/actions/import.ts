@@ -6,7 +6,6 @@ import {
   accounts,
   accountBalances,
   importBatches,
-  categoryMappings,
   periods,
 } from "@/server/db/schema";
 import { and, eq, inArray, sql } from "drizzle-orm";
@@ -15,7 +14,8 @@ import { hashRows } from "@/server/lib/dedup";
 import { findPendingMatches, findSyncedDuplicates } from "@/server/lib/sync/import-guard";
 import { ensurePeriod } from "@/server/periods";
 import { dateToYearMonth } from "@/server/lib/period";
-import { categorize, type CategoryRule } from "@/server/lib/categorize";
+import { categorize } from "@/server/lib/categorize";
+import { accountIdsByNumber, applyRules, loadRules } from "@/server/lib/rules";
 import { TXN_CATEGORIES } from "@/constants/enums";
 import { parseRows, guessMapping, extract, buildBalanceSnapshots, last4 } from "@/server/lib/import-map";
 import type {
@@ -78,16 +78,7 @@ export async function analyzeWithMapping(
   const hashByIdx = new Map<number, string>();
   validIdx.forEach((i, k) => hashByIdx.set(i, hashes[k]));
 
-  const ruleRows = await db.select().from(categoryMappings);
-  const rules: CategoryRule[] = ruleRows.map((r) => ({
-    id: r.id,
-    matchType: r.matchType,
-    pattern: r.pattern,
-    field: r.field,
-    category: r.category,
-    billId: r.billId,
-    priority: r.priority,
-  }));
+  const [rules, acctIds] = await Promise.all([loadRules(), accountIdsByNumber()]);
 
   const allHashes = [...hashByIdx.values()];
   const existing = allHashes.length
@@ -131,7 +122,16 @@ export async function analyzeWithMapping(
       };
     }
     const hash = hashByIdx.get(i)!;
-    const cat = categorize({ description: mm.description, rawCategory: mm.rawCategory }, rules);
+    const cat = categorize(
+      {
+        description: mm.description,
+        rawCategory: mm.rawCategory,
+        accountId: mm.accountNumber ? (acctIds.get(mm.accountNumber) ?? null) : null,
+        amount: mm.amount,
+        direction: mm.direction,
+      },
+      rules,
+    );
     const category =
       cat.matchedRuleId != null
         ? cat.category
@@ -190,7 +190,7 @@ export async function commitImport(
   // placeholder has an empty `toInsert`, and leaving it out returned early and silently
   // skipped the settle loop below.
   if (!toInsert.length && !toFinalize.length && !balances.length) {
-    return { inserted: 0, duplicates, finalized: 0, errors, batchId: null, balancesRecorded: 0, merged: 0 };
+    return { inserted: 0, duplicates, finalized: 0, errors, batchId: null, balancesRecorded: 0, merged: 0, billsLinked: 0 };
   }
 
   // Every account referenced by a new transaction OR a balance snapshot must exist first.
@@ -234,7 +234,7 @@ export async function commitImport(
       revalidatePath("/dashboard");
       revalidatePath("/import");
     }
-    return { inserted: 0, duplicates, finalized: 0, errors, batchId: null, balancesRecorded, merged: 0 };
+    return { inserted: 0, duplicates, finalized: 0, errors, batchId: null, balancesRecorded, merged: 0, billsLinked: 0 };
   }
 
   const periodRows = await db
@@ -384,6 +384,13 @@ export async function commitImport(
     }
   }
 
+  // Rules run once more on what just landed: bill links (the review doesn't do those), plus
+  // categories for rows still uncategorized — e.g. ones an account-locked rule saved during the
+  // review covers, which the on-screen review can't evaluate. Categorized rows are left alone.
+  const billsLinked =
+    batchId != null ? (await applyRules({ where: eq(transactions.importBatchId, batchId) })).linked : 0;
+  if (billsLinked) revalidatePath("/settings/bills");
+
   revalidatePath("/transactions");
   revalidatePath("/dashboard");
   revalidatePath("/import");
@@ -399,5 +406,6 @@ export async function commitImport(
     batchId,
     balancesRecorded,
     merged,
+    billsLinked,
   };
 }
