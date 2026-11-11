@@ -224,7 +224,7 @@ button.mp-badge:hover{filter:brightness(.97)}
    desktop tables, which render from 768px, keep their width on tablets. ── */
 .mp-root{min-height:100dvh;background:var(--mp-bg-app)}
 .mp-shell{display:grid;grid-template-columns:minmax(0,1fr);min-height:100dvh}
-.mp-sidebar{display:none}
+.mp-sidebar,.mp-railtoggle{display:none}
 .mp-main{container:app/inline-size;min-width:0;display:flex;flex-direction:column;min-height:100dvh}
 .mp-content{width:100%;max-width:80rem;margin:0 auto;padding:12px 16px calc(var(--mp-tabbar-h) + 24px + env(safe-area-inset-bottom));display:flex;flex-direction:column;gap:16px;flex:1}
 .mp-topbar{display:flex;position:sticky;top:0;z-index:20;align-items:center;justify-content:space-between;gap:8px;height:var(--mp-topbar-h);padding:0 6px 0 16px;background:var(--mp-bg-nav);border-bottom:1px solid var(--mp-border-1)}
@@ -251,15 +251,15 @@ button.mp-badge:hover{filter:brightness(.97)}
 .mp-navitem__badge--alert{background:var(--mp-danger-soft);color:var(--mp-danger)}
 .mp-navitem__badge--new{background:var(--mp-accent-soft-2);color:var(--mp-accent-text)}
 .mp-sidebar__foot{margin-top:auto;padding-top:12px;border-top:1px solid var(--mp-border-1);display:flex;flex-direction:column;gap:2px}
-.mp-sidebar__user{padding:10px 10px 4px;font-size:var(--mp-text-xs);color:var(--mp-text-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mp-sidebar__user{padding:8px 10px 0;font-size:var(--mp-text-xs);color:var(--mp-text-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* Truncated labels (overflow:hidden) get line-height 1.4 above: inside the 1-line-height controls
    (nav items, badges, picker tiles, top bar) the clip box would otherwise cut off descenders —
    the g in "Budget", the y in "Activity". */
 /* Collapsed desktop sidebar: a 62px icon rail. Nothing that stays visible moves: the sidebar keeps
-   its padding, so the mark, nav icons and the bottom toggle hold their x while the width animates;
-   rows keep their heights so nothing shifts vertically either. Labels and the wordmark fade and get
-   clipped (nav items carry a title tooltip), group headings draw in as hairlines, badges shrink to
-   dots, and the text-only footer rows fold to zero height. */
+   its padding, so the mark and every icon hold one x (centred on the rail) while the width animates;
+   rows keep their heights so nothing shifts vertically either. Labels, the wordmark and the account
+   line fade and get clipped (nav items carry a title tooltip), group headings draw in as hairlines
+   and badges shrink to dots. The toggle is a round handle on the sidebar's right edge. */
 .mp-navitem__label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:1.4}
 @media (min-width:64rem){
 .mp-shell{--mp-rail-dur:var(--mp-dur-slow);transition:grid-template-columns var(--mp-rail-dur) var(--mp-ease-std)}
@@ -271,8 +271,8 @@ button.mp-badge:hover{filter:brightness(.97)}
 .mp-sidebar{overflow-x:hidden}
 .mp-sidebar .mp-navitem{position:relative;overflow:hidden}
 /* Fade in a beat after the width starts growing, so half-revealed labels don't flash; fade out at once. */
-.mp-sidebar .mp-navitem__label,.mp-sidebar__wordmark{transition:opacity var(--mp-dur-base) var(--mp-ease-std) 80ms}
-[data-sidebar="collapsed"] .mp-sidebar .mp-navitem__label,[data-sidebar="collapsed"] .mp-sidebar__wordmark{opacity:0;transition-delay:0s;transition-duration:var(--mp-dur-fast)}
+.mp-sidebar .mp-navitem__label,.mp-sidebar__wordmark,.mp-sidebar__user{transition:opacity var(--mp-dur-base) var(--mp-ease-std) 80ms}
+[data-sidebar="collapsed"] .mp-sidebar .mp-navitem__label,[data-sidebar="collapsed"] .mp-sidebar__wordmark,[data-sidebar="collapsed"] .mp-sidebar__user{opacity:0;transition-delay:0s;transition-duration:var(--mp-dur-fast)}
 .mp-sidebar .mp-navgroup__label{white-space:nowrap;overflow:hidden;background:linear-gradient(var(--mp-border-1),var(--mp-border-1)) center/0 1px no-repeat;transition:color var(--mp-dur-fast),background-size var(--mp-rail-dur) var(--mp-ease-std)}
 [data-sidebar="collapsed"] .mp-sidebar .mp-navgroup__label{color:transparent;background-size:26px 1px}
 [data-sidebar="collapsed"] .mp-sidebar .mp-navgroup:first-of-type .mp-navgroup__label{background-size:0 1px}
@@ -283,13 +283,15 @@ button.mp-badge:hover{filter:brightness(.97)}
 .mp-sidebar__fold>*{min-height:0;overflow:hidden;transition:padding var(--mp-rail-dur) var(--mp-ease-std)}
 [data-sidebar="collapsed"] .mp-sidebar__fold{grid-template-rows:0fr;opacity:0;visibility:hidden;transition-duration:var(--mp-rail-dur),var(--mp-dur-fast),0s;transition-delay:0s,0s,var(--mp-rail-dur)}
 [data-sidebar="collapsed"] .mp-sidebar__fold>*{padding-top:0;padding-bottom:0}
-.mp-sidebar__toggle-icon{display:grid;flex:none}
-.mp-sidebar__toggle-icon>.mp-icon{grid-area:1/1;transition:opacity var(--mp-dur-base) var(--mp-ease-std)}
-.mp-sidebar__toggle-icon>.mp-icon:last-child,[data-sidebar="collapsed"] .mp-sidebar__toggle-icon>.mp-icon:first-child{opacity:0}
-[data-sidebar="collapsed"] .mp-sidebar__toggle-icon>.mp-icon:last-child{opacity:1}
+.mp-railtoggle{position:fixed;top:21px;left:calc(var(--mp-sidebar-w) - 12px);z-index:25;display:grid;place-items:center;width:24px;height:24px;padding:0;border-radius:50%;border:1px solid var(--mp-border-2);background:var(--mp-bg-raised);color:var(--mp-text-3);box-shadow:var(--mp-shadow-2);cursor:pointer;transition:left var(--mp-rail-dur) var(--mp-ease-std),color var(--mp-dur-fast),border-color var(--mp-dur-fast),background var(--mp-dur-fast)}
+.mp-railtoggle::before{content:"";position:absolute;inset:-8px}
+.mp-railtoggle:hover{color:var(--mp-accent-text);border-color:var(--mp-accent);background:var(--mp-bg-surface)}
+.mp-railtoggle .mp-icon{transition:transform var(--mp-rail-dur) var(--mp-ease-std)}
+[data-sidebar="collapsed"]>.mp-railtoggle{left:50px}
+[data-sidebar="collapsed"]>.mp-railtoggle .mp-icon{transform:rotate(180deg)}
 }
 @media (min-width:64rem) and (prefers-reduced-motion:reduce){
-.mp-shell,.mp-shell .mp-content,.mp-shell .mp-sidebar *{transition:none!important}
+.mp-shell,.mp-shell .mp-content,.mp-shell .mp-sidebar *,.mp-railtoggle,.mp-railtoggle *{transition:none!important}
 }
 .mp-tab{display:grid;place-items:center;border:0;background:transparent;color:var(--mp-text-1);cursor:pointer;min-height:var(--mp-hit-min);position:relative;-webkit-tap-highlight-color:transparent;padding:0;text-decoration:none}
 .mp-tab__icon{display:grid;place-items:center;width:48px;height:48px;border-radius:50%;transition:background var(--mp-dur-fast),transform var(--mp-dur-fast) var(--mp-ease-out)}
