@@ -173,53 +173,63 @@ export async function parsePdfStatements(files: PdfFileInput[]): Promise<ParsedS
       continue;
     }
 
-    const { parser, result } = detectAndParse(extracted.lines, extracted.text);
-    if (!parser || !result) {
+    const { parser, results } = detectAndParse(extracted.lines, extracted.text);
+    if (!parser || results.length === 0) {
       out.push(
         unrecognized(f.name, extracted.lines.slice(0, 12), extracted.pageCount, [
-          "Unrecognized statement format — no parser matched.",
+          parser ? `${parser.label}: no accounts found in this statement.` : "Unrecognized statement format — no parser matched.",
         ]),
       );
       continue;
     }
 
-    const m = result.meta;
-    const analyzed = await analyzeRows(result.txns, m.accountNumber, rules);
-    const txnDates = result.txns
-      .map((t) => t.dateIso)
-      .filter((d): d is string => !!d)
-      .sort();
-    const firstTxnDate = txnDates[0] ?? null;
-    const lastTxnDate = txnDates[txnDates.length - 1] ?? null;
+    // One reviewable statement per account the PDF covers.
+    for (const result of results) {
+      const m = result.meta;
+      const analyzed = await analyzeRows(result.txns, m.accountNumber, rules);
+      const txnDates = result.txns
+        .map((t) => t.dateIso)
+        .filter((d): d is string => !!d)
+        .sort();
+      const firstTxnDate = txnDates[0] ?? null;
+      const lastTxnDate = txnDates[txnDates.length - 1] ?? null;
+      const net = result.txns.reduce((n, t) => n + (t.direction === "Credit" ? 1 : -1) * (t.amount ?? 0), 0);
+      const reconciled =
+        m.openingBalance != null && m.closingBalance != null
+          ? Math.abs(m.openingBalance + net - m.closingBalance) < 0.005
+          : null;
 
-    out.push({
-      filename: f.name,
-      parserId: parser.id,
-      parserLabel: parser.label,
-      detected: true,
-      pageCount: extracted.pageCount,
-      lineCount: extracted.lines.length,
-      accountNumber: m.accountNumber,
-      institution: m.institution,
-      accountType: m.accountType,
-      openingBalance: m.openingBalance,
-      closingBalance: m.closingBalance,
-      periodStart: m.periodStart,
-      periodEnd: m.periodEnd,
-      txns: result.txns,
-      ...analyzed,
-      balanceSuggestions: buildBalanceSuggestions(
-        m.institution,
-        m.openingBalance,
-        m.closingBalance,
-        m.periodStart,
-        m.periodEnd,
-        firstTxnDate,
-        lastTxnDate,
-      ),
-      notes: result.notes,
-      sampleLines: extracted.lines.slice(0, 12),
-    });
+      out.push({
+        filename: f.name,
+        parserId: parser.id,
+        parserLabel: parser.label,
+        detected: true,
+        pageCount: extracted.pageCount,
+        lineCount: extracted.lines.length,
+        accountNumber: m.accountNumber,
+        accountLabel: m.accountLabel ?? null,
+        institution: m.institution,
+        accountType: m.accountType,
+        openingBalance: m.openingBalance,
+        closingBalance: m.closingBalance,
+        periodStart: m.periodStart,
+        periodEnd: m.periodEnd,
+        txns: result.txns,
+        ...analyzed,
+        balanceSuggestions: buildBalanceSuggestions(
+          [m.institution, m.accountLabel].filter(Boolean).join(" ") || null,
+          m.openingBalance,
+          m.closingBalance,
+          m.periodStart,
+          m.periodEnd,
+          firstTxnDate,
+          lastTxnDate,
+        ),
+        reconciled,
+        notes: result.notes,
+        sampleLines: extracted.lines.slice(0, 12),
+      });
+    }
   }
 
   return out;
@@ -239,6 +249,7 @@ function unrecognized(
     pageCount,
     lineCount: sampleLines.length,
     accountNumber: "",
+    accountLabel: null,
     institution: null,
     accountType: null,
     openingBalance: null,
@@ -252,6 +263,7 @@ function unrecognized(
     duplicateCount: 0,
     errorCount: 0,
     balanceSuggestions: [],
+    reconciled: null,
     notes,
     sampleLines,
   };
@@ -306,6 +318,7 @@ export async function commitPdfStatements(
     const patch: Record<string, unknown> = {};
     if (cur && !cur.institution && s.institution) patch.institution = s.institution;
     if (cur && !cur.accountType && s.accountType) patch.accountType = s.accountType;
+    if (cur && !cur.label && s.accountLabel) patch.label = s.accountLabel.slice(0, 64);
     if (Object.keys(patch).length) {
       await db.update(accounts).set(patch).where(eq(accounts.id, id));
     }

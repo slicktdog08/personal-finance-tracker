@@ -42,6 +42,38 @@ function toBase64(buf: ArrayBuffer): string {
   return btoa(bin);
 }
 
+// The parse action takes one request per batch: a server action body is capped at 25MB and
+// base64 adds a third, so ~12MB of PDFs per request. A single bigger file goes alone.
+const BATCH_BYTES = 12 * 1024 * 1024;
+const BATCH_FILES = 10;
+function batchFiles(files: File[]): File[][] {
+  const out: File[][] = [];
+  let cur: File[] = [];
+  let bytes = 0;
+  for (const f of files) {
+    if (cur.length && (bytes + f.size > BATCH_BYTES || cur.length >= BATCH_FILES)) {
+      out.push(cur);
+      cur = [];
+      bytes = 0;
+    }
+    cur.push(f);
+    bytes += f.size;
+  }
+  if (cur.length) out.push(cur);
+  return out;
+}
+
+// Oldest statement first, the accounts of one file kept together in statement order.
+function byPeriod(a: ParsedStatement, b: ParsedStatement): number {
+  return (a.periodStart ?? "9999").localeCompare(b.periodStart ?? "9999") || a.filename.localeCompare(b.filename);
+}
+
+function stmtTitle(s: ParsedStatement): string {
+  if (!s.detected) return s.filename;
+  const acct = s.accountNumber ? `••${s.accountNumber}` : "";
+  return [s.accountLabel, acct].filter(Boolean).join(" ") || s.filename;
+}
+
 export function PdfImportWizard({
   accounts,
   categoryOptions,
@@ -58,6 +90,11 @@ export function PdfImportWizard({
   const [result, setResult] = useState<PdfCommitResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, start] = useTransition();
+  // Bulk uploads parse in several requests; shows "Reading 12 of 40…" while they run.
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
+  // Statement cards whose detail (balances + transactions) is open. Bulk reviews start
+  // collapsed so 40 statements read as a list, not 40 tables.
+  const [expanded, setExpanded] = useState<Set<number>>(new Set());
   // Saved rules, kept current as rules are created/edited from the review tables. A
   // rule is global, so a save from one statement re-applies across every statement.
   const [rules, setRules] = useState<CategoryRule[]>(initialRules);
@@ -90,9 +127,9 @@ export function PdfImportWizard({
 
     // Client-side guards so users get a clear message instead of an opaque Server Action
     // body-size rejection (base64 adds ~33%; the server cap is 25MB).
-    const MAX_FILES = 12;
+    const MAX_FILES = 200;
     const MAX_FILE_MB = 15;
-    const MAX_TOTAL_MB = 18;
+    const MAX_TOTAL_MB = 300;
     if (files.length > MAX_FILES) {
       setError(`Too many files at once (${files.length}). Please upload ${MAX_FILES} or fewer.`);
       return;
@@ -110,17 +147,26 @@ export function PdfImportWizard({
       return;
     }
 
-    const payload = await Promise.all(
-      files.map(async (f) => ({ name: f.name, dataB64: toBase64(await f.arrayBuffer()) })),
-    );
     start(async () => {
       try {
-        const parsed = await parsePdfStatements(payload);
+        const parsed: ParsedStatement[] = [];
+        setProgress({ done: 0, total: files.length });
+        for (const batch of batchFiles(files)) {
+          const payload = await Promise.all(
+            batch.map(async (f) => ({ name: f.name, dataB64: toBase64(await f.arrayBuffer()) })),
+          );
+          parsed.push(...(await parsePdfStatements(payload)));
+          setProgress((p) => (p ? { ...p, done: p.done + batch.length } : p));
+        }
+        parsed.sort(byPeriod);
         setStmts(parsed);
         setRecordBal(parsed.map((s) => s.balanceSuggestions.map(() => true)));
+        setExpanded(new Set(parsed.length <= 3 ? parsed.map((_, i) => i) : []));
         setPhase("review");
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setProgress(null);
       }
     });
   }
@@ -221,6 +267,19 @@ export function PdfImportWizard({
     );
   }
 
+  function toggleExpanded(i: number) {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(i)) next.delete(i);
+      else next.add(i);
+      return next;
+    });
+  }
+
+  function setAllBalances(on: boolean) {
+    setRecordBal(stmts.map((s) => s.balanceSuggestions.map(() => on)));
+  }
+
   function toggleBalance(i: number, k: number, on: boolean) {
     setRecordBal((prev) =>
       prev.map((arr, idx) => (idx === i ? arr.map((b, j) => (j === k ? on : b)) : arr)),
@@ -235,6 +294,7 @@ export function PdfImportWizard({
     return n + s.balanceSuggestions.filter((_, k) => recordBal[idx]?.[k]).length;
   }, 0);
   const missingAccount = committable.some((s) => !s.accountNumber.trim());
+  const fileCount = new Set(stmts.map((s) => s.filename)).size;
 
   function commit() {
     const inputs: CommitStatementInput[] = committable.map((s) => {
@@ -242,6 +302,7 @@ export function PdfImportWizard({
       return {
         filename: s.filename,
         accountNumber: s.accountNumber.trim(),
+        accountLabel: s.accountLabel,
         institution: s.institution,
         accountType: s.accountType,
         rows: s.rows,
@@ -263,9 +324,12 @@ export function PdfImportWizard({
     setPhase("upload");
     setStmts([]);
     setRecordBal([]);
+    setExpanded(new Set());
     setResult(null);
     setError(null);
   }
+
+  const attention = (s: ParsedStatement) => !s.detected || s.reconciled === false || s.notes.length > 0;
 
   return (
     <div className="space-y-5">
@@ -291,9 +355,9 @@ export function PdfImportWizard({
           multiple
           disabled={pending}
           pending={pending}
-          pendingLabel="Extracting…"
+          pendingLabel={progress && progress.total > 1 ? `Reading ${progress.done} of ${progress.total}…` : "Extracting…"}
           title="Drop PDF statements here"
-          hint="For accounts that only give you PDFs. Upload several at once; text is read directly (no OCR). Recognized formats parse automatically, others are flagged so a parser can be added."
+          hint="For accounts that only give you PDFs. Drop a whole folder's worth at once; text is read directly (no OCR). Recognized formats parse automatically, others are flagged so a parser can be added."
           onFiles={onFiles}
         />
       )}
@@ -304,25 +368,87 @@ export function PdfImportWizard({
             Set a category, and use <span className="text-fg-2">+ note</span> under a description to add a comment; both save
             with the transaction when you import.
           </p>
+
+          {stmts.length > 1 && (
+            <Card
+              padded={false}
+              title="Statements"
+              meta={`${stmts.length} accounts · ${fileCount} file${fileCount === 1 ? "" : "s"}`}
+            >
+              <div className="flex flex-wrap items-center gap-2 px-5 pb-2 text-xs text-fg-3 max-md:px-3.5">
+                <span>
+                  Record opening + closing balances: {totalBalances} of{" "}
+                  {stmts.reduce((n, s) => n + s.balanceSuggestions.length, 0)} selected
+                </span>
+                <Button size="sm" variant="ghost" onClick={() => setAllBalances(true)}>
+                  All
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => setAllBalances(false)}>
+                  None
+                </Button>
+              </div>
+              <ul className="divide-y divide-line text-sm">
+                {stmts.map((s, i) => (
+                  <li key={i} className="flex flex-wrap items-center gap-x-4 gap-y-1 px-5 py-2 max-md:px-3.5">
+                    <span className="w-52 shrink-0 whitespace-nowrap tabular-nums text-fg-2">
+                      {s.periodStart ? formatDate(s.periodStart) : "?"} – {s.periodEnd ? formatDate(s.periodEnd) : "?"}
+                    </span>
+                    <span className="min-w-[8rem] flex-1 truncate font-medium">{stmtTitle(s)}</span>
+                    <span className="tabular-nums text-fg-2">
+                      {s.openingBalance != null ? <Money value={s.openingBalance} kind="neutral" /> : "—"} →{" "}
+                      {s.closingBalance != null ? <Money value={s.closingBalance} kind="neutral" /> : "—"}
+                    </span>
+                    <span className="w-20 text-right text-xs text-fg-3">
+                      {s.detected ? `${s.newCount} new` : "unrecognized"}
+                    </span>
+                    <span className="w-24 text-xs">
+                      {s.reconciled === true ? (
+                        <span className="text-ok">✓ reconciles</span>
+                      ) : s.reconciled === false ? (
+                        <span className="text-warn">doesn&apos;t add up</span>
+                      ) : (
+                        <span className="text-fg-3">—</span>
+                      )}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </Card>
+          )}
+
           {stmts.map((s, i) => (
             <Card
               key={i}
               padded={false}
-              title={`Review · ${s.filename}`}
+              title={stmtTitle(s)}
               meta={
                 s.detected
-                  ? `${reviewMeta(s.newCount, s.duplicateCount, s.finalizeCount ?? 0, s.errorCount)} · ${s.pageCount} page${s.pageCount === 1 ? "" : "s"}`
+                  ? `${s.periodStart ? formatDate(s.periodStart) : "?"} – ${s.periodEnd ? formatDate(s.periodEnd) : "?"} · ${reviewMeta(s.newCount, s.duplicateCount, s.finalizeCount ?? 0, s.errorCount)} · ${s.filename}`
                   : `${s.pageCount} page${s.pageCount === 1 ? "" : "s"}`
               }
               action={
-                <Badge
-                  label={s.detected ? s.parserLabel : "Unrecognized format"}
-                  color={s.detected ? "#0ea5e9" : "#eab308"}
-                  size="sm"
-                />
+                <div className="flex items-center gap-2">
+                  {s.reconciled === false && <Badge label="Doesn't add up" color="#eab308" size="sm" />}
+                  <span className={s.detected ? "max-md:hidden" : undefined}>
+                    <Badge
+                      label={s.detected ? s.parserLabel : "Unrecognized format"}
+                      color={s.detected ? "#0ea5e9" : "#eab308"}
+                      size="sm"
+                    />
+                  </span>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    icon={expanded.has(i) ? "chevron-up" : "chevron-down"}
+                    aria-expanded={expanded.has(i)}
+                    onClick={() => toggleExpanded(i)}
+                  >
+                    {expanded.has(i) ? "Hide" : attention(s) ? "Check" : "Details"}
+                  </Button>
+                </div>
               }
             >
-              {!s.detected ? (
+              {!expanded.has(i) ? null : !s.detected ? (
                 <div className="space-y-2 px-5 pb-5 max-md:px-3.5">
                   <Notice tone="warn">
                     No parser matched this statement. Adding one is about 40 lines (see src/server/lib/pdf/parsers). First lines
