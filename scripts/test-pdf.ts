@@ -7,6 +7,7 @@ import { robinhoodParser } from "@/server/lib/pdf/parsers/robinhood";
 import { detectAndParse } from "@/server/lib/pdf/registry";
 import { extractPdf } from "@/server/lib/pdf/extract";
 import { readFileSync } from "fs";
+import type { ParserResult } from "@/server/lib/pdf/types";
 
 const HEADER = [
   "Robinhood Spending Statement 05-2026",
@@ -100,7 +101,7 @@ const text = lines.join("\n");
 
 console.log("Robinhood parser — synthetic statement text:");
 check("detect() true", robinhoodParser.detect(text));
-const r = robinhoodParser.parse(lines, text);
+const r = robinhoodParser.parse(lines, text) as ParserResult;
 
 check(`account last4 = 1234 (got ${r.meta.accountNumber})`, r.meta.accountNumber === "1234");
 check(`opening = 693.94 (got ${r.meta.openingBalance})`, r.meta.openingBalance === 693.94);
@@ -147,7 +148,12 @@ async function main() {
     console.log(`  pages=${ex.pageCount} lines=${ex.lines.length}`);
     const d = detectAndParse(ex.lines, ex.text);
     check("registry detected a parser", !!d.parser, d.parser?.id);
-    console.log("  parsed txns:", d.result?.txns.length, "meta:", d.result?.meta);
+    for (const res of d.results) {
+      const net = res.txns.reduce((n, t) => n + (t.direction === "Credit" ? 1 : -1) * (t.amount ?? 0), 0);
+      const delta = (res.meta.closingBalance ?? 0) - (res.meta.openingBalance ?? 0);
+      console.log(`  ••${res.meta.accountNumber} ${res.meta.periodStart}..${res.meta.periodEnd}: ${res.txns.length} txns, ${res.notes.length} notes`);
+      check(`  ••${res.meta.accountNumber} reconciles (${net.toFixed(2)} == ${delta.toFixed(2)})`, Math.abs(net - delta) < 0.005);
+    }
   }
 
   console.log(failures === 0 ? "\nALL PASSED" : `\n${failures} FAILURE(S)`);
