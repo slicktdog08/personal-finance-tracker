@@ -4,7 +4,7 @@
 #   1. wait for MySQL (compose starts both at once, and MySQL's first boot is slow)
 #   2. empty database  -> create the schema and default lookups   (scripts/init-db.ts)
 #   3. always          -> apply migrations not yet recorded        (scripts/apply-sql.ts --pending)
-#   4. DEMO_MODE=1     -> replace everything with fresh sample data (scripts/seed-demo.ts --reset)
+#   4. DEMO_MODE=1     -> replace everything with fresh sample data (scripts/seed-demo.ts --reset --force)
 #
 # Every step is idempotent, so restarting the container is always safe. Set AUTO_MIGRATE=0
 # to skip 1-3 when a deploy pipeline runs migrations itself. Schema changes need a user with
@@ -24,7 +24,10 @@ if [ "${AUTO_MIGRATE:-1}" != "0" ]; then
 fi
 
 if [ "$DEMO_MODE" = "1" ]; then
-  $TSX scripts/seed-demo.ts --reset
+  # --force: a demo volume seeded before the demo_seeded marker existed must still reset.
+  # seed-demo.ts still refuses when DATABASE_MIGRATION_URL names a different database, and the
+  # periodic reset in the app never forces.
+  $TSX scripts/seed-demo.ts --reset --force
 fi
 
 exec node_modules/.bin/next start -p "${PORT:-3000}"
