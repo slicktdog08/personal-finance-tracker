@@ -17,6 +17,8 @@ export interface ParsedTxn {
 // Header/summary facts a statement exposes.
 export interface StatementMeta {
   accountNumber: string; // last-4 (may be "")
+  /** The account's name on the statement, when one PDF covers several accounts. */
+  accountLabel?: string | null;
   institution: string | null;
   accountType: string | null;
   openingBalance: number | null;
@@ -34,12 +36,14 @@ export interface ParserResult {
 
 // A registered parser for one statement format. Adding support for a new bank = one
 // of these. `detect` is a cheap text sniff; `parse` does the real work over the
-// reconstructed lines (full text also provided for header scraping).
+// reconstructed lines (full text also provided for header scraping). A statement that
+// covers several accounts (e.g. a bank's combined checking + savings statement) returns
+// one result per account.
 export interface StatementParser {
   id: string;
   label: string;
   detect: (text: string) => boolean;
-  parse: (lines: string[], text: string) => ParserResult;
+  parse: (lines: string[], text: string) => ParserResult | ParserResult[];
 }
 
 // A suggested balance snapshot to (optionally) record into account_balances. A statement
@@ -63,6 +67,8 @@ export interface ParsedStatement {
 
   // editable in the UI
   accountNumber: string; // last-4 (detected, user can override)
+  /** Account name from the statement — set when one PDF holds several accounts. */
+  accountLabel: string | null;
   institution: string | null;
   accountType: string | null;
 
@@ -80,6 +86,8 @@ export interface ParsedStatement {
   errorCount: number;
 
   balanceSuggestions: StatementBalance[];
+  /** opening + credits − debits == closing; null when either balance is missing. */
+  reconciled: boolean | null;
   notes: string[];
   sampleLines: string[]; // first lines, shown when unrecognized to aid writing a parser
 }
@@ -95,6 +103,7 @@ export interface PdfFileInput {
 export interface CommitStatementInput {
   filename: string;
   accountNumber: string;
+  accountLabel?: string | null;
   institution: string | null;
   accountType: string | null;
   rows: PreviewRow[];
