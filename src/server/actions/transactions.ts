@@ -804,6 +804,27 @@ export async function mergePendingTransaction(
   return res;
 }
 
+// A stuck pending charge (see src/server/lib/pending-diagnosis.ts) is settled by the user one
+// of three ways: merged into the posted row it became (mergePendingTransaction), kept as a
+// posted charge whose bank row will never arrive, or removed as a hold that never posted.
+export async function resolveStuckPending(
+  id: number,
+  outcome: "posted" | "never-posted",
+  path: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  await requireSession();
+  if (!Number.isInteger(id)) return { ok: false, error: "Invalid transaction." };
+  const { keepStuckAsPosted, removeDroppedHold } = await import("@/server/pending");
+  const res = outcome === "posted" ? await keepStuckAsPosted(id) : await removeDroppedHold(id);
+  if (res.ok) {
+    revalidatePath(path);
+    revalidatePath("/transactions");
+    revalidatePath("/dashboard");
+    revalidatePath("/months");
+  }
+  return res;
+}
+
 export async function deleteTransaction(id: number, path: string): Promise<void> {
   await requireSession();
   // A bank-synced row would be re-inserted by the next run while it is still inside the

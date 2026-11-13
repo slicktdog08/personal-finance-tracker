@@ -547,8 +547,11 @@ async function syncAccount(
   }));
 
   const softDays = 2;
-  // Settled rows from other sources inside the window (soft duplicates), plus every
-  // hand-entered PENDING row on the account — those are placeholders the fetched rows settle.
+  // Settled rows from other sources inside the window (soft duplicates), plus every PENDING
+  // row on the account from any other source — those are placeholders the fetched rows settle.
+  // That includes another provider's pending rows: when an account moves feeds (SimpleFIN →
+  // Plaid), the old feed's holds would otherwise read as settled rows, swallow the new feed's
+  // posted twin as a "soft duplicate", and stay pending forever.
   const otherRows = await db
     .select({
       id: transactions.id,
@@ -558,6 +561,7 @@ async function syncAccount(
       description: transactions.description,
       pending: transactions.pending,
       source: transactions.source,
+      externalId: transactions.externalId,
     })
     .from(transactions)
     .where(
@@ -569,7 +573,7 @@ async function syncAccount(
             gte(transactions.txnDate, addDaysIso(range.startDate, -softDays)),
             lte(transactions.txnDate, addDaysIso(range.endDate, softDays)),
           ),
-          and(eq(transactions.pending, true), inArray(transactions.source, [...LOCAL_SOURCES])),
+          eq(transactions.pending, true),
         ),
       ),
     );
@@ -579,8 +583,9 @@ async function syncAccount(
     amount: Number(r.amount),
     direction: r.direction as "Debit" | "Credit",
     description: r.description,
-    status: r.pending && LOCAL_SOURCES.includes(r.source ?? "") ? "pending" : "posted",
+    status: r.pending ? "pending" : "posted",
   }));
+  const otherById = new Map(otherRows.map((r) => [r.id, r]));
 
   const plan = reconcile(fetched, existingSynced, existingOther, {
     today: ctx.today,
@@ -613,6 +618,15 @@ async function syncAccount(
     // description and status take over; category, notes and bill link stay.
     for (const s of settles) {
       const t = s.fetched;
+      // A placeholder from another provider gives up its id: tombstone it so that feed, if it
+      // is ever linked again, doesn't re-insert the hold next to its settled row.
+      const prev = otherById.get(s.existingId);
+      if (prev?.externalId && !LOCAL_SOURCES.includes(prev.source ?? "")) {
+        await db
+          .insert(syncIgnored)
+          .values({ source: prev.source, externalId: prev.externalId })
+          .onDuplicateKeyUpdate({ set: { id: sql`id` } });
+      }
       await db
         .update(transactions)
         .set({
