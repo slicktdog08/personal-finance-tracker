@@ -9,9 +9,9 @@
 //
 // The description is a gate too, of a kind that depends on who wrote the pending row:
 // - A bank-synced pending row carries the bank's own descriptor, and the posted version of the
-//   same charge keeps the merchant's words ("TST* OJOS LOCOS" → "TST*OJOS LOCOS - SOUTHWE"). So
+//   same charge keeps the merchant's words ("TST* DEMO CANTINA" → "TST*DEMO CANTINA - NORTH"). So
 //   it only pairs with a posted row that shares the merchant name. Without this, any same-card
-//   charge a few dollars apart was offered as its twin (H-E-B #599 ↔ OJOS LOCOS).
+//   charge a few dollars apart was offered as its twin (SAMPLE GROCER #12 ↔ DEMO CANTINA).
 // - A row typed by hand ("Dinner at Joe's") can't be expected to share words, so it may still
 //   pair on amount and date alone — but then the evidence has to look like a real settle: the
 //   exact amount, or the bank posting on/after the entry with the charge grown by at most a tip.
