@@ -42,10 +42,13 @@ function toBase64(buf: ArrayBuffer): string {
   return btoa(bin);
 }
 
-// The parse action takes one request per batch: a server action body is capped at 25MB and
-// base64 adds a third, so ~12MB of PDFs per request. A single bigger file goes alone.
-const BATCH_BYTES = 12 * 1024 * 1024;
-const BATCH_FILES = 10;
+// The parse action takes one request per batch. Base64 adds a third, and the request passes
+// through proxy.ts, whose body buffer defaults to 10MB (raised in next.config.ts) — so ~6MB of
+// PDFs per request stays clear of it either way. A single bigger file goes alone.
+const BATCH_BYTES = 6 * 1024 * 1024;
+const BATCH_FILES = 8;
+// Reviewed statements go back to the server in chunks of about this much JSON.
+const COMMIT_CHUNK_CHARS = 6 * 1024 * 1024;
 function batchFiles(files: File[]): File[][] {
   const out: File[][] = [];
   let cur: File[] = [];
@@ -66,6 +69,41 @@ function batchFiles(files: File[]): File[][] {
 // Oldest statement first, the accounts of one file kept together in statement order.
 function byPeriod(a: ParsedStatement, b: ParsedStatement): number {
   return (a.periodStart ?? "9999").localeCompare(b.periodStart ?? "9999") || a.filename.localeCompare(b.filename);
+}
+
+// A card for a file the server couldn't take at all (network error, oversized request).
+function failedFile(name: string, err: unknown): ParsedStatement {
+  return {
+    filename: name,
+    parserId: null,
+    parserLabel: "Upload failed",
+    detected: false,
+    pageCount: 0,
+    lineCount: 0,
+    accountNumber: "",
+    accountLabel: null,
+    institution: null,
+    accountType: null,
+    openingBalance: null,
+    closingBalance: null,
+    periodStart: null,
+    periodEnd: null,
+    txns: [],
+    rows: [],
+    total: 0,
+    newCount: 0,
+    duplicateCount: 0,
+    errorCount: 0,
+    balanceSuggestions: [],
+    dailyBalances: [],
+    reconciled: null,
+    notes: [`Could not upload this file: ${err instanceof Error ? err.message : String(err)}`],
+    sampleLines: [],
+  };
+}
+
+async function toPayload(files: File[]) {
+  return Promise.all(files.map(async (f) => ({ name: f.name, dataB64: toBase64(await f.arrayBuffer()) })));
 }
 
 function stmtTitle(s: ParsedStatement): string {
@@ -154,10 +192,19 @@ export function PdfImportWizard({
         const parsed: ParsedStatement[] = [];
         setProgress({ done: 0, total: files.length });
         for (const batch of batchFiles(files)) {
-          const payload = await Promise.all(
-            batch.map(async (f) => ({ name: f.name, dataB64: toBase64(await f.arrayBuffer()) })),
-          );
-          parsed.push(...(await parsePdfStatements(payload)));
+          try {
+            parsed.push(...(await parsePdfStatements(await toPayload(batch))));
+          } catch {
+            // One bad request shouldn't sink the whole upload: retry the batch a file at a
+            // time, and give any file that still fails its own card.
+            for (const f of batch) {
+              try {
+                parsed.push(...(await parsePdfStatements(await toPayload([f]))));
+              } catch (err) {
+                parsed.push(failedFile(f.name, err));
+              }
+            }
+          }
           setProgress((p) => (p ? { ...p, done: p.done + batch.length } : p));
         }
         parsed.sort(byPeriod);
@@ -318,8 +365,38 @@ export function PdfImportWizard({
     });
     start(async () => {
       try {
-        const res = await commitPdfStatements(inputs);
-        setResult(res);
+        // Several requests for a big import, each well under the request-size limits.
+        const chunks: CommitStatementInput[][] = [];
+        let cur: CommitStatementInput[] = [];
+        let size = 0;
+        for (const s of inputs) {
+          const n = JSON.stringify(s).length;
+          if (cur.length && size + n > COMMIT_CHUNK_CHARS) {
+            chunks.push(cur);
+            cur = [];
+            size = 0;
+          }
+          cur.push(s);
+          size += n;
+        }
+        if (cur.length) chunks.push(cur);
+        let res: PdfCommitResult | null = null;
+        for (const chunk of chunks) {
+          const r = await commitPdfStatements(chunk);
+          res = res
+            ? {
+                statements: res.statements + r.statements,
+                inserted: res.inserted + r.inserted,
+                duplicates: res.duplicates + r.duplicates,
+                finalized: res.finalized + r.finalized,
+                errors: res.errors + r.errors,
+                balancesRecorded: res.balancesRecorded + r.balancesRecorded,
+                merged: res.merged + r.merged,
+                billsLinked: res.billsLinked + r.billsLinked,
+              }
+            : r;
+        }
+        if (res) setResult(res);
         setPhase("done");
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
@@ -440,7 +517,7 @@ export function PdfImportWizard({
                   {s.reconciled === false && <Badge label="Doesn't add up" color="#eab308" size="sm" />}
                   <span className={s.detected ? "max-md:hidden" : undefined}>
                     <Badge
-                      label={s.detected ? s.parserLabel : "Unrecognized format"}
+                      label={s.detected || s.sampleLines.length === 0 ? s.parserLabel : "Unrecognized format"}
                       color={s.detected ? "#0ea5e9" : "#eab308"}
                       size="sm"
                     />
@@ -457,7 +534,11 @@ export function PdfImportWizard({
                 </div>
               }
             >
-              {!expanded.has(i) ? null : !s.detected ? (
+              {!expanded.has(i) ? null : !s.detected && s.sampleLines.length === 0 ? (
+                <div className="px-5 pb-5 max-md:px-3.5">
+                  <Notice tone="danger">{s.notes.join(" ") || "This file could not be read."}</Notice>
+                </div>
+              ) : !s.detected ? (
                 <div className="space-y-2 px-5 pb-5 max-md:px-3.5">
                   <Notice tone="warn">
                     No parser matched this statement. Adding one is about 40 lines (see src/server/lib/pdf/parsers). First lines
