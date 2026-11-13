@@ -24,7 +24,7 @@
 // mis-signed or dropped row shows up as a parser note instead of a silent drift.
 import { parseMoney } from "@/server/lib/money";
 import { last4 } from "@/server/lib/import-map";
-import type { ParserResult, ParsedTxn, StatementParser } from "@/server/lib/pdf/types";
+import type { DailyBalance, ParserResult, ParsedTxn, StatementParser } from "@/server/lib/pdf/types";
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const MON = `(${MONTHS.join("|")})`;
@@ -45,9 +45,19 @@ const TXN_RE = new RegExp(
   String.raw`^${MON} (\d{1,2})(?: (.*?))? (Credit|Debit) ([+-]) \$([\d,]+\.\d{2}) (${MONEY})$`,
 );
 
+// A dated row with only a balance and no Credit/Debit amount — a notice such as "Interest Rate
+// Change from 0.50% to 1.00%". It moves no money, so it is skipped rather than reported.
+const INFO_RE = new RegExp(String.raw`^${MON} (\d{1,2}) (.+) (${MONEY})$`);
+
 function toIso(year: number, monthIdx: number, day: number): string | null {
   if (day < 1 || day > 31) return null;
   return `${year}-${String(monthIdx + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+
+function nextDay(iso: string): string {
+  const d = new Date(`${iso}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + 1);
+  return d.toISOString().slice(0, 10);
 }
 
 function accountTypeOf(product: string | null, name: string): string {
@@ -64,6 +74,8 @@ interface Section {
   opening: number | null;
   closing: number | null;
   txns: ParsedTxn[];
+  /** Balance after the last row of each day, in statement order. */
+  daily: Map<string, number>;
   notes: string[];
 }
 
@@ -141,6 +153,7 @@ export const capitalOneParser: StatementParser = {
           opening: null,
           closing: null,
           txns: [],
+          daily: new Map(),
           notes: [],
         };
         sections.push(cur);
@@ -183,6 +196,9 @@ export const capitalOneParser: StatementParser = {
 
       const tm = TXN_RE.exec(line);
       if (!tm) {
+        const im = INFO_RE.exec(line);
+        const infoBal = im ? parseMoney(im[4]) : null;
+        if (im && (running == null || (infoBal != null && Math.abs(infoBal - running) < 0.005))) continue;
         pending.push(line);
         continue;
       }
@@ -214,6 +230,7 @@ export const capitalOneParser: StatementParser = {
         }
       }
       if (balance != null) running = balance;
+      if (balance != null && dateIso) cur.daily.set(dateIso, balance);
 
       const txn: ParsedTxn = {
         dateIso,
@@ -232,6 +249,21 @@ export const capitalOneParser: StatementParser = {
     flush();
     if (open) finish(open);
 
+    // Every day of the period gets a point, not just days with activity: a quiet stretch is
+    // still a known balance, and a dense series is what makes daily history usable later.
+    const dailyOf = (s: Section): DailyBalance[] => {
+      if (!periodStart || !periodEnd || s.opening == null) {
+        return [...s.daily].map(([asOf, balance]) => ({ asOf, balance }));
+      }
+      const out: DailyBalance[] = [];
+      let bal = s.opening;
+      for (let d = periodStart; d <= periodEnd; d = nextDay(d)) {
+        bal = s.daily.get(d) ?? bal;
+        out.push({ asOf: d, balance: bal });
+      }
+      return out;
+    };
+
     return sections.map((s) => ({
       meta: {
         accountNumber: last4(s.accountNumber),
@@ -244,6 +276,7 @@ export const capitalOneParser: StatementParser = {
         periodEnd,
       },
       txns: s.txns,
+      dailyBalances: dailyOf(s),
       notes: [...(pm ? [] : ["Could not find the statement period; dates may be wrong."]), ...s.notes],
     }));
   },

@@ -33,6 +33,7 @@ CREATE TABLE `account_balances` (
   `balance` decimal(12,2) NOT NULL,
   `as_of` date NOT NULL,
   `note` varchar(255) DEFAULT NULL,
+  `source` varchar(24) DEFAULT NULL,
   `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `credit_limit` decimal(12,2) DEFAULT NULL,
   `apr` decimal(5,2) DEFAULT NULL,
