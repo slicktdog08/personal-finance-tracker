@@ -209,6 +209,16 @@ export const PAY_FREQUENCY_META: Record<
 export const ACCOUNT_TYPES = ["Checking", "Savings", "Cash", "Retirement", "Credit", "Loan", "Other"] as const;
 export type AccountType = (typeof ACCOUNT_TYPES)[number];
 export const CASH_ACCOUNT_TYPES: readonly string[] = ["Checking", "Savings", "Cash"];
+
+// account_balances.source — where a snapshot came from. null = entered by hand (or bank sync).
+// Imported rows may be refreshed by re-importing the statement; hand-entered rows never are.
+export const BALANCE_SOURCES = {
+  /** A statement's opening or closing balance. */
+  statement: "statement",
+  /** An end-of-day balance read off a statement's running-balance column. */
+  statementDaily: "statement-daily",
+} as const;
+export type BalanceSource = (typeof BALANCE_SOURCES)[keyof typeof BALANCE_SOURCES];
 // A physical-cash wallet (the "9999 Cash" account): no bank feed, every row is hand-entered,
 // and its spending is funded by withdrawals from the accounts above. Being a TYPE rather than a
 // hardcoded account number means a second wallet (Apple Cash, a spouse's cash) just works.

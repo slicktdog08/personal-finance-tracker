@@ -7,7 +7,7 @@ import { relativeTime } from "@/lib/sync-format";
 import { formatMoney, toNum } from "@/server/lib/money";
 import { formatDate } from "@/server/lib/period";
 import { monthlyInterest, payoffProgress } from "@/server/lib/debt";
-import { ACCOUNT_TYPES, CASH_ACCOUNT_TYPES, CREDIT_ACCOUNT_TYPES, LIABILITY_ACCOUNT_TYPES, RETIREMENT_ACCOUNT_TYPES } from "@/constants/enums";
+import { ACCOUNT_TYPES, BALANCE_SOURCES, CASH_ACCOUNT_TYPES, CREDIT_ACCOUNT_TYPES, LIABILITY_ACCOUNT_TYPES, RETIREMENT_ACCOUNT_TYPES } from "@/constants/enums";
 import { updateAccount, addAccountBalance, deleteAccountBalance } from "@/server/actions/accounts";
 import { Field, Glyph, Icon, IconButton, Input, Money, ProgressBar, Select, Button, cx } from "@/components/ds";
 import { accountGlyph, accountMaskLine } from "./account-glyph";
@@ -20,6 +20,8 @@ export interface BalanceRow {
   minPayment: string | null;
   asOf: string;
   note: string | null;
+  /** account_balances.source — null when entered by hand or synced. */
+  source?: string | null;
 }
 export interface AccountInfo {
   id: number;
@@ -46,6 +48,11 @@ export function AccountCard({
   sync?: { provider: string; enabled: boolean; lastSyncedAt: string | null; enrollmentStatus: string } | null;
 }) {
   const [pending, start] = useTransition();
+  // End-of-day balances imported from statements run to hundreds of rows; the history list
+  // hides them unless asked, so hand-entered and month-end snapshots stay readable.
+  const [showDaily, setShowDaily] = useState(false);
+  const dailyCount = balances.filter((b) => b.source === BALANCE_SOURCES.statementDaily).length;
+  const listed = showDaily ? balances : balances.filter((b) => b.source !== BALANCE_SOURCES.statementDaily);
   // Collapsed it's the kit's ListRow; expanded it carries the editor, the record-balance form
   // and the history — everything the old always-open card had.
   const [open, setOpen] = useState(false);
@@ -240,10 +247,10 @@ export function AccountCard({
               </div>
 
               {balances.length > 0 && (
-                <History count={balances.length}>
+                <History count={listed.length} dailyCount={dailyCount} showDaily={showDaily} onShowDaily={setShowDaily}>
                   <table className="w-full text-sm">
                     <tbody>
-                      {balances.map((b) => (
+                      {listed.map((b) => (
                         <tr key={b.id} className="border-t border-line">
                           <td className="py-1.5 tabular-nums">{formatDate(b.asOf)}</td>
                           <td className="py-1.5 text-right font-medium">
@@ -339,7 +346,7 @@ export function AccountCard({
               )}
 
               {balances.length > 0 && (
-                <History count={balances.length}>
+                <History count={listed.length} dailyCount={dailyCount} showDaily={showDaily} onShowDaily={setShowDaily}>
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="text-left text-xs text-fg-3">
@@ -353,7 +360,7 @@ export function AccountCard({
                       </tr>
                     </thead>
                     <tbody>
-                      {balances.map((b) => (
+                      {listed.map((b) => (
                         <tr key={b.id} className="border-t border-line">
                           <td className="py-1.5 tabular-nums">{formatDate(b.asOf)}</td>
                           <td className="py-1.5 text-right font-medium">
@@ -394,13 +401,34 @@ export function AccountCard({
 
 // The recorded-balance ledger, collapsed by default: the current balance and the "Record" form
 // stay in view; the list only takes room when you ask for it.
-function History({ count, children }: { count: number; children: React.ReactNode }) {
+function History({
+  count,
+  dailyCount,
+  showDaily,
+  onShowDaily,
+  children,
+}: {
+  count: number;
+  dailyCount: number;
+  showDaily: boolean;
+  onShowDaily: (on: boolean) => void;
+  children: React.ReactNode;
+}) {
   return (
     <details className="group">
       <summary className="flex cursor-pointer select-none items-center gap-1 text-xs text-fg-3 hover:text-fg">
         <Icon name="chevron-right" size={14} className="transition-transform group-open:rotate-90" />
-        History ({count} recorded)
+        History ({count} recorded{dailyCount > 0 && !showDaily ? ` · ${dailyCount} daily hidden` : ""})
       </summary>
+      {dailyCount > 0 && (
+        <button
+          type="button"
+          className="mt-2 text-xs text-fg-3 underline-offset-2 hover:text-fg hover:underline"
+          onClick={() => onShowDaily(!showDaily)}
+        >
+          {showDaily ? "Hide" : "Show"} {dailyCount} daily balance{dailyCount === 1 ? "" : "s"} from statements
+        </button>
+      )}
       <div className="mt-2 max-h-48 overflow-x-auto overflow-y-auto">{children}</div>
     </details>
   );

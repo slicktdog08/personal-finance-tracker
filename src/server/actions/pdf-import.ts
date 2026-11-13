@@ -22,6 +22,7 @@ import type {
   StatementBalance,
 } from "@/server/lib/pdf/types";
 import { requireSession } from "@/server/auth/session";
+import { dayBefore, planBalanceWrites, statementPoints } from "@/server/lib/pdf/balances";
 import { attachPendingMatches } from "@/server/pending";
 
 // Build dedup-aware, category-aware preview rows for one statement's transactions and a
@@ -135,14 +136,15 @@ function buildBalanceSuggestions(
     return ym ? ` (${prettyPeriod(ym.year, ym.month)})` : "";
   };
   const out: StatementBalance[] = [];
-  const openAsOf = periodStart ?? firstTxnDate;
+  // The opening balance is the balance at the end of the day before the period starts.
+  const openAsOf = periodStart ? dayBefore(periodStart) : firstTxnDate;
   if (opening != null && openAsOf) {
     out.push({
       kind: "opening",
       balance: opening,
       asOf: openAsOf,
       creditLimit: null,
-      note: `${inst} opening balance${periodLabel(openAsOf)}`,
+      note: `${inst} opening balance${periodLabel(periodStart ?? openAsOf)}`,
     });
   }
   const closeAsOf = periodEnd ?? lastTxnDate;
@@ -225,6 +227,7 @@ export async function parsePdfStatements(files: PdfFileInput[]): Promise<ParsedS
           firstTxnDate,
           lastTxnDate,
         ),
+        dailyBalances: result.dailyBalances ?? [],
         reconciled,
         notes: result.notes,
         sampleLines: extracted.lines.slice(0, 12),
@@ -263,6 +266,7 @@ function unrecognized(
     duplicateCount: 0,
     errorCount: 0,
     balanceSuggestions: [],
+    dailyBalances: [],
     reconciled: null,
     notes,
     sampleLines,
@@ -356,24 +360,48 @@ export async function commitPdfStatements(
     }
     const acctId = s.accountNumber ? acctMap.get(s.accountNumber) : undefined;
     if (acctId) {
-      for (const bal of s.balances) {
-        // Idempotent: don't re-record a snapshot for the same account + as-of date
-        // (re-uploading the same statement shouldn't pile up duplicate balance rows).
+      const name = [s.institution, s.accountLabel].filter(Boolean).join(" ") || "Statement";
+      const points = statementPoints(s.balances, s.dailyBalances ?? [], `${name} end-of-day balance`);
+      if (points.length) {
+        // One snapshot per account + date: re-uploading a statement refreshes its own rows and
+        // never piles up duplicates or overwrites a balance entered by hand.
         const existing = await db
-          .select({ id: accountBalances.id })
+          .select({
+            id: accountBalances.id,
+            asOf: accountBalances.asOf,
+            balance: accountBalances.balance,
+            source: accountBalances.source,
+          })
           .from(accountBalances)
-          .where(and(eq(accountBalances.accountId, acctId), eq(accountBalances.asOf, bal.asOf)))
-          .limit(1);
-        if (existing.length === 0) {
-          await db.insert(accountBalances).values({
-            accountId: acctId,
-            balance: String(bal.balance),
-            creditLimit: bal.creditLimit == null ? null : String(bal.creditLimit),
-            asOf: bal.asOf,
-            note: bal.note || null,
-          });
-          balancesRecorded++;
+          .where(
+            and(
+              eq(accountBalances.accountId, acctId),
+              inArray(accountBalances.asOf, points.map((p) => p.asOf)),
+            ),
+          );
+        const plan = planBalanceWrites(
+          points,
+          existing.map((e) => ({ ...e, balance: Number(e.balance) })),
+        );
+        for (let k = 0; k < plan.inserts.length; k += 500) {
+          await db.insert(accountBalances).values(
+            plan.inserts.slice(k, k + 500).map((p) => ({
+              accountId: acctId,
+              balance: p.balance.toFixed(2),
+              creditLimit: p.creditLimit == null ? null : p.creditLimit.toFixed(2),
+              asOf: p.asOf,
+              note: p.note,
+              source: p.source,
+            })),
+          );
         }
+        for (const u of plan.updates) {
+          await db
+            .update(accountBalances)
+            .set({ balance: u.point.balance.toFixed(2), note: u.point.note, source: u.point.source })
+            .where(eq(accountBalances.id, u.id));
+        }
+        balancesRecorded += plan.inserts.length + plan.updates.length;
       }
     }
   }
