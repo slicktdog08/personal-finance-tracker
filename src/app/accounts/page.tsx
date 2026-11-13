@@ -46,6 +46,7 @@ export default async function AccountsPage() {
       minPayment: string | null;
       asOf: string;
       note: string | null;
+      source: string | null;
     }[]
   >();
   for (const b of balances) {
@@ -58,6 +59,7 @@ export default async function AccountsPage() {
       minPayment: b.minPayment,
       asOf: b.asOf,
       note: b.note,
+      source: b.source,
     });
     byAccount.set(b.accountId, list);
   }

@@ -51,6 +51,7 @@ const STATEMENT = [
   "(APY) EARNED CYCLE",
   "DATE DESCRIPTION CATEGORY AMOUNT BALANCE",
   "Oct 1 Opening Balance $100.00",
+  "Oct 18 Interest Rate Change from 0.50% to 1.00% $100.00",
   "Oct 31 Closing Balance $100.00",
   ...FOOTER,
 ];
@@ -83,6 +84,7 @@ describe("Capital One 360 statement parser", () => {
     assert.equal(savings.meta.openingBalance, 100);
     assert.equal(savings.meta.closingBalance, 100);
     assert.equal(savings.txns.length, 0);
+    assert.deepEqual(savings.notes, []); // the rate-change notice is not a transaction
   });
 
   test("transactions, wrapped descriptions rejoined across page breaks", () => {
@@ -98,6 +100,17 @@ describe("Capital One 360 statement parser", () => {
       ],
     );
     assert.deepEqual(checking.notes, []);
+  });
+
+  test("an end-of-day balance for every day of the period", () => {
+    const d = checking.dailyBalances!;
+    assert.equal(d.length, 31);
+    assert.deepEqual(d[0], { asOf: "2026-10-01", balance: 500 }); // no activity: the opening balance
+    assert.deepEqual(d[3], { asOf: "2026-10-04", balance: 2450 }); // last row of a two-row day
+    assert.deepEqual(d[10], { asOf: "2026-10-11", balance: 2450 }); // quiet day carries forward
+    assert.deepEqual(d[30], { asOf: "2026-10-31", balance: 2470.5 });
+    assert.equal(savings.dailyBalances!.length, 31);
+    assert.ok(savings.dailyBalances!.every((p) => p.balance === 100));
   });
 
   test("a row that breaks the running balance is reported", () => {

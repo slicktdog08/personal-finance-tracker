@@ -27,10 +27,18 @@ export interface StatementMeta {
   periodEnd: string | null; // ISO
 }
 
+// A balance as of the end of one day.
+export interface DailyBalance {
+  asOf: string; // ISO
+  balance: number;
+}
+
 // What a single issuer parser returns.
 export interface ParserResult {
   meta: StatementMeta;
   txns: ParsedTxn[];
+  /** End-of-day balances, for statements that print a running balance on every row. */
+  dailyBalances?: DailyBalance[];
   notes: string[]; // warnings, e.g. lines that looked transaction-like but didn't parse
 }
 
@@ -47,7 +55,8 @@ export interface StatementParser {
 }
 
 // A suggested balance snapshot to (optionally) record into account_balances. A statement
-// can yield two: the opening balance (as of period start) and the closing balance (period end).
+// can yield two: the opening balance (as of the day before the period starts — it is the
+// balance at the end of that day) and the closing balance (period end).
 export interface StatementBalance {
   kind: "opening" | "closing";
   balance: number;
@@ -86,6 +95,8 @@ export interface ParsedStatement {
   errorCount: number;
 
   balanceSuggestions: StatementBalance[];
+  /** End-of-day balances from the running-balance column; empty when the format has none. */
+  dailyBalances: DailyBalance[];
   /** opening + credits − debits == closing; null when either balance is missing. */
   reconciled: boolean | null;
   notes: string[];
@@ -108,6 +119,8 @@ export interface CommitStatementInput {
   accountType: string | null;
   rows: PreviewRow[];
   balances: StatementBalance[]; // the snapshots the user chose to record
+  /** End-of-day balances to record (empty when the user turned them off). */
+  dailyBalances?: DailyBalance[];
 }
 
 export interface PdfCommitResult {
