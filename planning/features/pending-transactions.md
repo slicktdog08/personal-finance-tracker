@@ -61,6 +61,9 @@ Design choices that follow:
   inserted id (looked up by dedup hash). `CommitResult.merged` / `PdfCommitResult.merged`.
 - Actions: `setTransactionPending`, `mergePendingTransaction` in
   `src/server/actions/transactions.ts`; `createTransaction` / `updateTransaction` accept `pending`.
+- Stuck rows: `src/server/lib/pending-diagnosis.ts` (pure), `loadAccountFeeds` /
+  `removeDroppedHold` / `keepStuckAsPosted` in `src/server/pending.ts`,
+  `resolveStuckPending` in `src/server/actions/transactions.ts`. See "Stuck pending rows".
 - UI: `src/components/transactions/PendingReview.tsx` (tray), `PendingMatchBox` in
   `src/components/import/ImportPreviewTable.tsx`, badge in `TransactionsTable.tsx`.
 
@@ -81,8 +84,61 @@ Design choices that follow:
 - `TransactionEdit.pending` omitted = unchanged (unlike `notes`, where omitted = cleared).
 - Notes from both sides are joined line by line, each distinct line once (`joinNotes`).
 - The Import button counts pending settles: a file of only duplicates and settles is importable.
-- Bank sync's settle path (`sync.ts`) doesn't yet move the typed description into notes — no
-  provider is registered today; bring it in line when one is.
+- Bank sync's settle path (`sync.ts`) doesn't yet move the typed description into notes; bring
+  it in line with `settledNotes` when it matters.
+
+## Stuck pending rows (added 2026-11-13)
+
+Intent stated by the user on 2026-11-13: after running two providers (SimpleFIN and Plaid) in
+one month, some pending rows never resolved. Each one either **posted and we missed it**, or
+**never posted** (an authorization hold). That takes the user's judgement, so the app's job is
+to lay out the evidence as clearly as it can.
+
+Why rows got stuck (and what was fixed in the engine):
+- **Orphaned by a feed change.** Expiry and promotion only look at rows whose `source` is the
+  provider currently running. Once an account moves from provider A to provider B, A's pending
+  rows are never looked at again.
+- **Swallowed twin (bug, fixed).** `syncAccount` treated another provider's pending row as a
+  *posted* row, so B's exact-amount posted twin was skipped as a soft duplicate and the hold
+  stayed. Now every pending row on the account from another source is a **placeholder**
+  (`ExistingOtherRow.status = "pending"`), so B's posted row settles it the same way it settles a
+  hand-entered one (exact amount, posted −1…+7 days). The old `(source, external_id)` is
+  tombstoned so A can't bring the hold back if it's linked again.
+- **Coverage gap.** B's `sync_from` can fall after the day the charge posted, so B never
+  fetches the posted row. Nothing can detect this automatically; the diagnosis says so.
+
+Diagnosis (`src/server/lib/pending-diagnosis.ts`, pure, unit-tested):
+- `stuckReason` — `orphaned` (synced, and the account's feed is gone or now another provider),
+  `feed-off` (own feed paused/disconnected/off, past `pending_expiry_days`), `overdue` (own feed
+  live but pending more than `pending_expiry_days` + 7 days, or typed by hand with no twin
+  after `DAYS_AFTER`).
+- `findCandidates` — up to 3 posted rows on the same account, scored like a hand-typed row
+  (amount and date gates, merchant name only as evidence), because providers name one charge
+  differently (`EXAMPLE CAFE #12` vs `Example Cafe`). Each has an evidence line ("2 days later ·
+  +$4.00 (20%) — a tip? · similar name") and a `strong` flag.
+- Signals, weighted 1 or 2, each pointing at **posted**, **hold** or **info**: a strong or weak
+  candidate; the feed's history starting after the charge ("no match proves nothing"); an amount
+  of $2 or less (verification-sized); a gas, hotel or rental merchant; nothing similar posting
+  within `DAYS_AFTER` while the feed covered that whole stretch. `lean` is whichever side
+  weighs more, else `unsure`.
+
+What the user sees: the tray turns amber ("N need a decision") and opens by default. Each stuck
+row shows its age, why it's stuck, the signals, the candidates, and three actions. The one the
+evidence favours is filled in:
+- **Same charge** on a candidate → `mergePendingTransaction`. `mergeIntoPosted` now also accepts
+  a synced row that is still pending: the bank's descriptor is not copied into notes, a
+  rule-set category doesn't beat the posted row's, and the synced id is tombstoned.
+- **It posted — keep it** → `resolveStuckPending(id, "posted")` clears the flag. This is refused
+  for a synced row whose feed is still live (the bank decides there).
+- **Never posted — remove** → `resolveStuckPending(id, "never-posted")` deletes the row (it was
+  counting as spend) and tombstones it. You get a confirm prompt first.
+
+MCP: `list_pending_transactions` adds `likelyPostedAs` and `stuck` (`reason`, `why`, `lean`,
+`signals`, `candidates`) so the advisor can walk the user through the same decision.
+
+Not done (ideas): checking against the statement balance (a hold that never posted leaves
+the ledger off from the bank's balance by exactly its amount); a "next statement" reminder for
+`unsure` rows.
 
 ## One pending model, not two
 

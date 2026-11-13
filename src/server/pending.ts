@@ -1,7 +1,16 @@
 import "server-only";
 import { db } from "@/server/db";
-import { transactions, accounts, cashAllocations, transactionSplits, uiLayouts } from "@/server/db/schema";
-import { and, eq, gte, lte, inArray, isNull, isNotNull, or, type SQL } from "drizzle-orm";
+import {
+  transactions,
+  accounts,
+  cashAllocations,
+  transactionSplits,
+  uiLayouts,
+  syncAccounts,
+  syncEnrollments,
+  syncIgnored,
+} from "@/server/db/schema";
+import { and, eq, gte, lte, inArray, isNull, isNotNull, or, sql, type SQL } from "drizzle-orm";
 import { normalizeMerchant } from "@/server/lib/merchant";
 import {
   pairPending,
@@ -10,6 +19,9 @@ import {
   type MatchSide,
 } from "@/server/lib/pending-match";
 import type { PreviewRow } from "@/server/lib/import-types";
+import { diagnosePending, type AccountFeed, type PendingDiagnosis } from "@/server/lib/pending-diagnosis";
+import { LOCAL_SOURCES } from "@/constants/sync";
+import { todayIso } from "@/server/lib/pay-schedule";
 
 // Pending transactions: rows entered by hand before the bank posted them. The matching rules
 // live in src/server/lib/pending-match.ts (pure); this file is the DB side — finding the
@@ -133,8 +145,9 @@ export interface PendingReviewItem {
     accountNumber: string | null;
     accountLabel: string | null;
     notes: string | null;
-    /** From bank sync: the bank settles it, so it can't be marked posted by hand. */
+    /** From bank sync. While its feed still runs, the bank settles it; once stuck, the user does. */
     synced: boolean;
+    source: string;
   };
   /** The posted row this most likely became, or null while it's still genuinely pending. */
   match: {
@@ -144,6 +157,36 @@ export interface PendingReviewItem {
     amount: number;
     score: number;
   } | null;
+  /** Why it is stuck and what the evidence says, when nothing will settle it on its own. */
+  diagnosis: PendingDiagnosis;
+}
+
+/**
+ * What feeds each local account today: the provider, whether the feed is live, and where its
+ * history starts. One external account per local account (D14), so at most one row each.
+ */
+export async function loadAccountFeeds(accountIds: number[]): Promise<Map<number, AccountFeed>> {
+  if (!accountIds.length) return new Map();
+  const rows = await db
+    .select({
+      accountId: syncAccounts.accountId,
+      provider: syncEnrollments.provider,
+      enabled: syncAccounts.enabled,
+      externalStatus: syncAccounts.externalStatus,
+      syncFrom: syncAccounts.syncFrom,
+      status: syncEnrollments.status,
+    })
+    .from(syncAccounts)
+    .innerJoin(syncEnrollments, eq(syncEnrollments.id, syncAccounts.enrollmentId))
+    .where(inArray(syncAccounts.accountId, accountIds));
+  const out = new Map<number, AccountFeed>();
+  for (const r of rows) {
+    if (r.accountId == null) continue;
+    const inactiveReason =
+      r.status !== "active" ? r.status : r.externalStatus === "closed" ? "closed at the bank" : !r.enabled ? "switched off" : null;
+    out.set(r.accountId, { provider: r.provider, active: inactiveReason == null, inactiveReason, coverageFrom: r.syncFrom });
+  }
+  return out;
 }
 
 /**
@@ -159,6 +202,8 @@ export async function getPendingReview(): Promise<PendingReviewItem[]> {
       notes: transactions.notes,
       externalId: transactions.externalId,
       importBatchId: transactions.importBatchId,
+      source: transactions.source,
+      accountId: transactions.accountId,
     })
     .from(transactions)
     .leftJoin(accounts, eq(accounts.id, transactions.accountId))
@@ -190,12 +235,39 @@ export async function getPendingReview(): Promise<PendingReviewItem[]> {
   // A pending row from bank sync or a statement carries the bank's descriptor, so its posted twin
   // must share the merchant name (see pending-match.ts); one typed by hand may not.
   const pendingSides = pendingRows.map((p) => ({ ...toSide(p), handEntered: p.externalId == null && p.importBatchId == null }));
-  const pairs = pairPending(pendingSides, posted.map(toSide), await getDismissedPendingPairs());
+  const dismissed = await getDismissedPendingPairs();
+  const pairs = pairPending(pendingSides, posted.map(toSide), dismissed);
   const pairFor = new Map(pairs.map((p) => [p.enteredId, p]));
   const postedById = new Map(posted.map((p) => [p.id, p]));
+  const postedSides = posted.map(toSide);
+  const feeds = await loadAccountFeeds([
+    ...new Set(pendingRows.map((p) => p.accountId).filter((n): n is number => n != null)),
+  ]);
+  const { getSyncSettings } = await import("@/server/lib/sync/settings");
+  const expiryDays = (await getSyncSettings()).pendingExpiryDays;
+  const today = todayIso();
   return pendingRows.map((p) => {
     const pr = pairFor.get(p.id);
     const m = pr ? postedById.get(pr.postedId) : undefined;
+    const synced = p.externalId != null && !LOCAL_SOURCES.includes(p.source);
+    const diagnosis = diagnosePending({
+      pending: {
+        id: p.id,
+        txnDate: p.txnDate,
+        amount: Number(p.amount),
+        direction: p.direction,
+        description: p.description,
+        accountNumber: p.accountNumber,
+        source: p.source,
+        synced,
+      },
+      today,
+      feed: p.accountId != null ? (feeds.get(p.accountId) ?? null) : null,
+      pendingExpiryDays: expiryDays,
+      posted: postedSides,
+      hasMatch: !!(pr && m),
+      dismissed,
+    });
     return {
       pending: {
         id: p.id,
@@ -206,7 +278,8 @@ export async function getPendingReview(): Promise<PendingReviewItem[]> {
         accountNumber: p.accountNumber,
         accountLabel: p.accountLabel,
         notes: p.notes,
-        synced: p.externalId != null,
+        synced,
+        source: p.source,
       },
       match:
         pr && m
@@ -218,6 +291,7 @@ export async function getPendingReview(): Promise<PendingReviewItem[]> {
               score: pr.score,
             }
           : null,
+      diagnosis,
     };
   });
 }
@@ -283,21 +357,32 @@ export async function mergeIntoPosted(
     transferPartnerId: transactions.transferPartnerId,
     importBatchId: transactions.importBatchId,
     raw: transactions.raw,
+    pending: transactions.pending,
+    source: transactions.source,
+    externalId: transactions.externalId,
   };
   const [entered] = await db.select(cols).from(transactions).where(eq(transactions.id, enteredId)).limit(1);
   const [posted] = await db.select(cols).from(transactions).where(eq(transactions.id, postedId)).limit(1);
   if (!entered) return { ok: false, error: "The pending transaction no longer exists." };
   if (!posted) return { ok: false, error: "The posted transaction no longer exists." };
-  // Guard against a stale or forged id: only a hand-entered row may be absorbed, or a
-  // statement row could be deleted and come back on the next import.
-  if (entered.importBatchId != null || entered.raw != null) {
-    return { ok: false, error: "Only a transaction entered by hand can be merged away." };
+  // Guard against a stale or forged id: only a hand-entered row, or a bank-synced row that is
+  // still PENDING, may be absorbed. A statement row would come back on the next import; a
+  // synced posted row is the bank's settled record.
+  const syncedPending = entered.externalId != null && entered.pending && !LOCAL_SOURCES.includes(entered.source);
+  if (entered.importBatchId != null || (entered.raw != null && !syncedPending)) {
+    return { ok: false, error: "Only a transaction entered by hand, or one still pending at the bank, can be merged away." };
   }
 
-  const notes = settledNotes(posted.description, entered, posted.notes);
+  // A synced pending row's description is the bank's authorization descriptor, not something
+  // the user typed — not worth keeping as a note.
+  const notes = syncedPending
+    ? joinNotes(posted.notes, entered.notes)
+    : settledNotes(posted.description, entered, posted.notes);
 
-  // A category picked by hand beats one a rule guessed from the bank's description.
-  const useEntered = !!entered.category && !opts.keepPostedCategory;
+  // A category picked by hand beats one a rule guessed from the bank's description. On a
+  // synced row a rule-set category is only a guess too, so it doesn't beat the posted row's.
+  const enteredHandSet = !syncedPending || entered.categoryRuleId == null || !posted.category;
+  const useEntered = !!entered.category && enteredHandSet && !opts.keepPostedCategory;
   const category = useEntered ? entered.category : posted.category;
   const categoryRuleId = useEntered ? entered.categoryRuleId : posted.categoryRuleId;
 
@@ -371,6 +456,8 @@ export async function mergeIntoPosted(
     movedSplit = ((res as unknown as [{ affectedRows?: number }])[0]?.affectedRows ?? 0) > 0;
   }
 
+  // A synced row leaves a tombstone, so its feed (if it ever comes back) won't re-insert it.
+  if (syncedPending) await tombstone(entered.source, entered.externalId!);
   await db.delete(transactions).where(eq(transactions.id, enteredId));
 
   // The tip settled lower than the hold, say — the split parts must still fit. Parts first,
@@ -384,5 +471,48 @@ export async function mergeIntoPosted(
     const { reconcileAllocationsAfterEdit } = await import("@/server/actions/cash");
     await reconcileAllocationsAfterEdit(postedId);
   }
+  return { ok: true };
+}
+
+async function tombstone(source: string, externalId: string): Promise<void> {
+  await db
+    .insert(syncIgnored)
+    .values({ source, externalId })
+    .onDuplicateKeyUpdate({ set: { id: sql`id` } });
+}
+
+/**
+ * The user says this pending charge never posted — an authorization hold the bank dropped.
+ * Removes it (it was counting as spend) and, for a synced row, leaves a tombstone so the feed
+ * that wrote it can't bring it back. Refuses anything not still pending.
+ */
+export async function removeDroppedHold(id: number): Promise<MergeResult> {
+  const [row] = await db
+    .select({ id: transactions.id, pending: transactions.pending, source: transactions.source, externalId: transactions.externalId })
+    .from(transactions)
+    .where(eq(transactions.id, id))
+    .limit(1);
+  if (!row) return { ok: false, error: "That transaction no longer exists." };
+  if (!row.pending) return { ok: false, error: "Only a pending transaction can be removed as a dropped hold." };
+  if (row.externalId && !LOCAL_SOURCES.includes(row.source)) await tombstone(row.source, row.externalId);
+  await db.update(transactions).set({ transferPartnerId: null }).where(eq(transactions.transferPartnerId, id));
+  await db.delete(transactions).where(eq(transactions.id, id));
+  return { ok: true };
+}
+
+/**
+ * The user says this pending charge did post, but its posted row will never arrive (the feed
+ * that would have brought it is gone, or its history starts too late). Keeps it as an ordinary
+ * posted transaction. Allowed for synced rows only once they are stuck — while their feed
+ * runs, the bank decides.
+ */
+export async function keepStuckAsPosted(id: number): Promise<MergeResult> {
+  const items = await getPendingReview();
+  const item = items.find((i) => i.pending.id === id);
+  if (!item) return { ok: false, error: "That transaction is no longer pending." };
+  if (item.pending.synced && !item.diagnosis.stuck) {
+    return { ok: false, error: "This row's bank feed is still running; it will settle it on a later sync." };
+  }
+  await db.update(transactions).set({ pending: false }).where(eq(transactions.id, id));
   return { ok: true };
 }

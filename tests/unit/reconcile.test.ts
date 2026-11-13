@@ -361,3 +361,16 @@ describe("reconcile: hand-entered pending placeholders are settled, not skipped"
     assert.equal(plan.softDupes[0].finalizesPending, false);
   });
 });
+
+describe("reconcile: another provider's pending row is a placeholder too", () => {
+  // The account moved feeds: the old provider's pending hold is still in the ledger. The new
+  // feed's posted twin must settle it, not be swallowed by it as a "soft duplicate".
+  const oldFeedHold: ExistingOtherRow = { id: 80, txnDate: "2026-09-15", amount: 12.5, direction: "Debit", description: "EXAMPLE STORE #9", status: "pending" };
+
+  test("the new feed's posted row settles the old feed's hold", () => {
+    const plan = reconcile([fetched({ externalId: "n1", txnDate: "2026-09-17", amount: 12.5 })], [], [oldFeedHold], opts);
+    assert.equal(plan.inserts.length, 0);
+    assert.equal(plan.softDupes[0].finalizesPending, true);
+    assert.equal(plan.softDupes[0].existingId, 80);
+  });
+});
