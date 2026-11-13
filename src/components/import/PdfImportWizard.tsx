@@ -87,6 +87,8 @@ export function PdfImportWizard({
   const [stmts, setStmts] = useState<ParsedStatement[]>([]);
   // Per statement, per balance suggestion (opening/closing): whether to record it.
   const [recordBal, setRecordBal] = useState<boolean[][]>([]);
+  // Per statement: whether to record its end-of-day balances (formats with a running balance).
+  const [recordDaily, setRecordDaily] = useState<boolean[]>([]);
   const [result, setResult] = useState<PdfCommitResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, start] = useTransition();
@@ -161,6 +163,7 @@ export function PdfImportWizard({
         parsed.sort(byPeriod);
         setStmts(parsed);
         setRecordBal(parsed.map((s) => s.balanceSuggestions.map(() => true)));
+        setRecordDaily(parsed.map((s) => s.dailyBalances.length > 0));
         setExpanded(new Set(parsed.length <= 3 ? parsed.map((_, i) => i) : []));
         setPhase("review");
       } catch (err) {
@@ -278,6 +281,7 @@ export function PdfImportWizard({
 
   function setAllBalances(on: boolean) {
     setRecordBal(stmts.map((s) => s.balanceSuggestions.map(() => on)));
+    setRecordDaily(stmts.map((s) => on && s.dailyBalances.length > 0));
   }
 
   function toggleBalance(i: number, k: number, on: boolean) {
@@ -293,6 +297,8 @@ export function PdfImportWizard({
     const idx = stmts.indexOf(s);
     return n + s.balanceSuggestions.filter((_, k) => recordBal[idx]?.[k]).length;
   }, 0);
+  const totalDaily = committable.reduce((n, s) => n + (recordDaily[stmts.indexOf(s)] ? s.dailyBalances.length : 0), 0);
+  const availableDaily = stmts.reduce((n, s) => n + s.dailyBalances.length, 0);
   const missingAccount = committable.some((s) => !s.accountNumber.trim());
   const fileCount = new Set(stmts.map((s) => s.filename)).size;
 
@@ -307,6 +313,7 @@ export function PdfImportWizard({
         accountType: s.accountType,
         rows: s.rows,
         balances: s.balanceSuggestions.filter((_, k) => recordBal[idx]?.[k]),
+        dailyBalances: recordDaily[idx] ? s.dailyBalances : [],
       };
     });
     start(async () => {
@@ -324,6 +331,7 @@ export function PdfImportWizard({
     setPhase("upload");
     setStmts([]);
     setRecordBal([]);
+    setRecordDaily([]);
     setExpanded(new Set());
     setResult(null);
     setError(null);
@@ -379,6 +387,7 @@ export function PdfImportWizard({
                 <span>
                   Record opening + closing balances: {totalBalances} of{" "}
                   {stmts.reduce((n, s) => n + s.balanceSuggestions.length, 0)} selected
+                  {availableDaily > 0 && ` · daily balances: ${totalDaily} of ${availableDaily} days`}
                 </span>
                 <Button size="sm" variant="ghost" onClick={() => setAllBalances(true)}>
                   All
@@ -540,6 +549,16 @@ export function PdfImportWizard({
                             />
                           </div>
                         ))}
+                        {s.dailyBalances.length > 0 && (
+                          <Checkbox
+                            label={`Daily balances (${s.dailyBalances.length} days)`}
+                            checked={recordDaily[i] ?? false}
+                            onChange={(e) =>
+                              setRecordDaily((prev) => prev.map((v, idx) => (idx === i ? e.target.checked : v)))
+                            }
+                            className="text-xs"
+                          />
+                        )}
                       </div>
                     )}
                   </div>
@@ -584,11 +603,11 @@ export function PdfImportWizard({
               icon="check"
               loading={pending}
               onClick={commit}
-              disabled={pending || (totalNew === 0 && totalSettles === 0 && totalBalances === 0) || missingAccount}
+              disabled={pending || (totalNew === 0 && totalSettles === 0 && totalBalances === 0 && totalDaily === 0) || missingAccount}
             >
               {pending
                 ? "Importing…"
-                : `Import ${totalNew} new${totalSettles ? ` · settle ${totalSettles} pending` : ""}${totalBalances ? ` · ${totalBalances} balance${totalBalances === 1 ? "" : "s"}` : ""}`}
+                : `Import ${totalNew} new${totalSettles ? ` · settle ${totalSettles} pending` : ""}${totalBalances ? ` · ${totalBalances} balance${totalBalances === 1 ? "" : "s"}` : ""}${totalDaily ? ` · ${totalDaily} daily` : ""}`}
             </Button>
             {missingAccount && <span className="text-xs text-warn">Pick an account for every statement.</span>}
           </div>

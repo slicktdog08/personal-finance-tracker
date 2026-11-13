@@ -344,6 +344,8 @@ export const accountBalances = mysqlTable(
     minPayment: decimal("min_payment", { precision: 10, scale: 2 }),
     asOf: date("as_of", { mode: "string" }).notNull(),
     note: varchar("note", { length: 255 }),
+    // null = entered by hand (or bank sync); see BALANCE_SOURCES for what an import writes.
+    source: varchar("source", { length: 24 }),
     createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`),
   },
   (t) => [index("idx_ab_acct").on(t.accountId), index("idx_ab_date").on(t.asOf)],
