@@ -4,7 +4,7 @@ import { z } from "zod";
 import { fail, money0, ok } from "./result";
 import { getSyncSettings } from "@/server/lib/sync/settings";
 import { listEnrollmentsWithAccounts, listRecentRuns, pendingSummary, runSync } from "@/server/lib/sync/sync";
-import { getTransactionsPage } from "@/server/queries";
+import { getPendingReview, getTransactionsPage } from "@/server/queries";
 
 // Bank-sync tools. Every read here comes from OUR tables — never from the provider
 // (bank-sync.md D11): the advisor sees exactly the ledger the UI shows, and the tools work
@@ -80,7 +80,7 @@ export function registerSyncTools(server: McpServer) {
     {
       title: "Pending transactions",
       description:
-        "Transactions the bank has authorized but not settled (status = pending), as stored by the last sync — not a live bank call. They already count as spend in period summaries. Optionally restrict to a month or account.",
+        "Transactions the bank has authorized but not settled (status = pending), as stored by the last sync — not a live bank call. They already count as spend in period summaries. Optionally restrict to a month or account. Rows with `stuck` set will never settle on their own (their feed changed or stopped, or they're long overdue): `stuck.lean` says whether the evidence points to 'posted' (we missed the posted row — see `stuck.candidates`) or 'hold' (an authorization that never posted), with the reasons in `stuck.signals`. Help the user decide; the app's Activity page has the buttons to settle them.",
       inputSchema: z.object({
         period: z.string().regex(/^\d{4}-\d{1,2}$/).optional().describe("YYYY-MM; omit for all months."),
         accountIds: z.array(z.number().int()).optional(),
@@ -90,6 +90,7 @@ export function registerSyncTools(server: McpServer) {
       annotations: READ_ONLY,
     },
     async ({ period, accountIds, pageSize, page }) => {
+      const review = new Map((await getPendingReview()).map((i) => [i.pending.id, i]));
       const res = await getTransactionsPage({
         pending: true,
         periodLabels: period ? [period] : undefined,
@@ -115,6 +116,7 @@ export function registerSyncTools(server: McpServer) {
           accountId: t.accountId,
           period: t.periodLabel,
           source: t.source,
+          ...stuckInfo(review.get(t.id)),
         })),
       });
     },
@@ -164,4 +166,29 @@ export function registerSyncTools(server: McpServer) {
       });
     },
   );
+}
+
+function stuckInfo(item: Awaited<ReturnType<typeof getPendingReview>>[number] | undefined) {
+  if (!item) return {};
+  const d = item.diagnosis;
+  return {
+    likelyPostedAs: item.match ? { transactionId: item.match.id, date: item.match.txnDate, description: item.match.description, amount: money0(item.match.amount) } : null,
+    stuck:
+      d.stuck && !item.match
+        ? {
+            pendingDays: d.ageDays,
+            reason: d.reason,
+            why: d.why,
+            lean: d.lean,
+            signals: d.signals.map((s) => ({ points: s.points, text: s.text })),
+            candidates: d.candidates.map((c) => ({
+              transactionId: c.id,
+              date: c.txnDate,
+              description: c.description,
+              amount: money0(c.amount),
+              evidence: c.evidence,
+            })),
+          }
+        : null,
+  };
 }
