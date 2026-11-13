@@ -46,4 +46,10 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     icon: "refresh-cw",
     desc: "Link banks, set how often they pull, map bank accounts to yours and review runs.",
   },
+  {
+    href: "/settings/coverage",
+    label: "Data coverage",
+    icon: "chart-column",
+    desc: "Which months each account has transactions and balances for, and the gaps still to import.",
+  },
 ];

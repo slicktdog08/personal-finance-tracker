@@ -179,6 +179,109 @@ export function monthlyLedger(
   });
 }
 
+// ---- Buckets: months grouped into quarters or years for long windows ----
+// Years of history as one bar per month is a sideways scroll of a hundred bars, and a table a
+// hundred rows long. Bar charts and the ledger roll up into buckets; the lines stay monthly.
+
+export type Bucket = "month" | "quarter" | "year";
+export const BUCKETS: Bucket[] = ["month", "quarter", "year"];
+
+/** Months for ≤ 3 years, quarters up to 8 years (≤ 32 bars), years past that. */
+export function autoBucket(monthCount: number): Bucket {
+  return monthCount <= 36 ? "month" : monthCount <= 96 ? "quarter" : "year";
+}
+
+/** "2026-05" → "2026-05" | "2026-Q2" | "2026". Sorts in time order within one bucket kind. */
+export function bucketKey(label: string, by: Bucket): string {
+  if (by === "month") return label;
+  const [y, m] = label.split("-");
+  return by === "year" ? y : `${y}-Q${Math.floor((Number(m) - 1) / 3) + 1}`;
+}
+
+/** Display name for a bucket key: "May '26" | "Q2 '26" | "2026". */
+export function bucketName(key: string, by: Bucket, monthName: (label: string) => string): string {
+  if (by === "month") return monthName(key);
+  if (by === "year") return key;
+  const [y, q] = key.split("-");
+  return `${q} '${y.slice(2)}`;
+}
+
+/** Consecutive runs of `labels` (time-ordered) that share a bucket, with their index range. */
+export function bucketRuns(labels: string[], by: Bucket): { key: string; first: number; last: number }[] {
+  const out: { key: string; first: number; last: number }[] = [];
+  labels.forEach((l, i) => {
+    const key = bucketKey(l, by);
+    const cur = out[out.length - 1];
+    if (cur && cur.key === key) cur.last = i;
+    else out.push({ key, first: i, last: i });
+  });
+  return out;
+}
+
+/** Money in / out summed per bucket; the label becomes the bucket key. */
+export function bucketFlows(flows: FlowMonth[], by: Bucket): FlowMonth[] {
+  if (by === "month") return flows;
+  return bucketRuns(
+    flows.map((f) => f.label),
+    by,
+  ).map((r) => {
+    const part = flows.slice(r.first, r.last + 1);
+    return { label: r.key, in: round2(part.reduce((s, f) => s + f.in, 0)), out: round2(part.reduce((s, f) => s + f.out, 0)) };
+  });
+}
+
+/** A balance series at each bucket's end: the last recorded value inside the bucket. */
+export function bucketEnds(labels: string[], values: (number | null)[], by: Bucket): { key: string; value: number | null }[] {
+  return bucketRuns(labels, by).map((r) => {
+    let v: number | null = null;
+    for (let i = r.last; i >= r.first; i--) {
+      if (values[i] != null) {
+        v = values[i];
+        break;
+      }
+    }
+    return { key: r.key, value: v };
+  });
+}
+
+/**
+ * Ledger rows rolled up per bucket: flows summed, balances as of the bucket's last recorded
+ * month, and the net-worth change measured against the previous bucket's end.
+ */
+export function bucketLedger(rows: LedgerRow[], by: Bucket): (LedgerRow & { months: number })[] {
+  if (by === "month") return rows.map((r) => ({ ...r, months: 1 }));
+  const lastOf = (part: LedgerRow[], k: keyof LedgerRow) => {
+    for (let i = part.length - 1; i >= 0; i--) if (part[i][k] != null) return part[i][k] as number;
+    return null;
+  };
+  const sumOf = (part: LedgerRow[], k: "income" | "spending" | "net") =>
+    part.some((r) => r[k] != null) ? round2(part.reduce((s, r) => s + (r[k] ?? 0), 0)) : null;
+  let prevNet: number | null = null;
+  return bucketRuns(
+    rows.map((r) => r.label),
+    by,
+  ).map((run) => {
+    const part = rows.slice(run.first, run.last + 1);
+    const income = sumOf(part, "income");
+    const net = sumOf(part, "net");
+    const nw = lastOf(part, "netWorth");
+    const row = {
+      label: run.key,
+      months: part.length,
+      income,
+      spending: sumOf(part, "spending"),
+      net,
+      savingsRate: income != null && income > 0 && net != null ? (net / income) * 100 : null,
+      cash: lastOf(part, "cash"),
+      debt: lastOf(part, "debt"),
+      netWorth: nw,
+      netWorthChange: nw != null && prevNet != null ? round2(nw - prevNet) : null,
+    };
+    if (nw != null) prevNet = nw;
+    return row;
+  });
+}
+
 function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }
