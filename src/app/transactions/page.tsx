@@ -7,6 +7,7 @@ import { AddTransaction } from "@/components/transactions/AddTransaction";
 import { TransactionFilters } from "@/components/transactions/TransactionFilters";
 import { PendingReview } from "@/components/transactions/PendingReview";
 import { prettyPeriod } from "@/server/lib/period";
+import { ensureDataPeriods } from "@/server/periods";
 import {
   getTransactionsPage,
   getLatestTransactionId,
@@ -64,6 +65,8 @@ export default async function TransactionsPage({
   let result, accounts, catOptions, periods, uncategorized, billOptions, openWithdrawals, rules,
     pendingReview, latestId, uncatCount, pendingCount, billCount;
   try {
+    // Months follow transactions: history imported into months that didn't exist gets them here.
+    await ensureDataPeriods();
     [
       result,
       accounts,

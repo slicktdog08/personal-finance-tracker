@@ -6,11 +6,12 @@ import { DeltaBars } from "@/components/charts/DeltaBars";
 import { Sparkline } from "@/components/charts/Sparkline";
 import { MetricExplorer, type MetricSeries } from "@/components/trends/MetricExplorer";
 import { Card, EmptyState, Glyph, Money, PageHeader, StatTile } from "@/components/ds";
-import { getAccountBalanceTrends, getBalanceTrends, getCashflowByPeriod, getCategoryRows, getCategorySpend, netWorthOf } from "@/server/queries";
+import { getAccountBalanceTrends, getBalanceTrends, getCashflowByPeriod, getCategoryRows, getCategorySpendByPeriods, netWorthOf } from "@/server/queries";
 import { formatMoney, toNum } from "@/server/lib/money";
 import { currentPeriodLabel, shortMonthLabel } from "@/server/lib/period";
 import { todayIso } from "@/server/lib/pay-schedule";
-import { cumulativeNet, flowTotals, monthlyLedger, seriesStats, windowStartLabel, type FlowMonth, type TrendMonth } from "@/server/lib/trends";
+import { ensureDataPeriods } from "@/server/periods";
+import { autoBucket, BUCKETS, bucketEnds, bucketFlows, bucketKey, bucketLedger, bucketName, cumulativeNet, flowTotals, monthlyLedger, seriesStats, windowStartLabel, type Bucket, type FlowMonth, type TrendMonth } from "@/server/lib/trends";
 import { CASH_ACCOUNT_TYPES, RETIREMENT_ACCOUNT_TYPES } from "@/constants/enums";
 
 export const dynamic = "force-dynamic";
@@ -23,6 +24,7 @@ const RANGES = [
   { value: "6m", label: "6M", months: 6, long: "6 months" },
   { value: "1y", label: "1Y", months: 12, long: "12 months" },
   { value: "2y", label: "2Y", months: 24, long: "2 years" },
+  { value: "5y", label: "5Y", months: 60, long: "5 years" },
   { value: "max", label: "Max", months: null, long: "all time" },
 ] as const;
 type Range = (typeof RANGES)[number]["value"];
@@ -31,12 +33,18 @@ const DEFAULT_RANGE: Range = "max";
 const RETIREMENT_COLOR = "#8b5cf6";
 const ASSETS_COLOR = "#d97706";
 
-export default async function TrendsPage({ searchParams }: { searchParams: Promise<{ range?: string }> }) {
+const BUCKET_LABEL: Record<Bucket, string> = { month: "Monthly", quarter: "Quarterly", year: "Yearly" };
+const BUCKET_NOUN: Record<Bucket, string> = { month: "Month", quarter: "Quarter", year: "Year" };
+
+export default async function TrendsPage({ searchParams }: { searchParams: Promise<{ range?: string; by?: string }> }) {
   const sp = await searchParams;
+  const byParam = BUCKETS.includes(sp.by as Bucket) ? (sp.by as Bucket) : null;
   const range: Range = RANGES.some((r) => r.value === sp.range) ? (sp.range as Range) : DEFAULT_RANGE;
   const rangeDef = RANGES.find((r) => r.value === range)!;
   let balanceTrends, cashflow, catRows;
   try {
+    // Transactions dated in months with no sheet would be missing from the ledger totals.
+    await ensureDataPeriods();
     [balanceTrends, cashflow, catRows] = await Promise.all([getBalanceTrends(), getCashflowByPeriod(), getCategoryRows()]);
   } catch (e) {
     return <SetupNotice error={e} />;
@@ -45,10 +53,15 @@ export default async function TrendsPage({ searchParams }: { searchParams: Promi
   // Months after today would just repeat the latest snapshots, so the record stops at "now".
   const currentLabel = currentPeriodLabel(todayIso());
   const tracked = balanceTrends.filter((t) => currentLabel == null || t.label <= currentLabel);
-  // Months exist as periods long before any balance was recorded in them, and an axis that opens
-  // with a year of blank months squeezes the part that has data into a corner — so it starts
-  // where the record actually starts.
-  const opened = tracked.findIndex((t) => t.cash != null || t.credit != null || t.loans != null || t.retirement !== 0 || t.assets !== 0);
+  // An axis that opens with a year of blank months squeezes the part that has data into a
+  // corner — so it starts where the record actually starts: the first month with a balance or a
+  // transaction, whichever is earlier. Imported history older than the balance record still
+  // charts its money in/out; the balance lines just begin later.
+  const firstTxnLabel = cashflow.reduce<string | null>((min, r) => (min == null || r.label < min ? r.label : min), null);
+  const opened = tracked.findIndex(
+    (t) =>
+      t.cash != null || t.credit != null || t.loans != null || t.retirement !== 0 || t.assets !== 0 || (firstTxnLabel != null && t.label >= firstTxnLabel),
+  );
   const recorded = opened < 0 ? [] : tracked.slice(opened);
   // The range toggle trims the window to its last N months (Max keeps the whole record).
   const lastLabel = currentLabel ?? recorded[recorded.length - 1]?.label;
@@ -74,7 +87,7 @@ export default async function TrendsPage({ searchParams }: { searchParams: Promi
   if (defined.length < 2) {
     return (
       <div className="space-y-6">
-        <Header range={range} />
+        <Header range={range} by={byParam} bucket="month" />
         <EmptyState
           icon="chart-line"
           title={range === "max" ? "Not enough history yet" : "Not enough history in this range"}
@@ -103,9 +116,7 @@ export default async function TrendsPage({ searchParams }: { searchParams: Promi
   }
 
   // ---- Money in vs money out, from the transaction ledger ----
-  // Held to the same window as the balances: the ledger reaches further back than the balance
-  // record, but only in months whose import is partial — showing them would draw a collapse in
-  // income that never happened.
+  // Held to the same window as the balances (which now opens at the earliest transaction too).
   const windowStart = months[0].label;
   const flowBy = new Map<string, FlowMonth>();
   for (const r of cashflow) {
@@ -126,10 +137,13 @@ export default async function TrendsPage({ searchParams }: { searchParams: Promi
 
   // ---- Per-account history and per-category spend, over the same window ----
   const flowLabels = flows.map((f) => f.label);
-  const [accountTrends, spendByMonth] = await Promise.all([
-    getAccountBalanceTrends(months.map((t) => t.label)),
-    Promise.all(flowLabels.map((l) => getCategorySpend(l))),
-  ]);
+  const [accountTrends, spendBy] = await Promise.all([getAccountBalanceTrends(months.map((t) => t.label)), getCategorySpendByPeriods(flowLabels)]);
+  const spendByMonth = flowLabels.map((l) => spendBy.get(l) ?? []);
+
+  // Long windows roll the bar charts and the ledger up into quarters or years; lines stay monthly.
+  const bucket: Bucket = byParam ?? autoBucket(months.length);
+  const nameOf = (key: string) => bucketName(key, bucket, shortMonthLabel);
+  const monthLabels = months.map((t) => t.label);
 
   // ---- Headline numbers over the window ----
   const now = latest.value;
@@ -166,18 +180,31 @@ export default async function TrendsPage({ searchParams }: { searchParams: Promi
     const prevVal = i > 0 ? net[i - 1].value : null;
     return { label: p.label, value: p.value == null || prevVal == null ? null : p.value - prevVal };
   });
-  const deltaSeries = deltas.slice(first.i + 1);
+  const deltaSeries =
+    bucket === "month"
+      ? deltas.slice(first.i + 1)
+      : bucketEnds(monthLabels.slice(first.i), net.slice(first.i).map((p) => p.value), bucket).flatMap((b, k, all) =>
+          k === 0 ? [] : [{ label: nameOf(b.key), value: b.value != null && all[k - 1].value != null ? b.value - all[k - 1].value! : null }],
+        );
+  // Best and worst step at the chart's own grain (a quarter or a year when bucketed).
+  const steps = deltaSeries.flatMap((d) => (d.value == null ? [] : [{ label: d.label, value: d.value }]));
+  const bestMove = bucket === "month" ? netStats.bestMove : steps.reduce<(typeof steps)[number] | null>((b, d) => (!b || d.value > b.value ? d : b), null);
+  const worstMove = bucket === "month" ? netStats.worstMove : steps.reduce<(typeof steps)[number] | null>((w, d) => (!w || d.value < w.value ? d : w), null);
   const upMonths = deltaSeries.filter((d) => d.value != null && d.value > 0.5).length;
   const deltaCount = deltaSeries.filter((d) => d.value != null).length;
 
   // ---- What it's made of ----
-  const compositionSeries = [
+  const atBucketEnds = (values: (number | null)[]) => bucketEnds(monthLabels, values, bucket).map((b) => b.value ?? 0);
+  const compositionLabels = bucket === "month" ? labels : bucketEnds(monthLabels, monthLabels.map(() => 0), bucket).map((b) => nameOf(b.key));
+  const compositionRaw = [
     { name: "Cash", color: "var(--mp-accent)", values: months.map((t) => t.cash ?? 0) },
     ...(hasRetirement ? [{ name: "Retirement", color: RETIREMENT_COLOR, values: months.map((t) => t.retirement) }] : []),
     ...(hasAssets ? [{ name: "Assets", color: ASSETS_COLOR, values: months.map((t) => t.assets) }] : []),
     ...(hasCredit ? [{ name: "Cards", color: "var(--mp-money-owed)", values: months.map((t) => t.credit ?? 0) }] : []),
     ...(hasLoans ? [{ name: "Loans", color: "var(--mp-money-pending)", values: months.map((t) => t.loans ?? 0) }] : []),
   ];
+  const compositionSeries = bucket === "month" ? compositionRaw : compositionRaw.map((c) => ({ ...c, values: atBucketEnds(c.values) }));
+  const flowBars = bucketFlows(flows, bucket);
 
   // ---- Spending by category across the window ----
   const catMeta = new Map(catRows.map((c) => [c.name, c]));
@@ -232,14 +259,16 @@ export default async function TrendsPage({ searchParams }: { searchParams: Promi
     .sort((a, b) => GROUP_ORDER.indexOf(a.group) - GROUP_ORDER.indexOf(b.group) || Math.abs(b.lastVal ?? 0) - Math.abs(a.lastVal ?? 0));
 
   // ---- Month by month ----
-  const ledger = monthlyLedger(months, flows, comparableNet).reverse();
+  const ledger = bucketLedger(monthlyLedger(months, flows, comparableNet), bucket).reverse();
+  const currentBucket = currentLabel ? bucketKey(currentLabel, bucket) : null;
 
-  const rangeText = `${first.label} – ${latest.label}`;
+  // The whole window — flows and older balances reach back before net worth becomes comparable.
+  const rangeText = `${labels[0]} – ${latest.label}`;
   const debtPaid = debtStats ? -debtStats.change : null;
 
   return (
     <div className="space-y-6">
-      <Header range={range} />
+      <Header range={range} by={byParam} bucket={bucket} />
 
       {/* ---- Headline ---- */}
       <Card>
@@ -282,7 +311,7 @@ export default async function TrendsPage({ searchParams }: { searchParams: Promi
           <StatTile
             label="Average month"
             value={<Money value={netStats.perMonth} kind={netStats.perMonth < 0 ? "over" : "income"} sign="always" />}
-            sub={deltaCount ? `${upMonths} of ${deltaCount} months up` : `over ${netStats.span} months`}
+            sub={deltaCount ? `${upMonths} of ${deltaCount} ${BUCKET_NOUN[bucket].toLowerCase()}s up` : `over ${netStats.span} months`}
           />
         </div>
       </Card>
@@ -341,12 +370,12 @@ export default async function TrendsPage({ searchParams }: { searchParams: Promi
 
       <div className="grid gap-6 lg:grid-cols-2">
         <Card
-          title="Net worth, month over month"
+          title={bucket === "month" ? "Net worth, month over month" : `Net worth, ${BUCKET_NOUN[bucket].toLowerCase()} over ${BUCKET_NOUN[bucket].toLowerCase()}`}
           meta={
-            netStats.bestMove && netStats.worstMove && deltaCount > 1 ? (
+            bestMove && worstMove && steps.length > 1 ? (
               <>
-                best {netStats.bestMove.label} <Money value={netStats.bestMove.value} kind="income" sign="always" /> · worst {netStats.worstMove.label}{" "}
-                <Money value={netStats.worstMove.value} kind={netStats.worstMove.value < 0 ? "over" : "income"} sign="always" />
+                best {bestMove.label} <Money value={bestMove.value} kind="income" sign="always" /> · worst {worstMove.label}{" "}
+                <Money value={worstMove.value} kind={worstMove.value < 0 ? "over" : "income"} sign="always" />
               </>
             ) : undefined
           }
@@ -355,7 +384,7 @@ export default async function TrendsPage({ searchParams }: { searchParams: Promi
         </Card>
 
         <Card title="What it's made of" meta="cash and holdings vs what's owed">
-          <BarsChart labels={labels} series={compositionSeries} valueFormat="money" />
+          <BarsChart labels={compositionLabels} series={compositionSeries} valueFormat="money" />
         </Card>
       </div>
 
@@ -363,10 +392,10 @@ export default async function TrendsPage({ searchParams }: { searchParams: Promi
         <div className="grid gap-6 lg:grid-cols-2">
           <Card title="Money in vs money out" meta={avg.months ? `${avg.positiveMonths} of ${avg.months} finished months took in more` : undefined}>
             <BarsChart
-              labels={flows.map((f) => shortMonthLabel(f.label))}
+              labels={flowBars.map((f) => nameOf(f.label))}
               series={[
-                { name: "In", color: "var(--mp-money-income)", values: flows.map((f) => f.in) },
-                { name: "Out", color: "var(--mp-money-spend)", values: flows.map((f) => f.out) },
+                { name: "In", color: "var(--mp-money-income)", values: flowBars.map((f) => f.in) },
+                { name: "Out", color: "var(--mp-money-spend)", values: flowBars.map((f) => f.out) },
               ]}
               valueFormat="money"
             />
@@ -477,12 +506,12 @@ export default async function TrendsPage({ searchParams }: { searchParams: Promi
       )}
 
       {/* ---- Month by month ---- */}
-      <Card title="Month by month" meta="newest first" padded={false}>
+      <Card title={`${BUCKET_NOUN[bucket]} by ${BUCKET_NOUN[bucket].toLowerCase()}`} meta={`newest first · ${ledger.length} row${ledger.length === 1 ? "" : "s"}`} padded={false}>
         <div className="overflow-x-auto">
           <table className="mp-table mp-table--dense">
             <thead>
               <tr>
-                <th>Month</th>
+                <th>{BUCKET_NOUN[bucket]}</th>
                 <th className="is-right">In</th>
                 <th className="is-right">Out</th>
                 <th className="is-right">Kept</th>
@@ -497,8 +526,8 @@ export default async function TrendsPage({ searchParams }: { searchParams: Promi
               {ledger.map((r) => (
                 <tr key={r.label}>
                   <td className="whitespace-nowrap">
-                    {shortMonthLabel(r.label)}
-                    {r.label === currentLabel && <span className="ml-1.5 text-xs text-fg-3">so far</span>}
+                    {nameOf(r.label)}
+                    {r.label === currentBucket && <span className="ml-1.5 text-xs text-fg-3">so far</span>}
                   </td>
                   <td className="is-num">{r.income != null ? <Money value={r.income} kind="income" /> : "—"}</td>
                   <td className="is-num">{r.spending != null ? <Money value={r.spending} kind="neutral" /> : "—"}</td>
@@ -610,18 +639,36 @@ const rate = (p: number) => {
   return r < 0 ? `−${-r}%` : `${r}%`;
 };
 
-function Header({ range }: { range: Range }) {
+function trendsHref(range: Range, by: Bucket | null): string {
+  const q = new URLSearchParams();
+  if (range !== DEFAULT_RANGE) q.set("range", range);
+  if (by) q.set("by", by);
+  const qs = q.toString();
+  return qs ? `/trends?${qs}` : "/trends";
+}
+
+function Header({ range, by, bucket }: { range: Range; by: Bucket | null; bucket: Bucket }) {
   return (
     <PageHeader
       title="Trends"
       actions={
-        <nav className="mp-seg" aria-label="Time range">
-          {RANGES.map((r) => (
-            <Link key={r.value} href={r.value === DEFAULT_RANGE ? "/trends" : `/trends?range=${r.value}`} aria-current={r.value === range ? "true" : undefined} scroll={false}>
-              {r.label}
-            </Link>
-          ))}
-        </nav>
+        <div className="flex flex-wrap items-center gap-2">
+          <nav className="mp-seg" aria-label="Time range">
+            {RANGES.map((r) => (
+              <Link key={r.value} href={trendsHref(r.value, by)} aria-current={r.value === range ? "true" : undefined} scroll={false}>
+                {r.label}
+              </Link>
+            ))}
+          </nav>
+          {/* Grouping for the bar charts and the ledger. Unset follows the window's length. */}
+          <nav className="mp-seg" aria-label="Group by">
+            {BUCKETS.map((b) => (
+              <Link key={b} href={trendsHref(range, b)} aria-current={b === bucket ? "true" : undefined} scroll={false}>
+                {BUCKET_LABEL[b]}
+              </Link>
+            ))}
+          </nav>
+        </div>
       }
       description={
         <>

@@ -17,6 +17,7 @@ import { categorize, type CategoryRule } from "@/server/lib/categorize";
 import { applyRules, loadRules } from "@/server/lib/rules";
 import { dateToYearMonth } from "@/server/lib/period";
 import { todayIso } from "@/server/lib/pay-schedule";
+import { ensureDataPeriods } from "@/server/periods";
 import { LOCAL_SOURCES } from "@/constants/sync";
 import { decryptToken, encryptToken } from "./crypto";
 import { getProvider, SyncProviderError, type ProviderAccount, type ProviderTransaction, type SyncProvider } from "./provider";
@@ -388,6 +389,9 @@ export async function runSync(opts: RunOptions): Promise<SyncRunSummary> {
         if (a.balance?.recorded) summary.balancesRecorded++;
       }
     }
+    // Rows dated in a month with no sheet yet were inserted with period_id null — make those
+    // months now so a first pull reaching back years lands in the month views and Trends.
+    if (!dryRun && summary.inserted > 0) await ensureDataPeriods();
     if (summary.enrollments.length && summary.enrollments.every((e) => e.status === "error")) summary.status = "failed";
   } catch (e) {
     summary.status = "failed";
@@ -821,8 +825,8 @@ async function loadPeriodMap(): Promise<Map<string, number>> {
   return new Map(rows.map((p) => [`${p.year}-${p.month}`, p.id]));
 }
 
-// Same rule as commitImport: a month with no period row yet gets null and is adopted when
-// the month is created (ensurePeriod → adoptOrphanTransactions).
+// A month with no period row yet gets null here; runSync creates those months at the end of
+// the run (ensureDataPeriods), which links the rows.
 function periodIdFor(iso: string, periodMap: Map<string, number>): number | null {
   const ym = dateToYearMonth(iso);
   return ym ? (periodMap.get(`${ym.year}-${ym.month}`) ?? null) : null;

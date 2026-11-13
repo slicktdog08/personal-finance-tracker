@@ -1,8 +1,9 @@
 import { after, before, describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { db } from "@/server/db";
-import { periods, transactions } from "@/server/db/schema";
+import { billInstances, periods, transactions } from "@/server/db/schema";
+import { ensureDataPeriods } from "@/server/periods";
 import { createTransaction, setTransactionPending, updateTransaction } from "@/server/actions/transactions";
 import { analyzeStatement, commitPdfStatements } from "@/server/actions/pdf-import";
 import { commitImport } from "@/server/actions/import";
@@ -166,6 +167,28 @@ describe("ordering and month boundaries", () => {
     await db.delete(transactions).where(eq(transactions.id, row.id));
     await db.delete(periods).where(and(eq(periods.year, 2031), eq(periods.month, 1)));
     await db.delete(periods).where(and(eq(periods.year, 2031), eq(periods.month, 2)));
+  });
+
+  test("importing history creates bare months for it, and ensureDataPeriods adopts stray orphans", async () => {
+    // Years back, so no sheet exists; cleaned up below.
+    const preview = await analyzeStatement({ txns: [{ dateIso: "2012-03-14", description: "OLD HISTORY CO", amount: 12, direction: "Debit", raw: {} }], accountNumber: "1111" });
+    assert.equal(preview.rows[0].status, "new");
+    await commitImport("history.csv", preview.rows.map((r) => ({ ...r, accountNumber: "1111" })));
+    const [row] = await db.select().from(transactions).where(and(eq(transactions.accountId, f.checkingId), eq(transactions.description, "OLD HISTORY CO")));
+    assert.ok(row.periodId, "inserted row gets its month");
+    const [p] = await db.select().from(periods).where(eq(periods.id, row.periodId!));
+    assert.equal(p.label, "2012-03");
+    assert.equal((await db.select().from(billInstances).where(eq(billInstances.periodId, p.id))).length, 0, "no bills cloned into history");
+
+    // A row that slipped in with no month (an older import, a raw insert) is picked up later.
+    await db.update(transactions).set({ periodId: null, txnDate: "2012-05-02" }).where(eq(transactions.id, row.id));
+    assert.ok((await ensureDataPeriods()) >= 1);
+    const [again] = await db.select().from(transactions).where(eq(transactions.id, row.id));
+    const [p2] = await db.select().from(periods).where(eq(periods.id, again.periodId!));
+    assert.equal(p2.label, "2012-05");
+
+    await db.delete(transactions).where(eq(transactions.id, row.id));
+    await db.delete(periods).where(and(eq(periods.year, 2012), inArray(periods.month, [3, 5])));
   });
 });
 

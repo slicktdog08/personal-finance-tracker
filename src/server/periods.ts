@@ -1,7 +1,7 @@
 import "server-only";
 import { db } from "@/server/db";
 import { periods, billInstances, transactions } from "@/server/db/schema";
-import { and, eq, isNull, gte, lte, desc } from "drizzle-orm";
+import { and, eq, isNull, gte, lte, desc, sql } from "drizzle-orm";
 import { periodLabel, monthBounds, dateToYearMonth } from "@/server/lib/period";
 import { DEFAULT_NEW_MONTH_STATUS } from "@/constants/enums";
 import { todayIso } from "@/server/lib/pay-schedule";
@@ -20,6 +20,48 @@ async function adoptOrphanTransactions(periodId: number, start: string, end: str
     .update(transactions)
     .set({ periodId })
     .where(and(isNull(transactions.periodId), gte(transactions.txnDate, start), lte(transactions.txnDate, end)));
+}
+
+/**
+ * Give every transaction a month. A month exists wherever there's a transaction dated in it, so
+ * history imported from years back (statements, CSVs, a sync's first pull) shows up in the
+ * month views, filters and Trends without anyone creating those months by hand. Months made this
+ * way are bare (no bills cloned in) — they hold what happened, not a bill plan.
+ *
+ * Cheap when nothing is orphaned: one indexed `period_id IS NULL` probe. Returns how many months
+ * it created.
+ */
+export async function ensureDataPeriods(): Promise<number> {
+  const orphanMonths = await db
+    .select({
+      year: sql<number>`YEAR(${transactions.txnDate})`,
+      month: sql<number>`MONTH(${transactions.txnDate})`,
+    })
+    .from(transactions)
+    .where(isNull(transactions.periodId))
+    .groupBy(sql`YEAR(${transactions.txnDate})`, sql`MONTH(${transactions.txnDate})`);
+  if (!orphanMonths.length) return 0;
+
+  const existing = await db.select({ year: periods.year, month: periods.month }).from(periods);
+  const have = new Set(existing.map((p) => `${p.year}-${p.month}`));
+  let created = 0;
+  for (const m of orphanMonths) {
+    const year = Number(m.year);
+    const month = Number(m.month);
+    if (!year || !month || have.has(`${year}-${month}`)) continue;
+    const { start, end } = monthBounds(year, month);
+    await db.insert(periods).values({ year, month, label: periodLabel(year, month), startDate: start, endDate: end });
+    have.add(`${year}-${month}`);
+    created++;
+  }
+  // One pass links every orphan — the new months' rows and any that slipped past a month that
+  // already existed (the lazy insert path leaves period_id null when the month isn't loaded yet).
+  await db.execute(sql`
+    UPDATE ${transactions} t
+    JOIN ${periods} p ON p.year = YEAR(t.txn_date) AND p.month = MONTH(t.txn_date)
+    SET t.period_id = p.id
+    WHERE t.period_id IS NULL`);
+  return created;
 }
 
 // Statuses worth carrying forward as-is when cloning a month.
@@ -100,6 +142,8 @@ export function autoPeriodLabels(today = todayIso()): { current: string; next: s
  * Idempotent and cheap when both already exist (two indexed lookups). Never reaches further ahead.
  */
 export async function ensureCurrentPeriods(today = todayIso()): Promise<void> {
+  // Also the backfill for history imported before months followed transactions.
+  await ensureDataPeriods();
   const ym = dateToYearMonth(today);
   if (!ym) return;
   const wanted = [ym, dateToYearMonth(monthBounds(ym.year, ym.month).end.slice(0, 8) + "01")!];
