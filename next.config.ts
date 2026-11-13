@@ -9,6 +9,11 @@ const nextConfig: NextConfig = {
     // the 1MB default Server Action body cap would reject realistic batches. The client
     // also guards per-file size/count, so this is a backstop, not the first wall hit.
     serverActions: { bodySizeLimit: "25mb" },
+    // proxy.ts runs on every route, server actions included, and Next buffers a request body
+    // for it only up to this size (default 10MB) — past that the body is silently TRUNCATED
+    // and the action fails with a JSON parse error. Keep it above bodySizeLimit. nginx
+    // (nginx/template*) allows 100m.
+    proxyClientMaxBodySize: "30mb",
   },
   // Baseline hardening for a publicly-reachable app holding financial data. These
   // three are safe for this app specifically: it never frames itself, serves no
