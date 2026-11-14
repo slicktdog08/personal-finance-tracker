@@ -35,11 +35,23 @@
 //   Interest Charge on Purchases $13.50                      <- undated; posts at cycle end
 //   Total Interest for This Period $13.50
 //
+// Statements from before mid-2021 use an older, two-column layout: the header reads
+// "Example Card Account Ending in 1234", months carry a dot ("Dec. 25, 2025"), rows have one
+// date ("Date Description Amount") and a long description wraps onto the line below its row:
+//
+//   Jan 16 RIDE SHARE COMPANY $9.50
+//   INC800-555-0100CA
+//
+// The activity runs down the left half of the page and carries on in the right half, beside
+// the interest tables, so whole-page lines would splice unrelated text onto the rows. For that
+// layout the lines are rebuilt from the positioned text, one column at a time.
+//
 // Balances are amounts OWED (previous → new), so the generic check (opening + credits −
 // debits == closing) has the wrong sign for a card. The parser reports its own verdict:
 // previous + charges − payments/credits == new balance, and each kind of row is also checked
 // against the figure the Account Summary prints for it.
 import { parseMoney } from "@/server/lib/money";
+import { groupItemsToLines } from "@/server/lib/pdf/lines";
 import type { ParserResult, ParsedTxn, StatementParser } from "@/server/lib/pdf/types";
 
 const SOURCE = "capitalone-card";
@@ -47,13 +59,19 @@ const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "
 const MON = `(${MONTHS.join("|")})`;
 const AMT = String.raw`\$[\d,]+\.\d{2}`;
 
-// "Example Rewards Card | Visa Signature ending in 1234"
-const HEADER_RE = /^(.+?) \| .*\bending in (\d{4})$/m;
-// "Dec 25, 2025 - Jan 24, 2026 | 31 days in Billing Cycle"
+// "Example Rewards Card | Visa Signature ending in 1234"; older: "Example Card Account Ending in 1234"
+const HEADER_RE = /^(.+?) (?:\| .*\bending in|Account Ending in) (\d{4})$/m;
+// "Dec 25, 2025 - Jan 24, 2026 | 31 days in Billing Cycle"; older: "Dec. 25, 2025 - Jan. 24, 2026 | ..."
 const PERIOD_RE = new RegExp(
-  String.raw`\b${MON} (\d{1,2}), (\d{4}) - ${MON} (\d{1,2}), (\d{4}) \| \d+ days in Billing Cycle`,
+  String.raw`\b${MON}[a-z]*\.? (\d{1,2}), (\d{4}) - ${MON}[a-z]*\.? (\d{1,2}), (\d{4}) \| \d+ days in Billing Cycle`,
 );
-const TABLE_HEADER_RE = /^Trans Date Post Date Description Amount$/;
+const CURRENT_LAYOUT_RE = /Trans Date Post Date Description Amount/;
+const TABLE_HEADER_RE = /^(?:Trans Date Post Date|Date) Description Amount$/;
+// The older layout's rows: one date.
+const LEGACY_TXN_RE = new RegExp(String.raw`^${MON} (\d{1,2}) (.+?) (- )?(${AMT})$`);
+// Where the older layout's left column ends, in PDF points on a letter page: amounts in the
+// left table end near x=310 and the right column starts near x=328.
+const LEGACY_GUTTER_X = 320;
 // "<Mon d> <Mon d> <description> [- ]$amount" — a leading "- " marks a payment or credit.
 const TXN_RE = new RegExp(String.raw`^${MON} (\d{1,2}) ${MON} (\d{1,2}) (.+?) (- )?(${AMT})$`);
 // "PAT EXAMPLE #1234: Payments, Credits and Adjustments" / "...: Transactions"
@@ -62,9 +80,11 @@ const INTEREST_RE = new RegExp(String.raw`^(Interest Charge on .+?) (${AMT})$`);
 const FX_AMOUNT_RE = /^\$[\d,]+\.\d{2}$/;
 const FX_CURRENCY_RE = /^[A-Z]{3}$/;
 const FX_RATE_RE = /^([\d.]+) Exchange Rate$/;
+// "TK#: 0001234567890 PSGR: EXAMPLE/PAT" then one "ORIG: AAA, DEST: BBB, S/O: X, CARRIER: XX, SVC: Y" per leg
+const TRAVEL_RE = /^(?:(?:TK#: \S+ )?PSGR: .*|ORIG: .*\bDEST: .*)$/;
 // Lines that sit between rows without being one: page furniture and section totals.
 const SKIP_RE =
-  /^(?:Page \d+ of \d+|Transactions(?: \(Continued\))?|Fees|Interest Charged|Visit capitalone\.com .*|Additional Information on the next page|.* #\d{4}: Total .*|Total .* for This Period .*)$/;
+  /^(?:Page \d+ of \d+|Transactions(?: \(Continued\)| Continued)?|Transactions continue on .*|Fees|Interest Charged|Visit (?:www\.)?capitalone\.com .*|Additional Information on the next page|.* #\d{4}: Total .*|Total .* for This Period .*)$/;
 // Everything after the interest block is disclosures, not activity.
 const END_RE = /^(?:Totals Year-to-Date|Interest Charge Calculation)$/;
 
@@ -84,16 +104,31 @@ function toIso(year: number, monthIdx: number, day: number): string | null {
 
 const cents = (n: number) => Math.round(n * 100);
 
+// Payments carry the authorization date glued onto the description ("...PYMTAuthDate 17-Jan").
+function splitAuthDate(desc: string): { description: string; authDate: string | null } {
+  const auth = /\s*AuthDate (\d{2}-[A-Za-z]{3})$/.exec(desc);
+  return auth ? { description: desc.slice(0, auth.index), authDate: auth[1] } : { description: desc, authDate: null };
+}
+
 export const capitalOneCardParser: StatementParser = {
   id: SOURCE,
   label: "Capital One — credit card statement",
 
   detect(text) {
-    return /capitalone\.com/i.test(text) && /days in Billing Cycle/.test(text) && /Trans Date Post Date Description Amount/.test(text);
+    return /capitalone\.com/i.test(text) && /days in Billing Cycle/.test(text) && /\bDate Description Amount/.test(text);
   },
 
-  parse(lines, text): ParserResult {
+  parse(pageLines, text, pages): ParserResult {
     const notes: string[] = [];
+    const legacy = !CURRENT_LAYOUT_RE.test(text);
+    // Older layout: read each page's left column, then its right one.
+    const lines =
+      legacy && pages
+        ? pages.flatMap((items) => [
+            ...groupItemsToLines(items.filter((it) => it.x < LEGACY_GUTTER_X)),
+            ...groupItemsToLines(items.filter((it) => it.x >= LEGACY_GUTTER_X)),
+          ])
+        : pageLines;
 
     const hm = HEADER_RE.exec(text);
     const accountNumber = hm?.[2] ?? "";
@@ -131,9 +166,12 @@ export const capitalOneCardParser: StatementParser = {
     let inTable = false;
     let holder: { name: string; card: string } | null = null;
     let last: ParsedTxn | null = null; // the row a foreign-currency block would belong to
+    let lastDesc = ""; // its description as printed, before any wrapped lines are added
+    let wrapAt = -1; // index of the line that would continue it (older layout)
     let inInterest = false;
 
-    for (const line of lines) {
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
       if (END_RE.test(line)) break;
 
       const hd = HOLDER_RE.exec(line);
@@ -183,22 +221,24 @@ export const capitalOneCardParser: StatementParser = {
       if (!inTable || !kind) continue;
       if (SKIP_RE.test(line) || HEADER_RE.test(line) || PERIOD_RE.test(line)) continue;
 
-      const tm = TXN_RE.exec(line);
+      const lm = legacy ? LEGACY_TXN_RE.exec(line) : null;
+      // The older layout lists every credit in its own block, so a "-" before the amount of a
+      // purchase is the end of a merchant name that wrapped ("TACO PLACE - 12 -").
+      if (lm?.[4] && kind === "charges") {
+        lm[3] += " -";
+        lm[4] = "";
+      }
+      const tm = lm ? [lm[0], lm[1], lm[2], "", "", lm[3], lm[4], lm[5]] : legacy ? null : TXN_RE.exec(line);
       if (tm) {
         const [, tMon, tDay, pMon, pDay, descRaw, minus, amountRaw] = tm;
         const amount = parseMoney(amountRaw);
         const direction: "Credit" | "Debit" = minus ? "Credit" : "Debit";
         const raw: Record<string, string> = { line, section: kind, source: SOURCE, account: accountNumber };
-        const postDate = dateOf(pMon, pDay);
+        const postDate = pMon ? dateOf(pMon, pDay) : null;
         if (postDate) raw.postDate = postDate;
         if (holder) raw.card = holder.card;
-        // Payments carry the authorization date glued onto the description.
-        let description = descRaw;
-        const auth = /\s*AuthDate (\d{2}-[A-Za-z]{3})$/.exec(description);
-        if (auth) {
-          raw.authDate = auth[1];
-          description = description.slice(0, auth.index);
-        }
+        const { description, authDate } = splitAuthDate(descRaw);
+        if (authDate) raw.authDate = authDate;
         if ((kind === "credits") !== (direction === "Credit")) {
           notes.push(
             `${tMon} ${tDay} ${descRaw} ${minus ?? ""}${amountRaw}: ${direction === "Credit" ? "a credit among the charges" : "a charge among the payments and credits"} — imported as printed.`,
@@ -206,6 +246,8 @@ export const capitalOneCardParser: StatementParser = {
         }
         if (amount != null) sums[kind] += direction === "Credit" ? -amount : amount;
         last = { dateIso: dateOf(tMon, tDay), description: description.trim(), amount, direction, raw };
+        lastDesc = descRaw;
+        wrapAt = i + 1;
         txns.push(last);
         continue;
       }
@@ -222,6 +264,21 @@ export const capitalOneCardParser: StatementParser = {
       const fx = FX_RATE_RE.exec(line);
       if (last && fx && last.raw.foreignAmount) {
         last.raw.exchangeRate = fx[1];
+        continue;
+      }
+      // Airline tickets list the passenger and each leg under the row.
+      if (last && TRAVEL_RE.test(line)) {
+        last.raw.travel = last.raw.travel ? `${last.raw.travel}; ${line}` : line;
+        continue;
+      }
+      // Older layout: the rest of a description too long for its row.
+      if (legacy && last && i === wrapAt) {
+        lastDesc += ` ${line}`;
+        last.raw.line += ` ${line}`;
+        const { description, authDate } = splitAuthDate(lastDesc);
+        last.description = description.trim();
+        if (authDate) last.raw.authDate = authDate;
+        wrapAt = i + 1;
         continue;
       }
 

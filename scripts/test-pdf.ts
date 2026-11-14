@@ -146,13 +146,15 @@ async function main() {
     const bytes = new Uint8Array(readFileSync(pdfPath));
     const ex = await extractPdf(bytes);
     console.log(`  pages=${ex.pageCount} lines=${ex.lines.length}`);
-    const d = detectAndParse(ex.lines, ex.text);
+    const d = detectAndParse(ex.lines, ex.text, ex.items);
     check("registry detected a parser", !!d.parser, d.parser?.id);
     for (const res of d.results) {
       const net = res.txns.reduce((n, t) => n + (t.direction === "Credit" ? 1 : -1) * (t.amount ?? 0), 0);
       const delta = (res.meta.closingBalance ?? 0) - (res.meta.openingBalance ?? 0);
       console.log(`  ••${res.meta.accountNumber} ${res.meta.periodStart}..${res.meta.periodEnd}: ${res.txns.length} txns, ${res.notes.length} notes`);
-      check(`  ••${res.meta.accountNumber} reconciles (${net.toFixed(2)} == ${delta.toFixed(2)})`, Math.abs(net - delta) < 0.005);
+      // Cards and brokerage statements can't use the generic check and report their own verdict.
+      if (res.reconciled !== undefined) check(`  ••${res.meta.accountNumber} reconciles (parser's own check)`, res.reconciled === true, res.notes);
+      else check(`  ••${res.meta.accountNumber} reconciles (${net.toFixed(2)} == ${delta.toFixed(2)})`, Math.abs(net - delta) < 0.005);
     }
   }
 

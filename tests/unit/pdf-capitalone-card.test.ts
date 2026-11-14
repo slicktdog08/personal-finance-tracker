@@ -2,6 +2,7 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { capitalOneCardParser } from "@/server/lib/pdf/parsers/capitalone-card";
 import { detectAndParse } from "@/server/lib/pdf/registry";
+import { groupItemsToLines, type PositionedItem } from "@/server/lib/pdf/lines";
 import type { ParserResult } from "@/server/lib/pdf/types";
 
 // Lines as lines.ts rebuilds them from a Capital One credit card statement. Illustrative
@@ -162,5 +163,131 @@ describe("Capital One credit card statement parser", () => {
     const i = STATEMENT.indexOf("Dec 23 Dec 26 COFFEE SHOPANYTOWNCA $4.50");
     const lines = [...STATEMENT.slice(0, i), "Something new", ...STATEMENT.slice(i)];
     assert.deepEqual(parse(lines).notes, ["Unparsed line: Something new"]);
+  });
+
+  test("an airline ticket's passenger and legs stay on the row instead of becoming notes", () => {
+    const i = STATEMENT.indexOf("Dec 23 Dec 26 COFFEE SHOPANYTOWNCA $4.50") + 1;
+    const lines = [
+      ...STATEMENT.slice(0, i),
+      "TK#: 0001234567890 PSGR: EXAMPLE/PAT",
+      "ORIG: AAA, DEST: BBB, S/O: X, CARRIER: XX, SVC: Y",
+      ...STATEMENT.slice(i),
+    ];
+    const t = parse(lines);
+    assert.deepEqual(t.notes, []);
+    assert.equal(t.txns[2].raw.travel, "TK#: 0001234567890 PSGR: EXAMPLE/PAT; ORIG: AAA, DEST: BBB, S/O: X, CARRIER: XX, SVC: Y");
+  });
+});
+
+// The layout used before mid-2021: two columns, one date per row, wrapped descriptions.
+// Same illustrative figures: 1,000.00 − 300.00 − 5.00 + 170.00 + 13.50 = 878.50.
+const OLD_HEAD = ["Example Card Account Ending in 1234", "Dec. 25, 2025 - Jan. 24, 2026 | 31 days in Billing Cycle"];
+const OLD_SUMMARY = [
+  "Page 1 of 2",
+  ...OLD_HEAD,
+  "Payment Information Account Summary",
+  "Payment Due Date For online and phone payments, Previous Balance $1,000.00",
+  "Feb. 18, 2026 Payments - $300.00",
+  "New Balance Minimum Payment Due Other Credits - $5.00",
+  "$878.50 $25.00 Transactions + $170.00",
+  "Cash Advances + $0.00",
+  "Fees Charged + $0.00",
+  "Interest Charged + $13.50",
+  "New Balance = $878.50",
+  "this card and each on this statement an estimated Credit Limit $2,000.00",
+  "Cash Advance Credit Limit $500.00",
+  "Pay or manage your account on our mobile app or at www.capitalone.com. Customer Service: 1-800-555-0100",
+  "Payment Due Date: Feb. 18, 2026 Account Ending in 1234",
+];
+const OLD_LEFT = [
+  "Transactions",
+  "Visit www.capitalone.com to see detailed transactions.",
+  "PAT EXAMPLE #1234: Payments, Credits and Adjustments",
+  "Date Description Amount",
+  "Jan 18 CAPITAL ONE MOBILE PYMTAuthDate - $300.00",
+  "17-Jan",
+  "Jan 19 ACME STORE 100800-555-0100CA - $5.00",
+  "PAT EXAMPLE #1234: Transactions",
+  "Date Description Amount",
+  "Dec 26 COFFEE SHOPANYTOWNCA $4.50",
+  "Jan 16 RIDE SHARE COMPANY $9.50",
+  "INC800-555-0100CA",
+];
+const OLD_RIGHT = [
+  "Page 2 of 2",
+  ...OLD_HEAD,
+  "Transactions Continued",
+  "Date Description Amount",
+  "Jan 17 TACO PLACE - 12 - $12.00",
+  "MCOMM800-555-0100CA",
+  "Jan 22 ACME STORE 100800-555-0100CA $144.00",
+  "PAT EXAMPLE #1234: Total $170.00",
+  "Total Transactions for This Period $170.00",
+  "Fees",
+  "Date Description Amount",
+  "Total Fees for This Period $0.00",
+  "Interest Charged",
+  "Interest Charge on Purchases $13.50",
+  "Interest Charge on Cash Advances $0.00",
+  "Total Interest for This Period $13.50",
+  "Totals Year-to-Date",
+  "Total Fees charged $0.00",
+  "Interest Charge Calculation",
+  "Purchases 20.00% P $800.00 $13.50",
+];
+const OLD_STATEMENT = [...OLD_SUMMARY, ...OLD_LEFT, ...OLD_RIGHT];
+const OLD_EXPECTED = [
+  ["2026-01-18", "Credit", 300, "CAPITAL ONE MOBILE PYMT"], // auth date wrapped onto the next line
+  ["2026-01-19", "Credit", 5, "ACME STORE 100800-555-0100CA"],
+  ["2025-12-26", "Debit", 4.5, "COFFEE SHOPANYTOWNCA"],
+  ["2026-01-16", "Debit", 9.5, "RIDE SHARE COMPANY INC800-555-0100CA"], // wrapped description
+  ["2026-01-17", "Debit", 12, "TACO PLACE - 12 - MCOMM800-555-0100CA"], // the "-" is the name's, not a credit
+  ["2026-01-22", "Debit", 144, "ACME STORE 100800-555-0100CA"],
+  ["2026-01-24", "Debit", 13.5, "Interest Charge on Purchases"],
+];
+
+describe("Capital One credit card statement parser — older two-column layout", () => {
+  test("detected through the registry", () => {
+    assert.equal(detectAndParse(OLD_STATEMENT, OLD_STATEMENT.join("\n")).parser?.id, "capitalone-card");
+  });
+
+  const r = parse(OLD_STATEMENT);
+
+  test("header, period, balances and credit limit", () => {
+    assert.equal(r.meta.accountNumber, "1234");
+    assert.equal(r.meta.accountLabel, "Example Card");
+    assert.equal(r.meta.periodStart, "2025-12-25");
+    assert.equal(r.meta.periodEnd, "2026-01-24");
+    assert.equal(r.meta.openingBalance, 1000);
+    assert.equal(r.meta.closingBalance, 878.5);
+    assert.equal(r.meta.creditLimit, 2000);
+  });
+
+  test("single-date rows, wrapped descriptions and the wrapped auth date", () => {
+    assert.deepEqual(
+      r.txns.map((t) => [t.dateIso, t.direction, t.amount, t.description]),
+      OLD_EXPECTED,
+    );
+    assert.equal(r.txns[0].raw.authDate, "17-Jan");
+    assert.equal(r.txns[0].raw.postDate, undefined);
+    assert.equal(r.reconciled, true);
+    assert.deepEqual(r.notes, []);
+  });
+
+  test("columns are read one at a time when the page's positioned text is supplied", () => {
+    // Left and right columns share baselines, so whole-page lines splice them together.
+    const column = (lines: string[], x: number): PositionedItem[] => lines.map((str, i) => ({ str, x, y: 700 - i * 17 }));
+    const pages = [column(OLD_SUMMARY, 44), [...column(OLD_LEFT, 44), ...column(OLD_RIGHT, 328)]];
+    const pageLines = pages.flatMap((p) => groupItemsToLines(p));
+    assert.ok(pageLines.includes("Jan 18 CAPITAL ONE MOBILE PYMTAuthDate - $300.00 Date Description Amount"));
+    const d = detectAndParse(pageLines, pageLines.join("\n"), pages);
+    assert.equal(d.parser?.id, "capitalone-card");
+    const [p] = d.results;
+    assert.deepEqual(
+      p.txns.map((t) => [t.dateIso, t.direction, t.amount, t.description]),
+      OLD_EXPECTED,
+    );
+    assert.equal(p.reconciled, true);
+    assert.deepEqual(p.notes, []);
   });
 });
