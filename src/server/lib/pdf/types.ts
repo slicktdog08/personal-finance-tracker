@@ -4,6 +4,8 @@
 // so importing this from a client component pulls in no runtime code.
 
 import type { PreviewRow } from "@/server/lib/import-types";
+import type { PositionedItem } from "@/server/lib/pdf/lines";
+import type { AssetClass, TradeKind } from "@/constants/enums";
 
 // One transaction as pulled straight out of a statement, before dedup/DB work.
 export interface ParsedTxn {
@@ -12,6 +14,34 @@ export interface ParsedTxn {
   amount: number | null; // absolute value
   direction: "Debit" | "Credit";
   raw: Record<string, string>;
+}
+
+// A holdings movement on an investment statement — a buy, a sale, an option expiring, coins
+// withdrawn. Stored in investment_trades, never in transactions: it is not spending or income.
+export interface ParsedTrade {
+  dateIso: string | null;
+  kind: TradeKind;
+  /** The statement's own word for it ("Buy", "STC", "OEXP", "Purchase"). */
+  action: string;
+  assetClass: AssetClass;
+  symbol: string | null;
+  name: string;
+  /** Signed: negative when the holding left the account. Null for a cash-only move. */
+  quantity: number | null;
+  price: number | null;
+  /** The cash side, absolute; null when no cash moved (an expiry, a reward share). */
+  amount: number | null;
+  direction: "Debit" | "Credit" | null;
+}
+
+// One holding at the statement's close.
+export interface ParsedPosition {
+  assetClass: AssetClass;
+  symbol: string | null;
+  name: string;
+  quantity: number;
+  price: number | null;
+  marketValue: number | null;
 }
 
 // Header/summary facts a statement exposes.
@@ -41,11 +71,16 @@ export interface ParserResult {
   txns: ParsedTxn[];
   /** End-of-day balances, for statements that print a running balance on every row. */
   dailyBalances?: DailyBalance[];
+  /** Holdings movements (investment statements only). */
+  trades?: ParsedTrade[];
+  /** Holdings at the period's end (investment statements only). */
+  positions?: ParsedPosition[];
   /**
    * The parser's own verdict on whether the statement adds up, for formats where the generic
    * check (opening + credits − debits == closing) can't apply — a credit card's balances are
-   * amounts owed, so charges raise them and payments lower them. Omit to get the generic
-   * check; null = nothing to check against.
+   * amounts owed, so charges raise them and payments lower them; a brokerage statement's
+   * balance is a market value, checked against its printed totals instead. Omit to get the
+   * generic check; null = nothing to check against.
    */
   reconciled?: boolean | null;
   notes: string[]; // warnings, e.g. lines that looked transaction-like but didn't parse
@@ -55,12 +90,13 @@ export interface ParserResult {
 // of these. `detect` is a cheap text sniff; `parse` does the real work over the
 // reconstructed lines (full text also provided for header scraping). A statement that
 // covers several accounts (e.g. a bank's combined checking + savings statement) returns
-// one result per account.
+// one result per account. `pages` is the raw positioned text of each page, for tables whose
+// columns only x can tell apart (one amount per row, sitting under "Debit" or "Credit").
 export interface StatementParser {
   id: string;
   label: string;
   detect: (text: string) => boolean;
-  parse: (lines: string[], text: string) => ParserResult | ParserResult[];
+  parse: (lines: string[], text: string, pages?: PositionedItem[][]) => ParserResult | ParserResult[];
 }
 
 // A suggested balance snapshot to (optionally) record into account_balances. A statement
@@ -103,10 +139,14 @@ export interface ParsedStatement {
   finalizeCount?: number;
   errorCount: number;
 
+  /** Holdings movements to record in investment_trades (deduplicated on commit). */
+  trades: ParsedTrade[];
+  /** Holdings at `periodEnd`, to record in investment_positions; null = not an investment statement. */
+  positions: ParsedPosition[] | null;
   balanceSuggestions: StatementBalance[];
   /** End-of-day balances from the running-balance column; empty when the format has none. */
   dailyBalances: DailyBalance[];
-  /** opening + credits − debits == closing; null when either balance is missing. */
+  /** opening + credits − debits == closing (or the parser's own check); null when unknown. */
   reconciled: boolean | null;
   notes: string[];
   sampleLines: string[]; // first lines, shown when unrecognized to aid writing a parser
@@ -130,6 +170,10 @@ export interface CommitStatementInput {
   balances: StatementBalance[]; // the snapshots the user chose to record
   /** End-of-day balances to record (empty when the user turned them off). */
   dailyBalances?: DailyBalance[];
+  trades?: ParsedTrade[];
+  positions?: ParsedPosition[];
+  /** The date the positions are as of (the statement's period end). */
+  positionsAsOf?: string | null;
 }
 
 export interface PdfCommitResult {
@@ -144,4 +188,8 @@ export interface PdfCommitResult {
   merged: number;
   /** Imported rows a saved rule linked to a recurring bill. */
   billsLinked: number;
+  /** Trades newly written to investment_trades (re-imported ones are skipped). */
+  tradesRecorded: number;
+  /** Holdings written to investment_positions. */
+  positionsRecorded: number;
 }

@@ -171,7 +171,7 @@ export default async function TrendsPage({ searchParams }: { searchParams: Promi
           { key: "loans", name: "Loans", noun: "loan", color: "var(--mp-money-pending)", goodWhen: "down" as const, values: months.map((t) => t.loans) },
         ]
       : []),
-    ...(hasRetirement ? [{ key: "retirement", name: "Retirement", noun: "retirement", color: RETIREMENT_COLOR, goodWhen: "up" as const, values: months.map((t) => (t.retirement === 0 ? null : t.retirement)) }] : []),
+    ...(hasRetirement ? [{ key: "retirement", name: "Investments", noun: "investment", color: RETIREMENT_COLOR, goodWhen: "up" as const, values: months.map((t) => (t.retirement === 0 ? null : t.retirement)) }] : []),
     ...(hasAssets ? [{ key: "assets", name: "Assets", noun: "asset", color: ASSETS_COLOR, goodWhen: "up" as const, values: months.map((t) => (t.assets === 0 ? null : t.assets)) }] : []),
   ];
 
@@ -198,7 +198,7 @@ export default async function TrendsPage({ searchParams }: { searchParams: Promi
   const compositionLabels = bucket === "month" ? labels : bucketEnds(monthLabels, monthLabels.map(() => 0), bucket).map((b) => nameOf(b.key));
   const compositionRaw = [
     { name: "Cash", color: "var(--mp-accent)", values: months.map((t) => t.cash ?? 0) },
-    ...(hasRetirement ? [{ name: "Retirement", color: RETIREMENT_COLOR, values: months.map((t) => t.retirement) }] : []),
+    ...(hasRetirement ? [{ name: "Investments", color: RETIREMENT_COLOR, values: months.map((t) => t.retirement) }] : []),
     ...(hasAssets ? [{ name: "Assets", color: ASSETS_COLOR, values: months.map((t) => t.assets) }] : []),
     ...(hasCredit ? [{ name: "Cards", color: "var(--mp-money-owed)", values: months.map((t) => t.credit ?? 0) }] : []),
     ...(hasLoans ? [{ name: "Loans", color: "var(--mp-money-pending)", values: months.map((t) => t.loans ?? 0) }] : []),
@@ -250,7 +250,7 @@ export default async function TrendsPage({ searchParams }: { searchParams: Promi
         : isDebt
           ? "Owed"
           : RETIREMENT_ACCOUNT_TYPES.includes(a.accountType)
-            ? "Retirement"
+            ? "Investments"
             : "Other";
       return { ...a, st, lastVal, isDebt, group };
     })
@@ -570,7 +570,7 @@ export default async function TrendsPage({ searchParams }: { searchParams: Promi
   );
 }
 
-const GROUP_ORDER = ["Cash", "Owed", "Retirement", "Other"];
+const GROUP_ORDER = ["Cash", "Owed", "Investments", "Other"];
 
 function AccountRow({
   a,

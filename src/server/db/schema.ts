@@ -383,6 +383,65 @@ export const assetValues = mysqlTable(
   (t) => [index("idx_av_asset").on(t.assetId), index("idx_av_date").on(t.asOf)],
 );
 
+// A holdings movement inside an investment account: a buy, a sale, an option opening or
+// expiring, coins withdrawn. Deliberately NOT in `transactions` — a trade swaps cash for holdings
+// inside an account whose balance is already its whole value, so it is neither spending nor
+// income. `amount`/`direction` are the cash side (Debit = cash out); null when no cash moved.
+// See planning/features/pdf-import.md ("Investment statements").
+export const investmentTrades = mysqlTable(
+  "investment_trades",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    accountId: int("account_id")
+      .notNull()
+      .references(() => accounts.id),
+    tradeDate: date("trade_date", { mode: "string" }).notNull(),
+    // buy | sell | other — see TRADE_KINDS.
+    kind: varchar("kind", { length: 8 }).notNull(),
+    // The statement's own word for it ("Buy", "STC", "OEXP", "Purchase"), kept verbatim.
+    action: varchar("action", { length: 16 }).notNull(),
+    // equity | option | crypto | cash — see ASSET_CLASSES.
+    assetClass: varchar("asset_class", { length: 8 }).notNull(),
+    symbol: varchar("symbol", { length: 32 }),
+    name: varchar("name", { length: 255 }).notNull(),
+    quantity: decimal("quantity", { precision: 24, scale: 8 }),
+    price: decimal("price", { precision: 18, scale: 8 }),
+    amount: decimal("amount", { precision: 12, scale: 2 }),
+    direction: varchar("direction", { length: 8 }),
+    dedupHash: char("dedup_hash", { length: 64 }).notNull(),
+    source: varchar("source", { length: 32 }).notNull().default("pdf"),
+    createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`),
+  },
+  (t) => [
+    uniqueIndex("uq_it_dedup").on(t.dedupHash),
+    index("idx_it_acct_date").on(t.accountId, t.tradeDate),
+    index("idx_it_symbol").on(t.symbol),
+  ],
+);
+
+// What an investment account held at a statement's close. One snapshot per account + date; an
+// import replaces the whole snapshot (rows have no natural key — two option contracts share
+// their underlying's symbol).
+export const investmentPositions = mysqlTable(
+  "investment_positions",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    accountId: int("account_id")
+      .notNull()
+      .references(() => accounts.id),
+    asOf: date("as_of", { mode: "string" }).notNull(),
+    assetClass: varchar("asset_class", { length: 8 }).notNull(),
+    symbol: varchar("symbol", { length: 32 }),
+    name: varchar("name", { length: 255 }).notNull(),
+    quantity: decimal("quantity", { precision: 24, scale: 8 }).notNull(),
+    price: decimal("price", { precision: 18, scale: 8 }),
+    marketValue: decimal("market_value", { precision: 14, scale: 2 }),
+    source: varchar("source", { length: 32 }).notNull().default("pdf"),
+    createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`),
+  },
+  (t) => [index("idx_ip_acct_date").on(t.accountId, t.asOf)],
+);
+
 // A debt is the financial face of a bill (one marked is_debt) — a loan being repaid.
 // Static facts live here; the balance/APR/min-payment that change over time live in
 // `debt_balances` (a dated-snapshot ledger, exactly like account_balances). 1:1 with a bill.

@@ -704,7 +704,7 @@ export function registerReadTools(server: McpServer) {
     {
       title: "Balance trends",
       description:
-        "Month-end cash on hand, retirement (401k/IRA) balances, asset values (car, house), credit-card debt and loan balances for every tracked month — the net-worth trajectory (net = cash + retirement + assets − credit − loans). Retirement and assets are NOT spendable cash. Null means no snapshot existed by that month's end.",
+        "Month-end cash on hand, retirement and investment (401k/IRA/brokerage/crypto) balances, asset values (car, house), credit-card debt and loan balances for every tracked month — the net-worth trajectory (net = cash + retirement + assets − credit − loans). Retirement and assets are NOT spendable cash. Null means no snapshot existed by that month's end.",
       inputSchema: z.object({ months: z.number().int().min(1).max(36).default(12) }),
       annotations: READ_ONLY,
     },
