@@ -17,6 +17,8 @@ export interface AccountLookup {
   idByNumber: Map<string, number>;
   /** The account's current number. */
   numberById: Map<number, string>;
+  /** The other numbers the account behind `n` answers to (empty when it has none, or is unknown). */
+  otherNumbers(n: string): string[];
 }
 
 export async function loadAccountLookup(): Promise<AccountLookup> {
@@ -28,7 +30,13 @@ export async function loadAccountLookup(): Promise<AccountLookup> {
   for (const a of aliases) idByNumber.set(a.n, a.id);
   // A real account always wins over a former number that happens to match it.
   for (const r of rows) idByNumber.set(r.n, r.id);
-  return { idByNumber, numberById: new Map(rows.map((r) => [r.id, r.n])) };
+  const numbersById = new Map<number, string[]>();
+  for (const [n, id] of idByNumber) numbersById.set(id, [...(numbersById.get(id) ?? []), n]);
+  return {
+    idByNumber,
+    numberById: new Map(rows.map((r) => [r.id, r.n])),
+    otherNumbers: (n) => (numbersById.get(idByNumber.get(n) ?? -1) ?? []).filter((x) => x !== n),
+  };
 }
 
 export async function accountIdsByNumber(): Promise<Map<string, number>> {
@@ -60,4 +68,21 @@ export async function getAccountAliases(): Promise<Map<number, string[]>> {
   const out = new Map<number, string[]>();
   for (const r of rows) out.set(r.id, [...(out.get(r.id) ?? []), r.n]);
   return out;
+}
+
+/**
+ * Dedup hashes for the same rows as if each had been imported under one of its account's other
+ * numbers. A hash is built from the number a row was imported with, so after an account is
+ * merged or renumbered the same transaction may already be stored under a different one; a row
+ * whose hash under any of these exists is a duplicate too. One array per alternative, each
+ * index-aligned with `rows` (a row whose account has fewer alternatives keeps its own hash).
+ */
+export function alternateHashes<R extends { accountNumber?: string | null }>(
+  rows: R[],
+  lookup: AccountLookup,
+  hash: (rows: R[]) => string[],
+): string[][] {
+  const alts = rows.map((r) => lookup.otherNumbers((r.accountNumber ?? "").trim()));
+  const most = Math.max(0, ...alts.map((a) => a.length));
+  return Array.from({ length: most }, (_, j) => hash(rows.map((r, i) => (alts[i][j] ? { ...r, accountNumber: alts[i][j] } : r))));
 }

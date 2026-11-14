@@ -5,7 +5,10 @@ import { toNum } from "@/server/lib/money";
 import { formatDate, shortMonthLabel } from "@/server/lib/period";
 import { monthlyInterest, annualInterest, payoffProgress } from "@/server/lib/debt";
 import { ACCOUNT_TYPES, CREDIT_ACCOUNT_TYPES, SNOWBALL_MIN_APR } from "@/constants/enums";
-import { addAccountBalance, deleteAccountBalance, updateAccount } from "@/server/actions/accounts";
+import Link from "next/link";
+import { addAccountBalance, changeAccountNumber, deleteAccountBalance, updateAccount } from "@/server/actions/accounts";
+import { accountName, formerNumbersText, syncStatusText, type AccountSync } from "@/components/accounts/account-glyph";
+import { keepsOldNumber, NUMBER_HINT } from "@/components/accounts/ChangeNumberSheet";
 import { Badge, Button, Card, DataTable, Field, Icon, IconButton, Input, Money, ProgressBar, Select, StatTile, cx } from "@/components/ds";
 import { Sheet } from "@/components/ui/Sheet";
 
@@ -59,6 +62,8 @@ export function DebtCard({
   txnCount,
   lastTxn,
   order = { rank: null, isTarget: false, paidOffOn: null },
+  sync = null,
+  formerNumbers,
 }: {
   debt: DebtInfo;
   ledger: DebtLedgerRow[];
@@ -66,6 +71,10 @@ export function DebtCard({
   txnCount: number;
   lastTxn: string | null;
   order?: DebtRank;
+  /** Present when a bank-sync account feeds this one (settings → Bank Sync). */
+  sync?: AccountSync | null;
+  /** Numbers of accounts merged into this one, or that it used to have. */
+  formerNumbers?: string[];
 }) {
   const [pending, start] = useTransition();
   const [recording, setRecording] = useState(false);
@@ -85,7 +94,9 @@ export function DebtCard({
   const utilization = isCredit && curBalance != null && curLimit != null && curLimit > 0 ? (curBalance / curLimit) * 100 : null;
   const paidOff = curBalance != null && curBalance <= 0;
   const parked = !paidOff && curBalance != null && order.rank == null;
-  const name = debt.label || `••${debt.accountNumber}`;
+  const name = accountName(debt);
+  const syncText = syncStatusText(sync);
+  const former = formerNumbersText(formerNumbers);
 
   // History rows with the change from the snapshot before each one (ledger is newest first).
   const rows = ledger.map((r, i) => {
@@ -119,6 +130,15 @@ export function DebtCard({
               {sub}
               {sub && " · "}
               <span className="font-mono">··{debt.accountNumber}</span>
+              {former && <span title="Statements with these numbers import into this account"> · {former}</span>}
+              {syncText && (
+                <>
+                  {" · "}
+                  <Link href="/settings/sync" className="hover:text-accent-text hover:underline">
+                    {syncText}
+                  </Link>
+                </>
+              )}
               {status && ` · ${status}`}
             </div>
           </div>
@@ -274,7 +294,7 @@ function RecordSheet({ debt, ledger, isCredit, onClose }: { debt: DebtInfo; ledg
       }
     >
       <p className="mb-3 text-sm text-fg-3">
-        {debt.label || "Account"} <span className="font-mono">··{debt.accountNumber}</span>
+        {accountName(debt)} <span className="font-mono">··{debt.accountNumber}</span>
       </p>
       <form
         className="grid grid-cols-2 gap-3"
@@ -317,9 +337,20 @@ function EditSheet({ debt, onClose }: { debt: DebtInfo; onClose: () => void }) {
   const [type, setType] = useState(debt.accountType);
   const [principal, setPrincipal] = useState(debt.originalPrincipal ?? "");
   const [opened, setOpened] = useState(debt.openedOn ?? "");
+  const [number, setNumber] = useState(debt.accountNumber);
+  const [numberError, setNumberError] = useState<string | null>(null);
   const credit = CREDIT_ACCOUNT_TYPES.includes(type);
+  const renumbered = number.trim() !== "" && number.trim() !== debt.accountNumber;
   const save = () =>
     start(async () => {
+      // The number first: if it is refused nothing else is saved, and the sheet stays open.
+      if (renumbered) {
+        const res = await changeAccountNumber(debt.id, number);
+        if (!res.ok) {
+          setNumberError(res.error);
+          return;
+        }
+      }
       const patch: Parameters<typeof updateAccount>[1] = {};
       if (label !== (debt.label ?? "")) patch.label = label;
       if (institution !== (debt.institution ?? "")) patch.institution = institution;
@@ -366,6 +397,26 @@ function EditSheet({ debt, onClose }: { debt: DebtInfo; onClose: () => void }) {
         </Field>
         <Field label="Opened">
           <Input type="date" value={opened} onChange={(e) => setOpened(e.target.value)} />
+        </Field>
+        <Field
+          label="Last four"
+          className="col-span-2"
+          error={numberError}
+          hint={
+            renumbered && keepsOldNumber(debt.accountNumber)
+              ? `Statements that still say ··${debt.accountNumber} will keep importing into this account.`
+              : NUMBER_HINT
+          }
+        >
+          <Input
+            value={number}
+            maxLength={8}
+            invalid={!!numberError}
+            onChange={(e) => {
+              setNumber(e.target.value);
+              setNumberError(null);
+            }}
+          />
         </Field>
         <button type="submit" hidden />
       </form>

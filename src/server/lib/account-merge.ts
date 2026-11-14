@@ -272,3 +272,45 @@ export async function mergeAccounts(fromId: number, intoId: number): Promise<Mer
 export async function dropAlias(accountNumber: string): Promise<void> {
   await db.delete(accountAliases).where(eq(accountAliases.accountNumber, accountNumber));
 }
+
+export type RenumberResult = { ok: true; keptOld: boolean } | { ok: false; error: string };
+
+/**
+ * Give an account a new number. The old one stays on as a former number when it is a real one
+ * (digits), so statements printed with it still import here and are still recognized as
+ * already imported; a made-up key like "carloan" is simply replaced.
+ */
+export async function renumberAccount(id: number, rawNumber: string): Promise<RenumberResult> {
+  const next = rawNumber.trim();
+  if (!next) return { ok: false, error: "Enter a number." };
+  if (next.length > 8 || /\s/.test(next)) return { ok: false, error: "Use up to 8 characters, no spaces. The last four digits is the usual choice." };
+  try {
+    return await db.transaction(async (tx): Promise<RenumberResult> => {
+      const [acct] = await tx.select().from(accounts).where(eq(accounts.id, id));
+      if (!acct) return { ok: false, error: "That account no longer exists." };
+      if (acct.accountNumber === next) return { ok: true, keptOld: false };
+
+      const [taken] = await tx.select().from(accounts).where(eq(accounts.accountNumber, next));
+      if (taken) return { ok: false, error: `${nameOf(taken)} already uses ··${next}. If they are the same account, merge them instead.` };
+      const [alias] = await tx.select().from(accountAliases).where(eq(accountAliases.accountNumber, next));
+      if (alias && alias.accountId !== id) {
+        const [owner] = await tx.select().from(accounts).where(eq(accounts.id, alias.accountId));
+        return { ok: false, error: `··${next} is a former number of ${owner ? nameOf(owner) : "another account"}.` };
+      }
+      // Going back to one of its own former numbers: that number is current again.
+      if (alias) await tx.delete(accountAliases).where(eq(accountAliases.id, alias.id));
+
+      await tx.update(accounts).set({ accountNumber: next }).where(eq(accounts.id, id));
+      const keptOld = /^\d+$/.test(acct.accountNumber);
+      if (keptOld) {
+        await tx
+          .insert(accountAliases)
+          .values({ accountId: id, accountNumber: acct.accountNumber })
+          .onDuplicateKeyUpdate({ set: { accountId: id } });
+      }
+      return { ok: true, keptOld };
+    });
+  } catch (e) {
+    return { ok: false, error: `Nothing was changed: ${e instanceof Error ? e.message : String(e)}` };
+  }
+}

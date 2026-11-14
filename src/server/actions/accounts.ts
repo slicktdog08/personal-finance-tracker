@@ -5,7 +5,7 @@ import { accounts, accountBalances, bills } from "@/server/db/schema";
 import { eq, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { requireSession } from "@/server/auth/session";
-import { dropAlias, mergeAccounts, planAccountMerge, type MergeResult } from "@/server/lib/account-merge";
+import { dropAlias, mergeAccounts, planAccountMerge, renumberAccount, type MergeResult, type RenumberResult } from "@/server/lib/account-merge";
 
 // A liability account (Credit/Loan) surfaces on /accounts, /debts, and /dashboard — all three
 // are lenses over the same account_balances ledger, so every write refreshes all of them.
@@ -57,6 +57,18 @@ export async function createAccount(
   // Adding it by hand says this number is its own account, whatever it was merged into before.
   await dropAlias(accountNumber.trim());
   revalidateLedger();
+}
+
+/**
+ * Change the number an account is recognized by (a reissued card, a typo, or giving a debt that
+ * was added by name its real last four). A real old number is kept as a former number.
+ */
+export async function changeAccountNumber(id: number, accountNumber: string): Promise<RenumberResult> {
+  await requireSession();
+  const res = await renumberAccount(id, accountNumber);
+  // The number shows wherever an account is named (transactions, import, budget…).
+  if (res.ok) revalidatePath("/", "layout");
+  return res;
 }
 
 /** What merging `fromId` into `intoId` would move, drop and warn about. Changes nothing. */

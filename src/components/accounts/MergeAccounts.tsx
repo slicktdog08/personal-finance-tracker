@@ -12,6 +12,9 @@ export interface MergeChoice {
   accountType: string | null;
 }
 
+// "Card A ··1234" — or just "··1234" for an account with no name of its own.
+const withNumber = (name: string, accountNumber: string) => (name.startsWith("··") ? name : `${name} ··${accountNumber.slice(-4)}`);
+
 const plural = (n: number, one: string, many = `${one}s`) => `${n.toLocaleString()} ${n === 1 ? one : many}`;
 
 // What moves, as short phrases — only the kinds the account going away actually has.
@@ -78,7 +81,7 @@ export function MergeAccounts({ accounts }: { accounts: MergeChoice[] }) {
 
   const option = (a: MergeChoice) => ({
     value: String(a.id),
-    label: `${a.name} ··${a.accountNumber.slice(-4)}${a.accountType ? ` (${a.accountType})` : ""}`,
+    label: `${withNumber(a.name, a.accountNumber)}${a.accountType ? ` (${a.accountType})` : ""}`,
   });
   const items = plan ? moved(plan) : [];
   const ready = plan != null && !plan.blocked && !loading;
@@ -135,7 +138,7 @@ export function MergeAccounts({ accounts }: { accounts: MergeChoice[] }) {
             <>
               <div className="rounded-panel bg-sunken p-3 text-sm">
                 <div className="font-medium">
-                  {plan.from.name} ··{plan.from.accountNumber.slice(-4)} → {plan.into.name} ··{plan.into.accountNumber.slice(-4)}
+                  {withNumber(plan.from.name, plan.from.accountNumber)} → {withNumber(plan.into.name, plan.into.accountNumber)}
                 </div>
                 <ul className="mt-2 list-disc space-y-1 pl-5 text-fg-2">
                   <li>{items.length ? `Moves ${items.join(", ")}.` : "It has no history to move."}</li>
@@ -143,7 +146,7 @@ export function MergeAccounts({ accounts }: { accounts: MergeChoice[] }) {
                     Statements that still say ··{plan.from.accountNumber.slice(-4)} will import into {plan.into.name}.
                   </li>
                   <li>
-                    {plan.from.name} ··{plan.from.accountNumber.slice(-4)} is removed from your accounts.
+                    {withNumber(plan.from.name, plan.from.accountNumber)} is removed from your accounts.
                   </li>
                 </ul>
               </div>

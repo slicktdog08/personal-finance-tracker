@@ -3,14 +3,14 @@
 import { useState, useTransition } from "react";
 import Link from "next/link";
 import { sourceLabel } from "@/constants/sync";
-import { relativeTime } from "@/lib/sync-format";
 import { formatMoney, toNum } from "@/server/lib/money";
 import { formatDate } from "@/server/lib/period";
 import { monthlyInterest, payoffProgress } from "@/server/lib/debt";
 import { ACCOUNT_TYPES, BALANCE_SOURCES, CASH_ACCOUNT_TYPES, CREDIT_ACCOUNT_TYPES, LIABILITY_ACCOUNT_TYPES, RETIREMENT_ACCOUNT_TYPES } from "@/constants/enums";
 import { updateAccount, addAccountBalance, deleteAccountBalance } from "@/server/actions/accounts";
 import { Field, Glyph, Icon, IconButton, Input, Money, ProgressBar, Select, Button, cx } from "@/components/ds";
-import { accountGlyph, accountMaskLine } from "./account-glyph";
+import { accountGlyph, accountMaskLine, accountName, formerNumbersText, syncStatusText } from "./account-glyph";
+import { ChangeNumberSheet } from "./ChangeNumberSheet";
 
 export interface BalanceRow {
   id: number;
@@ -146,14 +146,10 @@ export function AccountCard({
   const progress = !isCredit ? payoffProgress(original, curBalance) : null;
 
   const glyph = accountGlyph(type);
-  const name = account.label || account.institution || `••${account.accountNumber}`;
-  const syncText = sync
-    ? sync.enrollmentStatus === "disconnected"
-      ? "sync disconnected"
-      : !sync.enabled
-        ? "sync off"
-        : `synced ${relativeTime(sync.lastSyncedAt)}`
-    : null;
+  const name = accountName(account);
+  const syncText = syncStatusText(sync);
+  const former = formerNumbersText(formerNumbers);
+  const [renumbering, setRenumbering] = useState(false);
   const endSub = isLiability
     ? isCredit && curLimit != null
       ? `of ${formatMoney(curLimit)} limit`
@@ -200,6 +196,7 @@ export function AccountCard({
         <Icon name="chevron-down" size={16} className={cx("shrink-0 text-fg-3 transition-transform", open && "rotate-180")} />
       </button>
 
+      {renumbering && <ChangeNumberSheet account={{ id: account.id, accountNumber: account.accountNumber, name }} onClose={() => setRenumbering(false)} />}
       {open && (
         <div id={id} className="mb-3 space-y-4 rounded-panel bg-sunken p-3.5">
           {/* Identity: last four is the key, the rest edits in place (saves on blur / change). */}
@@ -234,12 +231,16 @@ export function AccountCard({
           </div>
 
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-fg-3">
-            <span className="font-mono">••{account.accountNumber}</span>
-            {formerNumbers.length > 0 && (
-              <span title="Statements with these numbers import into this account">
-                formerly <span className="font-mono">{formerNumbers.map((n) => `••${n}`).join(", ")}</span>
-              </span>
-            )}
+            <button
+              type="button"
+              onClick={() => setRenumbering(true)}
+              className="inline-flex items-center gap-1 font-mono hover:text-accent-text hover:underline"
+              title="Change the account number"
+            >
+              ··{account.accountNumber}
+              <Icon name="pencil" size={12} />
+            </button>
+            {former && <span title="Statements with these numbers import into this account">{former}</span>}
             <span>·</span>
             <span>
               {txnCount} txns · {lastTxn ? `last ${formatDate(lastTxn)}` : "no transactions"}

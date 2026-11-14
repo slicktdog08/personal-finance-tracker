@@ -9,7 +9,7 @@ import { hashRows } from "@/server/lib/dedup";
 import { findPendingMatches, findSyncedDuplicates } from "@/server/lib/sync/import-guard";
 import { categorize, type CategoryRule } from "@/server/lib/categorize";
 import { loadRules } from "@/server/lib/rules";
-import { accountIdsByNumber, ensureAccounts } from "@/server/lib/account-aliases";
+import { alternateHashes, ensureAccounts, loadAccountLookup } from "@/server/lib/account-aliases";
 import { commitImport } from "@/server/actions/import";
 import { extractPdf } from "@/server/lib/pdf/extract";
 import { detectAndParse } from "@/server/lib/pdf/registry";
@@ -42,24 +42,28 @@ async function analyzeRows(
   finalizeCount: number;
   errorCount: number;
 }> {
-  const accountId = (await accountIdsByNumber()).get(accountNumber) ?? null;
+  const lookup = await loadAccountLookup();
+  const accountId = lookup.idByNumber.get(accountNumber) ?? null;
   const valid = txns.filter((t) => t.dateIso && t.amount != null);
-  const hashes = hashRows(
-    valid.map((t) => ({
-      accountNumber,
-      date: t.dateIso!,
-      amount: t.amount!,
-      description: t.description,
-      direction: t.direction,
-    })),
-  );
-  const existing = hashes.length
+  const parts = valid.map((t) => ({
+    accountNumber,
+    date: t.dateIso!,
+    amount: t.amount!,
+    description: t.description,
+    direction: t.direction,
+  }));
+  const hashes = hashRows(parts);
+  // The same rows may already be stored under a number this account used to have.
+  const alts = alternateHashes(parts, lookup, hashRows);
+  const lookFor = [...hashes, ...alts.flat()];
+  const existing = lookFor.length
     ? await db
         .select({ h: transactions.dedupHash })
         .from(transactions)
-        .where(inArray(transactions.dedupHash, hashes))
+        .where(inArray(transactions.dedupHash, lookFor))
     : [];
-  const existingSet = new Set(existing.map((e) => e.h));
+  const stored = new Set(existing.map((e) => e.h));
+  const existingSet = new Set(hashes.filter((h, k) => stored.has(h) || alts.some((a) => stored.has(a[k]))));
   // Same ordering as the CSV analyzer: hash duplicates → synced twins → pending placeholders,
   // each skipping rows the earlier checks already claimed.
   const candidates = valid.map((t) => ({ accountNumber, date: t.dateIso!, amount: t.amount!, direction: t.direction }));

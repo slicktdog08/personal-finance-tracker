@@ -7,9 +7,8 @@ import { AddAsset } from "@/components/accounts/AddAsset";
 import { MergeAccounts } from "@/components/accounts/MergeAccounts";
 import { AssetCard } from "@/components/accounts/AssetCard";
 import { SyncNowButton } from "@/components/accounts/SyncNowButton";
-import { accountGlyph, accountMaskLine } from "@/components/accounts/account-glyph";
+import { accountGlyph, accountMaskLine, accountName, formerNumbersText, syncStatusText } from "@/components/accounts/account-glyph";
 import { CASH_ACCOUNT_TYPES, LIABILITY_ACCOUNT_TYPES, RETIREMENT_ACCOUNT_TYPES } from "@/constants/enums";
-import { relativeTime } from "@/lib/sync-format";
 import { formatMoney, toNum } from "@/server/lib/money";
 import { todayIso } from "@/server/lib/pay-schedule";
 import { getAccountAliases } from "@/server/lib/account-aliases";
@@ -163,15 +162,15 @@ export default async function AccountsPage() {
     const s = syncFor(a.id);
     const g = accountGlyph(a.accountType);
     return (
-      <Link key={a.id} href="/debts" className="mp-listrow mp-listrow--button">
+      <Link key={a.id} href={`/debts#debt-${a.id}`} className="mp-listrow mp-listrow--button">
         <Glyph icon={g.icon} color={g.color} />
         <span className="mp-listrow__main">
-          <span className="mp-listrow__title">{a.label || a.institution || `••${a.accountNumber}`}</span>
+          <span className="mp-listrow__title">{accountName(a)}</span>
           <span className="mp-listrow__sub truncate">
             {accountMaskLine(a)}
-            {s && s.enabled && s.enrollmentStatus === "active" && ` · synced ${relativeTime(s.lastSyncedAt)}`}
+            {syncStatusText(s) && ` · ${syncStatusText(s)}`}
             {!a.active && " · inactive"}
-            {aliases.get(a.id)?.length ? ` · formerly ${aliases.get(a.id)!.map((n) => `··${n.slice(-4)}`).join(", ")}` : ""}
+            {formerNumbersText(aliases.get(a.id)) && ` · ${formerNumbersText(aliases.get(a.id))}`}
           </span>
         </span>
         <span className="mp-listrow__end">
@@ -204,7 +203,7 @@ export default async function AccountsPage() {
             <MergeAccounts
               accounts={accounts.map((a) => ({
                 id: a.id,
-                name: a.label || a.institution || "Account",
+                name: accountName(a),
                 accountNumber: a.accountNumber,
                 accountType: a.accountType,
               }))}

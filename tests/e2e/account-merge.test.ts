@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { eq } from "drizzle-orm";
 import { db } from "@/server/db";
 import { accountAliases, accountBalances, accounts, categoryMappings, transactions } from "@/server/db/schema";
-import { createAccount, mergeAccount, previewAccountMerge } from "@/server/actions/accounts";
+import { changeAccountNumber, createAccount, createLiabilityAccount, mergeAccount, previewAccountMerge } from "@/server/actions/accounts";
 import { createTransaction } from "@/server/actions/transactions";
 import { analyzeStatement, commitPdfStatements } from "@/server/actions/pdf-import";
 import { closePool, daysAgo, setupFixtures, teardownFixtures, type Fixtures } from "./helpers";
@@ -125,5 +125,50 @@ describe("importing after the merge", () => {
     await createAccount(OLD, "[e2e] Reborn", "Credit");
     assert.ok(await accountByNumber(OLD));
     assert.equal((await db.select().from(accountAliases).where(eq(accountAliases.accountNumber, OLD))).length, 0);
+  });
+});
+
+describe("changing an account's number", () => {
+  const STATEMENT = [{ dateIso: daysAgo(20), description: "PHARMACY ANYTOWN", amount: 12.34, direction: "Debit" as const, raw: {} }];
+  const aliasesOf = async (id: number) => (await db.select().from(accountAliases).where(eq(accountAliases.accountId, id))).map((a) => a.accountNumber).sort();
+
+  test("the old number stays on as a former number, and its statements are still recognized", async () => {
+    await importAs("1111", STATEMENT, "chk.pdf");
+    const before = (await txnsOn(f.checkingId)).length;
+    assert.deepEqual(await changeAccountNumber(f.checkingId, " 7777 "), { ok: true, keptOld: true });
+    assert.equal((await accountByNumber("7777")).id, f.checkingId);
+    assert.deepEqual(await aliasesOf(f.checkingId), ["1111"]);
+    // The statement again, printed with the old number and then picked under the new one.
+    for (const n of ["1111", "7777"]) {
+      const { preview, res } = await importAs(n, STATEMENT, `chk-${n}.pdf`);
+      assert.equal(preview.rows[0].status, "duplicate", `under ${n}`);
+      assert.equal(res.inserted, 0);
+    }
+    assert.equal((await txnsOn(f.checkingId)).length, before);
+    assert.equal(await accountByNumber("1111"), undefined);
+  });
+
+  test("a number another account uses, or used to use, is refused", async () => {
+    const taken = await changeAccountNumber(f.checkingId, "2222");
+    assert.ok(!taken.ok && /merge them/.test(taken.error));
+    await changeAccountNumber(f.creditId, "8888"); // 2222 is now a former number of the card
+    const former = await changeAccountNumber(f.checkingId, "2222");
+    assert.ok(!former.ok && /former number/.test(former.error));
+    assert.equal((await changeAccountNumber(f.checkingId, "")).ok, false);
+    assert.equal((await changeAccountNumber(f.checkingId, "123456789")).ok, false);
+    assert.equal((await accountByNumber("7777")).id, f.checkingId);
+  });
+
+  test("going back to its own former number makes that one current again", async () => {
+    assert.deepEqual(await changeAccountNumber(f.checkingId, "1111"), { ok: true, keptOld: true });
+    assert.deepEqual(await aliasesOf(f.checkingId), ["7777"]);
+  });
+
+  test("a debt added by name gets its real last four, and the made-up key is not kept", async () => {
+    assert.ok((await createLiabilityAccount("[e2e] Store card", "Credit")).ok);
+    const [made] = await db.select().from(accounts).where(eq(accounts.label, "[e2e] Store card"));
+    assert.ok(!/^\d+$/.test(made.accountNumber));
+    assert.deepEqual(await changeAccountNumber(made.id, "4242"), { ok: true, keptOld: false });
+    assert.deepEqual(await aliasesOf(made.id), []);
   });
 });

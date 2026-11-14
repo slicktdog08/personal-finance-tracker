@@ -15,7 +15,7 @@ import { ensurePeriod } from "@/server/periods";
 import { dateToYearMonth } from "@/server/lib/period";
 import { categorize } from "@/server/lib/categorize";
 import { applyRules, loadRules } from "@/server/lib/rules";
-import { accountIdsByNumber, ensureAccounts } from "@/server/lib/account-aliases";
+import { alternateHashes, ensureAccounts, loadAccountLookup } from "@/server/lib/account-aliases";
 import { TXN_CATEGORIES } from "@/constants/enums";
 import { parseRows, guessMapping, extract, buildBalanceSnapshots, last4 } from "@/server/lib/import-map";
 import type {
@@ -66,28 +66,31 @@ export async function analyzeWithMapping(
   mapped.forEach((mm, i) => {
     if (mm.dateIso && mm.amount != null) validIdx.push(i);
   });
-  const hashes = hashRows(
-    validIdx.map((i) => ({
-      accountNumber: mapped[i].accountNumber,
-      date: mapped[i].dateIso!,
-      amount: mapped[i].amount!,
-      description: mapped[i].description,
-      direction: mapped[i].direction,
-    })),
-  );
+  const parts = validIdx.map((i) => ({
+    accountNumber: mapped[i].accountNumber,
+    date: mapped[i].dateIso!,
+    amount: mapped[i].amount!,
+    description: mapped[i].description,
+    direction: mapped[i].direction,
+  }));
+  const hashes = hashRows(parts);
   const hashByIdx = new Map<number, string>();
   validIdx.forEach((i, k) => hashByIdx.set(i, hashes[k]));
 
-  const [rules, acctIds] = await Promise.all([loadRules(), accountIdsByNumber()]);
+  const [rules, lookup] = await Promise.all([loadRules(), loadAccountLookup()]);
+  const acctIds = lookup.idByNumber;
 
-  const allHashes = [...hashByIdx.values()];
-  const existing = allHashes.length
+  // The same rows may already be stored under a number their account used to have.
+  const alts = alternateHashes(parts, lookup, hashRows);
+  const lookFor = [...hashes, ...alts.flat()];
+  const existing = lookFor.length
     ? await db
         .select({ h: transactions.dedupHash })
         .from(transactions)
-        .where(inArray(transactions.dedupHash, allHashes))
+        .where(inArray(transactions.dedupHash, lookFor))
     : [];
-  const existingSet = new Set(existing.map((e) => e.h));
+  const stored = new Set(existing.map((e) => e.h));
+  const existingSet = new Set(hashes.filter((h, k) => stored.has(h) || alts.some((a) => stored.has(a[k]))));
   // Money-based checks run in order and each skips rows the earlier ones already claimed,
   // so a row that is a plain duplicate can't consume the match a later genuine row needs:
   //  1. content hash (above) → 2. synced twin (bank sync, different hash) → 3. pending

@@ -3,6 +3,7 @@ import { SetupNotice } from "@/components/SetupNotice";
 import { DebtCard, type DebtRank } from "@/components/debts/DebtCard";
 import { AddDebt } from "@/components/debts/AddDebt";
 import { DebtStrategySwitch } from "@/components/debts/DebtStrategySwitch";
+import { ScrollToDebt } from "@/components/debts/ScrollToDebt";
 import {
   getLiabilityAccounts,
   getLiabilityLedger,
@@ -10,9 +11,13 @@ import {
   getBillNames,
   getAccountUsageCounts,
   getAccountLastTxnDates,
+  getAccountSyncInfo,
   getPeriods,
   getBudgetView,
 } from "@/server/queries";
+import { getAccountAliases } from "@/server/lib/account-aliases";
+import { MergeAccounts } from "@/components/accounts/MergeAccounts";
+import { accountName } from "@/components/accounts/account-glyph";
 import { toNum } from "@/server/lib/money";
 import { monthlyInterest } from "@/server/lib/debt";
 import { isSnowballDebt, orderDebts, projectPayoff, type DebtInput } from "@/server/lib/budget";
@@ -28,9 +33,9 @@ const one = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v);
 const isStrategy = (v: unknown): v is DebtStrategy => DEBT_STRATEGIES.includes(v as DebtStrategy);
 
 export default async function DebtsPage({ searchParams }: { searchParams: Promise<SP> }) {
-  let debts, ledger, payments, billNames, usage, lastTxn, periods;
+  let debts, ledger, payments, billNames, usage, lastTxn, periods, syncInfo, aliases;
   try {
-    [debts, ledger, payments, billNames, usage, lastTxn, periods] = await Promise.all([
+    [debts, ledger, payments, billNames, usage, lastTxn, periods, syncInfo, aliases] = await Promise.all([
       getLiabilityAccounts(),
       getLiabilityLedger(),
       getLiabilityPaymentTotals(),
@@ -38,6 +43,8 @@ export default async function DebtsPage({ searchParams }: { searchParams: Promis
       getAccountUsageCounts(),
       getAccountLastTxnDates(),
       getPeriods(),
+      getAccountSyncInfo(),
+      getAccountAliases(),
     ]);
   } catch (e) {
     return <SetupNotice error={e} />;
@@ -111,7 +118,7 @@ export default async function DebtsPage({ searchParams }: { searchParams: Promis
   // high-interest debts, else their minimums — so the dates here match the Budget page's.
   const inputs: DebtInput[] = debts
     .filter((d) => toNum(d.balance) != null)
-    .map((d) => ({ accountId: d.id, label: d.label ?? `••${d.accountNumber}`, balance: toNum(d.balance)!, apr: toNum(d.apr), minPayment: toNum(d.minPayment) }));
+    .map((d) => ({ accountId: d.id, label: accountName(d), balance: toNum(d.balance)!, apr: toNum(d.apr), minPayment: toNum(d.minPayment) }));
   const budgetDebtPay = budget
     ? budget.lines
         .filter((l) => l.kind === "debt" && l.accountId != null)
@@ -139,25 +146,34 @@ export default async function DebtsPage({ searchParams }: { searchParams: Promis
       paidOffOn: step && Number.isFinite(step.monthsToPayoff) ? step.paidOffOn : null,
     };
   };
+  const syncFor = (id: number) => {
+    const s = syncInfo.get(id);
+    return s ? { provider: s.provider, enabled: s.enabled, lastSyncedAt: s.lastSyncedAt?.toISOString() ?? null, enrollmentStatus: s.enrollmentStatus } : null;
+  };
   const position = new Map(ordered.map((d, i) => [d.accountId, i]));
   const sorted = [...debts].sort((a, b) => (position.get(a.id) ?? Infinity) - (position.get(b.id) ?? Infinity));
 
   return (
     <div className="space-y-6">
+      <ScrollToDebt />
       <PageHeader
         title="Debts"
         description={
           <>
-            Cards and loans in payoff order. Same ledger as{" "}
+            Cards and loans in payoff order. They are the same accounts listed on{" "}
             <Link href="/accounts" className="text-accent-text hover:underline">
               Accounts
-            </Link>{" "}
-            — record a balance here or there.
+            </Link>
+            , and this is where you edit them.
           </>
         }
         actions={
           <>
             <DebtStrategySwitch value={strategy} />
+            {/* A reissued card is the usual reason to merge, and cards are edited here. */}
+            <MergeAccounts
+              accounts={debts.map((d) => ({ id: d.id, name: accountName(d), accountNumber: d.accountNumber, accountType: d.accountType }))}
+            />
             <AddDebt existingBills={promotableBills} />
           </>
         }
@@ -231,15 +247,19 @@ export default async function DebtsPage({ searchParams }: { searchParams: Promis
 
       <div className="space-y-4">
         {sorted.map((d) => (
-          <DebtCard
-            key={d.id}
-            debt={d}
-            ledger={byAccount.get(d.id) ?? []}
-            payments={payments.get(d.id) ?? null}
-            txnCount={usageMap.get(d.id) ?? 0}
-            lastTxn={lastTxn.get(d.id) ?? null}
-            order={rankOf(d.id)}
-          />
+          // The anchor Accounts links to (/debts#debt-12): a card or loan row there opens here.
+          <div key={d.id} id={`debt-${d.id}`} className="scroll-mt-20">
+            <DebtCard
+              debt={d}
+              ledger={byAccount.get(d.id) ?? []}
+              payments={payments.get(d.id) ?? null}
+              txnCount={usageMap.get(d.id) ?? 0}
+              lastTxn={lastTxn.get(d.id) ?? null}
+              order={rankOf(d.id)}
+              sync={syncFor(d.id)}
+              formerNumbers={aliases.get(d.id)}
+            />
+          </div>
         ))}
         {debts.length === 0 && (
           <EmptyState
