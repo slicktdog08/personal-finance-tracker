@@ -61,6 +61,7 @@ export function AccountCard({
   sync = null,
   holdings = [],
   trades = [],
+  formerNumbers = [],
 }: {
   account: AccountInfo;
   balances: BalanceRow[];
@@ -70,6 +71,8 @@ export function AccountCard({
   holdings?: HoldingRow[];
   /** Investment accounts: every recorded trade, newest first. */
   trades?: TradeRow[];
+  /** Numbers of accounts merged into this one; statements carrying them still import here. */
+  formerNumbers?: string[];
   /** Present when a bank-sync account feeds this one (settings → Bank Sync). */
   sync?: { provider: string; enabled: boolean; lastSyncedAt: string | null; enrollmentStatus: string } | null;
 }) {
@@ -232,6 +235,11 @@ export function AccountCard({
 
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-fg-3">
             <span className="font-mono">••{account.accountNumber}</span>
+            {formerNumbers.length > 0 && (
+              <span title="Statements with these numbers import into this account">
+                formerly <span className="font-mono">{formerNumbers.map((n) => `••${n}`).join(", ")}</span>
+              </span>
+            )}
             <span>·</span>
             <span>
               {txnCount} txns · {lastTxn ? `last ${formatDate(lastTxn)}` : "no transactions"}

@@ -3,6 +3,7 @@
 import { db } from "@/server/db";
 import { transactions, accounts, accountBalances, periods, bills, billInstances, syncIgnored } from "@/server/db/schema";
 import { and, eq, sql, desc, like, inArray, lte } from "drizzle-orm";
+import { ensureAccounts } from "@/server/lib/account-aliases";
 import { revalidatePath } from "next/cache";
 import { dedupHash, type DedupParts } from "@/server/lib/dedup";
 import { normalizeMerchant } from "@/server/lib/merchant";
@@ -534,20 +535,11 @@ async function ensurePeriodForIsoDate(iso: string): Promise<number | null> {
 }
 
 // Get-or-create the account by its last-4 so a transaction can name an account
-// that isn't registered yet. Blank number → no account.
+// that isn't registered yet (a merged account's former number resolves to it). Blank → none.
 async function resolveAccountId(accountNumber: string | null | undefined): Promise<number | null> {
   const num = (accountNumber ?? "").trim();
   if (!num) return null;
-  await db
-    .insert(accounts)
-    .values({ accountNumber: num })
-    .onDuplicateKeyUpdate({ set: { id: sql`id` } });
-  const a = await db
-    .select({ id: accounts.id })
-    .from(accounts)
-    .where(eq(accounts.accountNumber, num))
-    .limit(1);
-  return a[0]?.id ?? null;
+  return (await ensureAccounts([num])).get(num) ?? null;
 }
 
 /**

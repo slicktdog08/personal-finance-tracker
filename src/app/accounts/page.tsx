@@ -4,6 +4,7 @@ import { SetupNotice } from "@/components/SetupNotice";
 import { AccountCard } from "@/components/accounts/AccountCard";
 import { AddAccount } from "@/components/accounts/AddAccount";
 import { AddAsset } from "@/components/accounts/AddAsset";
+import { MergeAccounts } from "@/components/accounts/MergeAccounts";
 import { AssetCard } from "@/components/accounts/AssetCard";
 import { SyncNowButton } from "@/components/accounts/SyncNowButton";
 import { accountGlyph, accountMaskLine } from "@/components/accounts/account-glyph";
@@ -11,6 +12,7 @@ import { CASH_ACCOUNT_TYPES, LIABILITY_ACCOUNT_TYPES, RETIREMENT_ACCOUNT_TYPES }
 import { relativeTime } from "@/lib/sync-format";
 import { formatMoney, toNum } from "@/server/lib/money";
 import { todayIso } from "@/server/lib/pay-schedule";
+import { getAccountAliases } from "@/server/lib/account-aliases";
 import {
   getAccounts,
   getAccountBalances,
@@ -22,9 +24,9 @@ export const dynamic = "force-dynamic";
 const wholeUsd = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
 
 export default async function AccountsPage() {
-  let assets, accounts, balances, usage, lastTxn, syncInfo, holdings, trades;
+  let assets, accounts, balances, usage, lastTxn, syncInfo, holdings, trades, aliases;
   try {
-    [assets, accounts, balances, usage, lastTxn, syncInfo, holdings, trades] = await Promise.all([
+    [assets, accounts, balances, usage, lastTxn, syncInfo, holdings, trades, aliases] = await Promise.all([
       getAssets(),
       getAccounts(),
       getAccountBalances(),
@@ -33,6 +35,7 @@ export default async function AccountsPage() {
       getAccountSyncInfo(),
       getInvestmentHoldings(),
       getInvestmentTrades(),
+      getAccountAliases(),
     ]);
   } catch (e) {
     return <SetupNotice error={e} />;
@@ -145,6 +148,7 @@ export default async function AccountsPage() {
       sync={syncFor(a.id)}
       holdings={holdings.filter((h) => h.accountId === a.id)}
       trades={trades.filter((t) => t.accountId === a.id)}
+      formerNumbers={aliases.get(a.id)}
     />
   );
 
@@ -167,6 +171,7 @@ export default async function AccountsPage() {
             {accountMaskLine(a)}
             {s && s.enabled && s.enrollmentStatus === "active" && ` · synced ${relativeTime(s.lastSyncedAt)}`}
             {!a.active && " · inactive"}
+            {aliases.get(a.id)?.length ? ` · formerly ${aliases.get(a.id)!.map((n) => `··${n.slice(-4)}`).join(", ")}` : ""}
           </span>
         </span>
         <span className="mp-listrow__end">
@@ -196,6 +201,14 @@ export default async function AccountsPage() {
         actions={
           <>
             {canSync && <SyncNowButton />}
+            <MergeAccounts
+              accounts={accounts.map((a) => ({
+                id: a.id,
+                name: a.label || a.institution || "Account",
+                accountNumber: a.accountNumber,
+                accountType: a.accountType,
+              }))}
+            />
             <AddAsset />
             <AddAccount />
           </>

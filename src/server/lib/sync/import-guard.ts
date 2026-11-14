@@ -1,6 +1,7 @@
 import { and, eq, gte, inArray, lte, ne } from "drizzle-orm";
 import { db } from "@/server/db";
-import { accounts, transactions } from "@/server/db/schema";
+import { transactions } from "@/server/db/schema";
+import { accountIdsByNumber } from "@/server/lib/account-aliases";
 import { addDaysIso, pendingDateFits } from "./reconcile";
 import { LOCAL_SOURCES } from "@/constants/sync";
 
@@ -30,12 +31,9 @@ export async function findSyncedDuplicates(rows: ImportCandidate[], skip: Readon
   const out = new Map<number, number>();
   const numbers = [...new Set(rows.map((r) => (r.accountNumber ?? "").trim()).filter(Boolean))];
   if (!numbers.length || !rows.length) return out;
-  const acctRows = await db
-    .select({ id: accounts.id, n: accounts.accountNumber })
-    .from(accounts)
-    .where(inArray(accounts.accountNumber, numbers));
-  if (!acctRows.length) return out;
-  const idByNumber = new Map(acctRows.map((a) => [a.n, a.id]));
+  // Through the aliases: a statement printed with a card's former number still belongs to it.
+  const idByNumber = await accountIdsByNumber();
+  if (!numbers.some((n) => idByNumber.has(n))) return out;
   const dates = rows.map((r) => r.date).sort();
   const synced = await db
     .select({
@@ -50,7 +48,7 @@ export async function findSyncedDuplicates(rows: ImportCandidate[], skip: Readon
       and(
         inArray(
           transactions.accountId,
-          acctRows.map((a) => a.id),
+          [...new Set(numbers.map((n) => idByNumber.get(n)).filter((id): id is number => id != null))],
         ),
         // Only bank-synced rows: everything else already collides on the content hash.
         ne(transactions.source, "import"),
@@ -97,12 +95,9 @@ export async function findPendingMatches(rows: ImportCandidate[], skip: Readonly
   const out = new Map<number, PendingMatch>();
   const numbers = [...new Set(rows.map((r) => (r.accountNumber ?? "").trim()).filter(Boolean))];
   if (!numbers.length || !rows.length) return out;
-  const acctRows = await db
-    .select({ id: accounts.id, n: accounts.accountNumber })
-    .from(accounts)
-    .where(inArray(accounts.accountNumber, numbers));
-  if (!acctRows.length) return out;
-  const idByNumber = new Map(acctRows.map((a) => [a.n, a.id]));
+  // Through the aliases: a statement printed with a card's former number still belongs to it.
+  const idByNumber = await accountIdsByNumber();
+  if (!numbers.some((n) => idByNumber.has(n))) return out;
   const pending = await db
     .select({
       id: transactions.id,
@@ -118,7 +113,7 @@ export async function findPendingMatches(rows: ImportCandidate[], skip: Readonly
       and(
         inArray(
           transactions.accountId,
-          acctRows.map((a) => a.id),
+          [...new Set(numbers.map((n) => idByNumber.get(n)).filter((id): id is number => id != null))],
         ),
         eq(transactions.pending, true),
         inArray(transactions.source, [...LOCAL_SOURCES]),

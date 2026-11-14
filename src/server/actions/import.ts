@@ -3,7 +3,6 @@
 import { db } from "@/server/db";
 import {
   transactions,
-  accounts,
   accountBalances,
   importBatches,
   periods,
@@ -15,7 +14,8 @@ import { findPendingMatches, findSyncedDuplicates } from "@/server/lib/sync/impo
 import { ensurePeriod } from "@/server/periods";
 import { dateToYearMonth } from "@/server/lib/period";
 import { categorize } from "@/server/lib/categorize";
-import { accountIdsByNumber, applyRules, loadRules } from "@/server/lib/rules";
+import { applyRules, loadRules } from "@/server/lib/rules";
+import { accountIdsByNumber, ensureAccounts } from "@/server/lib/account-aliases";
 import { TXN_CATEGORIES } from "@/constants/enums";
 import { parseRows, guessMapping, extract, buildBalanceSnapshots, last4 } from "@/server/lib/import-map";
 import type {
@@ -197,14 +197,8 @@ export async function commitImport(
   const acctNums = [
     ...new Set([...toInsert, ...toFinalize, ...balances].map((r) => r.accountNumber).filter(Boolean)),
   ];
-  if (acctNums.length) {
-    await db
-      .insert(accounts)
-      .values(acctNums.map((n) => ({ accountNumber: n })))
-      .onDuplicateKeyUpdate({ set: { id: sql`id` } });
-  }
-  const acctRows = await db.select().from(accounts);
-  const acctMap = new Map(acctRows.map((a) => [a.accountNumber, a.id]));
+  // A former number of a merged account resolves to that account rather than making a new one.
+  const acctMap = await ensureAccounts(acctNums);
 
   // Record dated balance snapshots into the account_balances ledger. Idempotent per
   // (account, as-of date) — re-importing the same file won't pile up duplicate rows.

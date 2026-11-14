@@ -12,6 +12,7 @@ import {
 } from "@/server/db/schema";
 import { and, eq, gte, lte, inArray, isNull, isNotNull, or, sql, type SQL } from "drizzle-orm";
 import { normalizeMerchant } from "@/server/lib/merchant";
+import { loadAccountLookup } from "@/server/lib/account-aliases";
 import {
   pairPending,
   enteredWindow,
@@ -93,7 +94,12 @@ export async function attachPendingMatches(rows: PreviewRow[]): Promise<void> {
   if (!fresh.length) return;
   const win = enteredWindow(fresh.map(({ r }) => r.txnDate));
   if (!win) return;
-  const acctNums = [...new Set(fresh.map(({ r }) => r.accountNumber))];
+  // A row may carry a merged account's former number; the hand-entered side is read with the
+  // account's current one, so both are compared under that.
+  const { idByNumber, numberById } = await loadAccountLookup();
+  const currentNumber = (n: string) => numberById.get(idByNumber.get(n) ?? -1) ?? n;
+  const acctIds = [...new Set(fresh.map(({ r }) => idByNumber.get(r.accountNumber)).filter((id): id is number => id != null))];
+  if (!acctIds.length) return;
 
   const entered = await db
     .select({ ...sideCols, category: transactions.category })
@@ -102,7 +108,7 @@ export async function attachPendingMatches(rows: PreviewRow[]): Promise<void> {
     .where(
       and(
         enteredByHand,
-        inArray(accounts.accountNumber, acctNums),
+        inArray(transactions.accountId, acctIds),
         gte(transactions.txnDate, win.from),
         lte(transactions.txnDate, win.to),
       ),
@@ -112,7 +118,7 @@ export async function attachPendingMatches(rows: PreviewRow[]): Promise<void> {
   // Preview rows have no ids yet — use negative indexes so they can't collide with real ones.
   const posted: MatchSide[] = fresh.map(({ r, i }) => ({
     id: -(i + 1),
-    accountNumber: r.accountNumber,
+    accountNumber: currentNumber(r.accountNumber),
     txnDate: r.txnDate,
     amount: Math.abs(r.amount!),
     direction: r.direction,

@@ -5,6 +5,7 @@ import { accounts, accountBalances, bills } from "@/server/db/schema";
 import { eq, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { requireSession } from "@/server/auth/session";
+import { dropAlias, mergeAccounts, planAccountMerge, type MergeResult } from "@/server/lib/account-merge";
 
 // A liability account (Credit/Loan) surfaces on /accounts, /debts, and /dashboard — all three
 // are lenses over the same account_balances ledger, so every write refreshes all of them.
@@ -53,7 +54,27 @@ export async function createAccount(
     .insert(accounts)
     .values({ accountNumber: accountNumber.trim(), label: label || null, accountType: accountType || null })
     .onDuplicateKeyUpdate({ set: { id: sql`id` } });
+  // Adding it by hand says this number is its own account, whatever it was merged into before.
+  await dropAlias(accountNumber.trim());
   revalidateLedger();
+}
+
+/** What merging `fromId` into `intoId` would move, drop and warn about. Changes nothing. */
+export async function previewAccountMerge(fromId: number, intoId: number): Promise<MergeResult> {
+  await requireSession();
+  return planAccountMerge(fromId, intoId);
+}
+
+/**
+ * Fold `fromId` into `intoId`: its history moves, its number becomes a former number of the
+ * kept account, and the account itself is deleted. All or nothing; not reversible.
+ */
+export async function mergeAccount(fromId: number, intoId: number): Promise<MergeResult> {
+  await requireSession();
+  const res = await mergeAccounts(fromId, intoId);
+  // Transactions, budgets, goals and rules all name accounts — refresh everything.
+  if (res.ok) revalidatePath("/", "layout");
+  return res;
 }
 
 // Create a liability account (a "debt") from a name. Manual liabilities (a card/loan you don't

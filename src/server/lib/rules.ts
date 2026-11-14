@@ -1,6 +1,6 @@
 import "server-only";
 import { db } from "@/server/db";
-import { transactions, categoryMappings, billInstances, accounts } from "@/server/db/schema";
+import { transactions, categoryMappings, billInstances } from "@/server/db/schema";
 import { and, eq, gte, inArray, isNull, like, lte, or, sql, type SQL } from "drizzle-orm";
 import {
   categorize,
@@ -324,8 +324,3 @@ export async function adoptBillInstances(periodId: number): Promise<number> {
   return affected(res);
 }
 
-// Import previews know an account only by its number; account-locked rules need the id.
-export async function accountIdsByNumber(): Promise<Map<string, number>> {
-  const rows = await db.select({ id: accounts.id, n: accounts.accountNumber }).from(accounts);
-  return new Map(rows.map((r) => [r.n, r.id]));
-}
