@@ -241,6 +241,12 @@ export async function commitImport(
     .select({ id: periods.id, year: periods.year, month: periods.month })
     .from(periods);
   const periodMap = new Map(periodRows.map((p) => [`${p.year}-${p.month}`, p.id]));
+  // A month exists wherever a transaction lands — importing history from years back makes its
+  // months (bare, no bills cloned) so the rows show up in the month views and Trends.
+  for (const r of [...toInsert, ...toFinalize]) {
+    const ym = dateToYearMonth(r.txnDate);
+    if (ym && !periodMap.has(`${ym.year}-${ym.month}`)) periodMap.set(`${ym.year}-${ym.month}`, await ensurePeriod(ym.year, ym.month));
+  }
 
   await db.insert(importBatches).values({
     filename,

@@ -63,7 +63,7 @@ import {
   SAVINGS_CATEGORY,
 } from "@/constants/enums";
 import { effectiveHeld } from "@/server/lib/cash";
-import { monthBounds, parsePeriodLabel } from "@/server/lib/period";
+import { dateToYearMonth, monthBounds, parsePeriodLabel, periodLabel } from "@/server/lib/period";
 import { clampToMonth, todayIso, resolvePaydays, isoToUtc, utcToIso } from "@/server/lib/pay-schedule";
 import { toNum } from "@/server/lib/money";
 import { normalizeMerchant } from "@/server/lib/merchant";
@@ -632,6 +632,22 @@ export async function getLiabilityLedger() {
     .orderBy(desc(accountBalances.asOf), desc(accountBalances.id));
 }
 
+// Each account's last snapshot in every month it has one, ascending by date (ties by id). That's
+// all a month-end series needs — "the latest snapshot ≤ month-end" is always one of these — and
+// it keeps years of daily statement balances from all being pulled into memory.
+function monthEndBalanceRows() {
+  const last = db
+    .select({ accountId: accountBalances.accountId, mx: sql<string>`MAX(${accountBalances.asOf})`.as("mx") })
+    .from(accountBalances)
+    .groupBy(accountBalances.accountId, sql`YEAR(${accountBalances.asOf})`, sql`MONTH(${accountBalances.asOf})`)
+    .as("month_last");
+  return db
+    .select({ accountId: accountBalances.accountId, balance: accountBalances.balance, asOf: accountBalances.asOf })
+    .from(accountBalances)
+    .innerJoin(last, and(eq(last.accountId, accountBalances.accountId), eq(last.mx, accountBalances.asOf)))
+    .orderBy(asc(accountBalances.asOf), asc(accountBalances.id));
+}
+
 // ---- Balance trends (for the dashboard sparklines) ----
 export interface BalanceTrendPoint {
   label: string; // period label, e.g. "2025-01"
@@ -663,14 +679,7 @@ export async function getBalanceTrends(): Promise<BalanceTrendPoint[]> {
       .from(periods)
       .orderBy(asc(periods.year), asc(periods.month)),
     db.select({ id: accounts.id, accountType: accounts.accountType }).from(accounts),
-    db
-      .select({
-        accountId: accountBalances.accountId,
-        balance: accountBalances.balance,
-        asOf: accountBalances.asOf,
-      })
-      .from(accountBalances)
-      .orderBy(asc(accountBalances.asOf), asc(accountBalances.id)),
+    monthEndBalanceRows(),
     db
       .select({ assetId: assetValues.assetId, value: assetValues.value, asOf: assetValues.asOf })
       .from(assetValues)
@@ -707,7 +716,27 @@ export async function getBalanceTrends(): Promise<BalanceTrendPoint[]> {
     else byAccount.set(b.accountId, [{ asOf: b.asOf, balance: n }]);
   }
 
-  return periodRows.map((p) => {
+  // A continuous month axis from the earliest record (month sheet, balance or asset value) to
+  // the newest month sheet — so a balance history imported from years back is charted even where
+  // no month sheet exists, and a gap in the sheets doesn't silently drop months from the line.
+  const firstSnap = [balRows[0]?.asOf, assetRows[0]?.asOf].filter((d): d is string => !!d).sort()[0];
+  const idxOf = (y: number, m: number) => y * 12 + (m - 1);
+  const starts = periodRows.map((p) => idxOf(p.year, p.month));
+  if (firstSnap) {
+    const ym = dateToYearMonth(firstSnap);
+    if (ym) starts.push(idxOf(ym.year, ym.month));
+  }
+  if (!starts.length) return [];
+  const lo = Math.min(...starts);
+  const hi = Math.max(...starts, ...periodRows.map((p) => idxOf(p.year, p.month)));
+  const axis: { label: string; year: number; month: number }[] = [];
+  for (let i = lo; i <= hi; i++) {
+    const year = Math.floor(i / 12);
+    const month = (i % 12) + 1;
+    axis.push({ label: periodLabel(year, month), year, month });
+  }
+
+  return axis.map((p) => {
     const end = monthBounds(p.year, p.month).end; // YYYY-MM-DD → lexically comparable
     let cash: number | null = null;
     let credit: number | null = null;
@@ -750,10 +779,7 @@ export async function getAccountBalanceTrends(labels: string[]): Promise<Account
       .select({ id: accounts.id, label: accounts.label, institution: accounts.institution, accountType: accounts.accountType, active: accounts.active, accountNumber: accounts.accountNumber })
       .from(accounts)
       .orderBy(asc(accounts.label)),
-    db
-      .select({ accountId: accountBalances.accountId, balance: accountBalances.balance, asOf: accountBalances.asOf })
-      .from(accountBalances)
-      .orderBy(asc(accountBalances.asOf), asc(accountBalances.id)),
+    monthEndBalanceRows(),
   ]);
   const byAccount = new Map<number, { asOf: string; balance: number }[]>();
   for (const b of balRows) {
@@ -2187,21 +2213,68 @@ export async function getCategorySpend(periodLabel?: string) {
   await requireSession();
   const conds: SQL[] = [notTransferCond];
   if (periodLabel) conds.push(eq(periods.label, periodLabel));
-  // Cash withdrawals count only for what they couldn't explain, so the "Cash" slice reads as
-  // "cash I never accounted for" and the purchases it funded land in their own categories.
-  // Split transactions count their own share here and each piece under the piece's category,
-  // so the two queries together still add up to every row's full amount.
+  const pieceConds: SQL[] = [pieceNotTransferCond];
+  if (periodLabel) pieceConds.push(eq(periods.label, periodLabel));
+  const [ownRows, pieceRows] = await categorySpendRows(conds, pieceConds, false);
+  const byCat = new Map<string | null, number>();
+  for (const r of [...ownRows, ...pieceRows]) {
+    byCat.set(r.category, round2((byCat.get(r.category) ?? 0) + (toNum(r.total) ?? 0)));
+  }
+  const repaid = byCat.get(DEBT_REPAYMENT_CATEGORY);
+  const rebalance = periodLabel && repaid != null && repaid > 0 ? await debtRepaymentRebalance(periodLabel) : null;
+  const held = periodLabel
+    ? ((await effectiveHeldByPeriod()).get(periodLabel) ?? 0)
+    : (await getCashHeld()).delta;
+  return shapeCategorySpend(byCat, rebalance, held);
+}
+
+/**
+ * getCategorySpend for many months at once — the same numbers, in a fixed handful of queries
+ * instead of ~8 per month (the per-month form recomputed the all-history cash pocket every
+ * call). Trends over years of history needs this. Months with no spend map to [].
+ */
+export async function getCategorySpendByPeriods(labels: string[]): Promise<Map<string, { category: string | null; total: string }[]>> {
+  await requireSession();
+  const out = new Map<string, { category: string | null; total: string }[]>();
+  if (!labels.length) return out;
+  const [[ownRows, pieceRows], heldBy] = await Promise.all([
+    categorySpendRows([notTransferCond, inArray(periods.label, labels)], [pieceNotTransferCond, inArray(periods.label, labels)], true),
+    effectiveHeldByPeriod(),
+  ]);
+  const byPeriod = new Map<string, Map<string | null, number>>(labels.map((l) => [l, new Map()]));
+  for (const r of [...ownRows, ...pieceRows]) {
+    const m = byPeriod.get(r.label!);
+    if (!m) continue;
+    m.set(r.category, round2((m.get(r.category) ?? 0) + (toNum(r.total) ?? 0)));
+  }
+  // Only months that actually repaid a card need the (per-month) rebalance; run a few at a time
+  // so years of history don't open a connection per month.
+  const needRebalance = labels.filter((l) => (byPeriod.get(l)!.get(DEBT_REPAYMENT_CATEGORY) ?? 0) > 0);
+  const rebalanceBy = new Map<string, number>();
+  for (let i = 0; i < needRebalance.length; i += 6) {
+    const chunk = needRebalance.slice(i, i + 6);
+    const vals = await Promise.all(chunk.map((l) => debtRepaymentRebalance(l)));
+    chunk.forEach((l, k) => rebalanceBy.set(l, vals[k]));
+  }
+  for (const l of labels) out.set(l, shapeCategorySpend(byPeriod.get(l)!, rebalanceBy.get(l) ?? null, heldBy.get(l) ?? 0));
+  return out;
+}
+
+// The two halves of category spend: each row's own share, and each split piece under the piece's
+// category. Cash withdrawals count only for what they couldn't explain, so the "Cash" slice reads
+// as "cash I never accounted for" and the purchases it funded land in their own categories.
+// Together they add up to every row's full amount. `byPeriod` adds the month label to the grouping.
+function categorySpendRows(conds: SQL[], pieceConds: SQL[], byPeriod: boolean) {
   const wa = allocatedByWithdrawal();
   const st = splitByTxn();
   const own = ownShare(wa, st);
   const netSpend = sql`SUM(CASE WHEN ${transactions.direction} = 'Debit' THEN ${own} ELSE -${own} END)`;
   const part = pieceShare(wa, st);
   const netPieces = sql`SUM(CASE WHEN ${transactions.direction} = 'Debit' THEN ${part} ELSE -${part} END)`;
-  const pieceConds: SQL[] = [pieceNotTransferCond];
-  if (periodLabel) pieceConds.push(eq(periods.label, periodLabel));
-  const [ownRows, pieceRows] = await Promise.all([
+  return Promise.all([
     db
       .select({
+        label: byPeriod ? periods.label : sql<string | null>`NULL`,
         category: transactions.category,
         total: sql<string>`COALESCE(${netSpend}, 0)`,
       })
@@ -2210,9 +2283,10 @@ export async function getCategorySpend(periodLabel?: string) {
       .leftJoin(wa, eq(wa.txnId, transactions.id))
       .leftJoin(st, eq(st.txnId, transactions.id))
       .where(and(...conds))
-      .groupBy(transactions.category),
+      .groupBy(...(byPeriod ? [periods.label, transactions.category] : [transactions.category])),
     db
       .select({
+        label: byPeriod ? periods.label : sql<string | null>`NULL`,
         category: transactionSplits.category,
         total: sql<string>`COALESCE(${netPieces}, 0)`,
       })
@@ -2222,17 +2296,16 @@ export async function getCategorySpend(periodLabel?: string) {
       .leftJoin(wa, eq(wa.txnId, transactions.id))
       .leftJoin(st, eq(st.txnId, transactions.id))
       .where(and(...pieceConds))
-      .groupBy(transactionSplits.category),
+      .groupBy(...(byPeriod ? [periods.label, transactionSplits.category] : [transactionSplits.category])),
   ]);
-  const byCat = new Map<string | null, number>();
-  for (const r of [...ownRows, ...pieceRows]) {
-    byCat.set(r.category, round2((byCat.get(r.category) ?? 0) + (toNum(r.total) ?? 0)));
-  }
+}
+
+/** Turn raw per-category totals into the spend rows, applying the card-repayment and cash-pocket adjustments. */
+function shapeCategorySpend(byCat: Map<string | null, number>, rebalance: number | null, held: number) {
   // Paying a card back for what was charged to it this month isn't new spending — those
   // purchases are already in their own categories. Debt Repayment keeps only the real paydown.
   const repaid = byCat.get(DEBT_REPAYMENT_CATEGORY);
-  if (periodLabel && repaid != null && repaid > 0) {
-    const rebalance = await debtRepaymentRebalance(periodLabel);
+  if (rebalance != null && repaid != null && repaid > 0) {
     byCat.set(DEBT_REPAYMENT_CATEGORY, round2(Math.max(0, repaid - rebalance)));
   }
   const rows: { category: string | null; total: string }[] = [...byCat]
@@ -2244,9 +2317,6 @@ export async function getCategorySpend(periodLabel?: string) {
   // the one bucket that means "cash whose fate is unknown". Purchases logged against a
   // withdrawal have already been taken off by `unaccountedAmount`; this is the other half of
   // the same reconciliation. See getCashHeld.
-  const held = periodLabel
-    ? ((await effectiveHeldByPeriod()).get(periodLabel) ?? 0)
-    : (await getCashHeld()).delta;
   if (held === 0) return rows;
 
   let seenCash = false;
@@ -3629,4 +3699,38 @@ export async function getNavCounts(): Promise<{ pastDueBills: number; newTransac
       (!settled.has(r.status) && !/pending/i.test(r.status) && r.dueDay != null && r.dueDay < day),
   ).length;
   return { pastDueBills, newTransactions };
+}
+
+// ---- Data coverage (/settings/coverage) ----
+// Per account and month: how many transactions and balance snapshots the app holds. Grouped in
+// SQL, so it stays a few hundred rows however much history is imported.
+export async function getDataCoverageCounts() {
+  await requireSession();
+  const txMonth = sql<string>`DATE_FORMAT(${transactions.txnDate}, '%Y-%m')`;
+  const balMonth = sql<string>`DATE_FORMAT(${accountBalances.asOf}, '%Y-%m')`;
+  const [accts, txns, bals] = await Promise.all([
+    db
+      .select({ id: accounts.id, label: accounts.label, institution: accounts.institution, accountType: accounts.accountType, active: accounts.active, accountNumber: accounts.accountNumber })
+      .from(accounts)
+      .orderBy(asc(accounts.label)),
+    db
+      .select({ accountId: transactions.accountId, month: txMonth, n: sql<number>`COUNT(*)` })
+      .from(transactions)
+      .groupBy(transactions.accountId, txMonth),
+    db
+      .select({ accountId: accountBalances.accountId, month: balMonth, n: sql<number>`COUNT(*)` })
+      .from(accountBalances)
+      .groupBy(accountBalances.accountId, balMonth),
+  ]);
+  return {
+    accounts: accts.map((a) => ({
+      id: a.id,
+      label: a.label ?? `…${a.accountNumber}`,
+      institution: a.institution,
+      accountType: a.accountType ?? "",
+      active: !!a.active,
+    })),
+    txns: txns.map((r) => ({ accountId: r.accountId, month: r.month, n: Number(r.n) })),
+    balances: bals.map((r) => ({ accountId: r.accountId, month: r.month, n: Number(r.n) })),
+  };
 }

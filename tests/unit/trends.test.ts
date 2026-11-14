@@ -1,6 +1,6 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { cumulativeNet, flowTotals, monthlyLedger, seriesStats, windowStartLabel, type TrendMonth } from "@/server/lib/trends";
+import { autoBucket, bucketEnds, bucketFlows, bucketKey, bucketLedger, bucketName, cumulativeNet, flowTotals, monthlyLedger, seriesStats, windowStartLabel, type TrendMonth } from "@/server/lib/trends";
 
 describe("windowStartLabel", () => {
   test("counts the current month as one of the n", () => {
@@ -106,5 +106,70 @@ describe("monthlyLedger", () => {
     assert.equal(rows[2].net, -500);
     assert.equal(rows[1].savingsRate, 25);
     assert.equal(rows[2].debt, 400);
+  });
+});
+
+describe("buckets", () => {
+  test("autoBucket picks months, then quarters, then years", () => {
+    assert.equal(autoBucket(12), "month");
+    assert.equal(autoBucket(36), "month");
+    assert.equal(autoBucket(95), "quarter");
+    assert.equal(autoBucket(120), "year");
+  });
+
+  test("bucketKey and bucketName", () => {
+    assert.equal(bucketKey("2026-05", "quarter"), "2026-Q2");
+    assert.equal(bucketKey("2026-12", "quarter"), "2026-Q4");
+    assert.equal(bucketKey("2026-05", "year"), "2026");
+    assert.equal(bucketName("2026-Q2", "quarter", (l) => l), "Q2 '26");
+    assert.equal(bucketName("2026-05", "month", () => "May '26"), "May '26");
+  });
+
+  test("bucketFlows sums in and out per quarter", () => {
+    const f = bucketFlows(
+      [
+        { label: "2025-12", in: 100, out: 50 },
+        { label: "2026-01", in: 10, out: 5 },
+        { label: "2026-02", in: 20, out: 5 },
+      ],
+      "quarter",
+    );
+    assert.deepEqual(f, [
+      { label: "2025-Q4", in: 100, out: 50 },
+      { label: "2026-Q1", in: 30, out: 10 },
+    ]);
+  });
+
+  test("bucketEnds takes the last recorded value in each bucket", () => {
+    const e = bucketEnds(["2025-01", "2025-02", "2026-01", "2026-02"], [1, 2, 3, null], "year");
+    assert.deepEqual(e, [
+      { key: "2025", value: 2 },
+      { key: "2026", value: 3 },
+    ]);
+  });
+
+  test("bucketLedger sums flows and measures net worth change bucket to bucket", () => {
+    const months: TrendMonth[] = [
+      { label: "2025-11", cash: 100, credit: null, loans: null, retirement: 0, assets: 0 },
+      { label: "2025-12", cash: 200, credit: null, loans: null, retirement: 0, assets: 0 },
+      { label: "2026-01", cash: 260, credit: null, loans: null, retirement: 0, assets: 0 },
+    ];
+    const rows = monthlyLedger(
+      months,
+      [
+        { label: "2025-11", in: 50, out: 10 },
+        { label: "2025-12", in: 50, out: 20 },
+        { label: "2026-01", in: 100, out: 40 },
+      ],
+      (m) => m.cash,
+    );
+    const y = bucketLedger(rows, "year");
+    assert.equal(y.length, 2);
+    assert.deepEqual(
+      { label: y[0].label, months: y[0].months, income: y[0].income, net: y[0].net, netWorth: y[0].netWorth, change: y[0].netWorthChange },
+      { label: "2025", months: 2, income: 100, net: 70, netWorth: 200, change: null },
+    );
+    assert.equal(y[1].netWorthChange, 60);
+    assert.equal(y[1].savingsRate, 60);
   });
 });

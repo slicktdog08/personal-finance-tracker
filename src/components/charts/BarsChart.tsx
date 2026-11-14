@@ -33,10 +33,10 @@ export function BarsChart({
   return (
     <div className="space-y-2">
       {/* Bars and labels scroll together sideways on narrow screens instead of
-          crushing the fixed-width bars into the container. ~30px per month keeps
-          the labels legible. */}
+          crushing the fixed-width bars into the container. ~34px per group (more
+          with several series side by side) keeps the labels legible. */}
       <div className="overflow-x-auto">
-        <div className="space-y-2" style={{ minWidth: labels.length * 30 }}>
+        <div className="space-y-2" style={{ minWidth: labels.length * Math.max(34, series.length * 10 + 12) }}>
       <div className="flex items-end gap-1" style={{ height }}>
         {labels.map((lab, i) => (
           <div
