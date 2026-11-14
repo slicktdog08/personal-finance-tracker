@@ -7,7 +7,13 @@ import {
   analyzeStatement,
   commitPdfStatements,
 } from "@/server/actions/pdf-import";
-import type { ParsedStatement, CommitStatementInput, PdfCommitResult } from "@/server/lib/pdf/types";
+import type {
+  ParsedStatement,
+  ParsedTrade,
+  ParsedPosition,
+  CommitStatementInput,
+  PdfCommitResult,
+} from "@/server/lib/pdf/types";
 import { formatDate } from "@/server/lib/period";
 import type { CategoryOption } from "@/server/queries";
 import type { CategoryRule } from "@/server/lib/categorize";
@@ -71,6 +77,82 @@ function byPeriod(a: ParsedStatement, b: ParsedStatement): number {
   return (a.periodStart ?? "9999").localeCompare(b.periodStart ?? "9999") || a.filename.localeCompare(b.filename);
 }
 
+// What an investment statement adds beyond cash: its trades and what it held at the close.
+// Read-only — these are recorded as they stand, into their own ledger, and never count as
+// spending or income.
+function InvestmentPreview({
+  trades,
+  positions,
+  asOf,
+}: {
+  trades: ParsedTrade[];
+  positions: ParsedPosition[];
+  asOf: string | null;
+}) {
+  const qty = (n: number | null) => (n == null ? "—" : n.toLocaleString("en-US", { maximumFractionDigits: 8 }));
+  return (
+    <details className="border-t border-line px-5 py-3 text-sm max-md:px-3.5">
+      <summary className="cursor-pointer text-fg-2">
+        {trades.length} trade{trades.length === 1 ? "" : "s"} · {positions.length} holding
+        {positions.length === 1 ? "" : "s"}
+        <span className="text-fg-3"> — recorded separately, not counted as spending or income</span>
+      </summary>
+      {trades.length > 0 && (
+        <div className="mt-2 overflow-x-auto">
+          <table className="w-full text-xs tabular-nums">
+            <thead className="text-left text-fg-3">
+              <tr>
+                <th className="py-1 pr-3 font-medium">Date</th>
+                <th className="py-1 pr-3 font-medium">Action</th>
+                <th className="py-1 pr-3 font-medium">Security</th>
+                <th className="py-1 pr-3 text-right font-medium">Quantity</th>
+                <th className="py-1 pr-3 text-right font-medium">Price</th>
+                <th className="py-1 text-right font-medium">Cash</th>
+              </tr>
+            </thead>
+            <tbody>
+              {trades.map((t, k) => (
+                <tr key={k} className="border-t border-line">
+                  <td className="py-1 pr-3 whitespace-nowrap">{t.dateIso ? formatDate(t.dateIso) : "?"}</td>
+                  <td className="py-1 pr-3">{t.action}</td>
+                  <td className="py-1 pr-3">{t.symbol && t.symbol !== t.name ? `${t.symbol} · ${t.name}` : t.name}</td>
+                  <td className="py-1 pr-3 text-right">{qty(t.quantity)}</td>
+                  <td className="py-1 pr-3 text-right">{t.price != null ? <Money value={t.price} kind="neutral" /> : "—"}</td>
+                  <td className="py-1 text-right">
+                    {t.amount != null ? (
+                      <Money value={t.direction === "Debit" ? -t.amount : t.amount} kind="neutral" />
+                    ) : (
+                      "—"
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {positions.length > 0 && (
+        <div className="mt-3 overflow-x-auto">
+          <div className="text-xs text-fg-3">Held{asOf ? ` on ${formatDate(asOf)}` : ""}</div>
+          <table className="w-full text-xs tabular-nums">
+            <tbody>
+              {positions.map((p, k) => (
+                <tr key={k} className="border-t border-line">
+                  <td className="py-1 pr-3">{p.symbol && p.symbol !== p.name ? `${p.symbol} · ${p.name}` : p.name}</td>
+                  <td className="py-1 pr-3 text-right">{qty(p.quantity)}</td>
+                  <td className="py-1 text-right">
+                    {p.marketValue != null ? <Money value={p.marketValue} kind="neutral" /> : "—"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </details>
+  );
+}
+
 // A card for a file the server couldn't take at all (network error, oversized request).
 function failedFile(name: string, err: unknown): ParsedStatement {
   return {
@@ -95,6 +177,8 @@ function failedFile(name: string, err: unknown): ParsedStatement {
     duplicateCount: 0,
     errorCount: 0,
     balanceSuggestions: [],
+    trades: [],
+    positions: null,
     dailyBalances: [],
     reconciled: null,
     notes: [`Could not upload this file: ${err instanceof Error ? err.message : String(err)}`],
@@ -346,6 +430,8 @@ export function PdfImportWizard({
   }, 0);
   const totalDaily = committable.reduce((n, s) => n + (recordDaily[stmts.indexOf(s)] ? s.dailyBalances.length : 0), 0);
   const availableDaily = stmts.reduce((n, s) => n + s.dailyBalances.length, 0);
+  const totalTrades = committable.reduce((n, s) => n + s.trades.length, 0);
+  const totalPositions = committable.reduce((n, s) => n + (s.positions && s.periodEnd ? s.positions.length : 0), 0);
   const missingAccount = committable.some((s) => !s.accountNumber.trim());
   const fileCount = new Set(stmts.map((s) => s.filename)).size;
 
@@ -361,6 +447,11 @@ export function PdfImportWizard({
         rows: s.rows,
         balances: s.balanceSuggestions.filter((_, k) => recordBal[idx]?.[k]),
         dailyBalances: recordDaily[idx] ? s.dailyBalances : [],
+        // Trades and holdings are part of an investment statement's record, not an option:
+        // both writes are idempotent, so they always ride along.
+        trades: s.trades,
+        positions: s.positions ?? undefined,
+        positionsAsOf: s.positions ? s.periodEnd : null,
       };
     });
     start(async () => {
@@ -393,6 +484,8 @@ export function PdfImportWizard({
                 balancesRecorded: res.balancesRecorded + r.balancesRecorded,
                 merged: res.merged + r.merged,
                 billsLinked: res.billsLinked + r.billsLinked,
+                tradesRecorded: res.tradesRecorded + r.tradesRecorded,
+                positionsRecorded: res.positionsRecorded + r.positionsRecorded,
               }
             : r;
         }
@@ -644,6 +737,10 @@ export function PdfImportWizard({
                     )}
                   </div>
 
+                  {(s.trades.length > 0 || (s.positions?.length ?? 0) > 0) && (
+                    <InvestmentPreview trades={s.trades} positions={s.positions ?? []} asOf={s.periodEnd} />
+                  )}
+
                   {s.rows.length > 0 && (
                     <ImportPreviewTable
                       rows={s.rows}
@@ -684,11 +781,11 @@ export function PdfImportWizard({
               icon="check"
               loading={pending}
               onClick={commit}
-              disabled={pending || (totalNew === 0 && totalSettles === 0 && totalBalances === 0 && totalDaily === 0) || missingAccount}
+              disabled={pending || (totalNew === 0 && totalSettles === 0 && totalBalances === 0 && totalDaily === 0 && totalTrades === 0 && totalPositions === 0) || missingAccount}
             >
               {pending
                 ? "Importing…"
-                : `Import ${totalNew} new${totalSettles ? ` · settle ${totalSettles} pending` : ""}${totalBalances ? ` · ${totalBalances} balance${totalBalances === 1 ? "" : "s"}` : ""}${totalDaily ? ` · ${totalDaily} daily` : ""}`}
+                : `Import ${totalNew} new${totalSettles ? ` · settle ${totalSettles} pending` : ""}${totalBalances ? ` · ${totalBalances} balance${totalBalances === 1 ? "" : "s"}` : ""}${totalDaily ? ` · ${totalDaily} daily` : ""}${totalTrades ? ` · ${totalTrades} trade${totalTrades === 1 ? "" : "s"}` : ""}${totalPositions ? ` · ${totalPositions} holding${totalPositions === 1 ? "" : "s"}` : ""}`}
             </Button>
             {missingAccount && <span className="text-xs text-warn">Pick an account for every statement.</span>}
           </div>
@@ -707,7 +804,9 @@ export function PdfImportWizard({
                 {result.errors} errors · {result.balancesRecorded} balance snapshot
                 {result.balancesRecorded === 1 ? "" : "s"} recorded
                 {result.merged ? ` · merged ${result.merged} into pending transaction${result.merged === 1 ? "" : "s"}` : ""}
-                {result.billsLinked ? ` · linked ${result.billsLinked} to bills by rule` : ""}.
+                {result.billsLinked ? ` · linked ${result.billsLinked} to bills by rule` : ""}
+                {result.tradesRecorded ? ` · ${result.tradesRecorded} trade${result.tradesRecorded === 1 ? "" : "s"} recorded` : ""}
+                {result.positionsRecorded ? ` · ${result.positionsRecorded} holding${result.positionsRecorded === 1 ? "" : "s"} recorded` : ""}.
               </>
             }
             action={

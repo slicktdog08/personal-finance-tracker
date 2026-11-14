@@ -23,6 +23,26 @@ export interface BalanceRow {
   /** account_balances.source — null when entered by hand or synced. */
   source?: string | null;
 }
+export interface HoldingRow {
+  id: number;
+  asOf: string;
+  symbol: string | null;
+  name: string;
+  quantity: string;
+  price: string | null;
+  marketValue: string | null;
+}
+export interface TradeRow {
+  id: number;
+  tradeDate: string;
+  action: string;
+  symbol: string | null;
+  name: string;
+  quantity: string | null;
+  price: string | null;
+  amount: string | null;
+  direction: string | null;
+}
 export interface AccountInfo {
   id: number;
   accountNumber: string;
@@ -39,11 +59,17 @@ export function AccountCard({
   txnCount,
   lastTxn,
   sync = null,
+  holdings = [],
+  trades = [],
 }: {
   account: AccountInfo;
   balances: BalanceRow[];
   txnCount: number;
   lastTxn: string | null;
+  /** Investment accounts: what was held at the latest statement close. */
+  holdings?: HoldingRow[];
+  /** Investment accounts: every recorded trade, newest first. */
+  trades?: TradeRow[];
   /** Present when a bank-sync account feeds this one (settings → Bank Sync). */
   sync?: { provider: string; enabled: boolean; lastSyncedAt: string | null; enrollmentStatus: string } | null;
 }) {
@@ -266,6 +292,8 @@ export function AccountCard({
                   </table>
                 </History>
               )}
+
+              {(holdings.length > 0 || trades.length > 0) && <InvestmentLedger holdings={holdings} trades={trades} />}
             </div>
           )}
 
@@ -396,6 +424,102 @@ export function AccountCard({
         </div>
       )}
     </div>
+  );
+}
+
+// DECIMAL(…, 8) comes back padded ("10.00000000"); show only the digits that carry meaning.
+const qty = (v: string | null) =>
+  v == null ? "—" : Number(v).toLocaleString("en-US", { maximumFractionDigits: 8 });
+
+// An investment account's structured record: what it held at the last statement close, and
+// every trade. Neither is spending or income — they explain the balance, they don't change it.
+function InvestmentLedger({ holdings, trades }: { holdings: HoldingRow[]; trades: TradeRow[] }) {
+  const label = (r: { symbol: string | null; name: string }) =>
+    r.symbol && r.symbol !== r.name ? (
+      <>
+        <span className="font-medium">{r.symbol}</span> <span className="text-fg-3">{r.name}</span>
+      </>
+    ) : (
+      <span className="font-medium">{r.name}</span>
+    );
+  return (
+    <>
+      {holdings.length > 0 && (
+        <details className="group">
+          <summary className="flex cursor-pointer select-none items-center gap-1 text-xs text-fg-3 hover:text-fg">
+            <Icon name="chevron-right" size={14} className="transition-transform group-open:rotate-90" />
+            Holdings ({holdings.length} on {formatDate(holdings[0].asOf)})
+          </summary>
+          <div className="mt-2 max-h-64 overflow-x-auto overflow-y-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-xs text-fg-3">
+                  <th className="py-1 font-medium">Holding</th>
+                  <th className="py-1 pl-3 text-right font-medium">Quantity</th>
+                  <th className="py-1 pl-3 text-right font-medium">Price</th>
+                  <th className="py-1 pl-3 text-right font-medium">Value</th>
+                </tr>
+              </thead>
+              <tbody>
+                {holdings.map((h) => (
+                  <tr key={h.id} className="border-t border-line">
+                    <td className="max-w-56 truncate py-1.5">{label(h)}</td>
+                    <td className="py-1.5 pl-3 text-right tabular-nums">{qty(h.quantity)}</td>
+                    <td className="py-1.5 pl-3 text-right tabular-nums text-fg-3">
+                      {h.price != null ? formatMoney(h.price) : "—"}
+                    </td>
+                    <td className="py-1.5 pl-3 text-right font-medium">
+                      {h.marketValue != null ? <Money value={h.marketValue} kind="neutral" /> : "—"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </details>
+      )}
+      {trades.length > 0 && (
+        <details className="group">
+          <summary className="flex cursor-pointer select-none items-center gap-1 text-xs text-fg-3 hover:text-fg">
+            <Icon name="chevron-right" size={14} className="transition-transform group-open:rotate-90" />
+            Trades ({trades.length} recorded)
+          </summary>
+          <div className="mt-2 max-h-64 overflow-x-auto overflow-y-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-xs text-fg-3">
+                  <th className="py-1 font-medium">Date</th>
+                  <th className="py-1 pl-3 font-medium">Action</th>
+                  <th className="py-1 pl-3 font-medium">Security</th>
+                  <th className="py-1 pl-3 text-right font-medium">Quantity</th>
+                  <th className="py-1 pl-3 text-right font-medium">Price</th>
+                  <th className="py-1 pl-3 text-right font-medium">Cash</th>
+                </tr>
+              </thead>
+              <tbody>
+                {trades.map((t) => {
+                  const cash = toNum(t.amount);
+                  return (
+                    <tr key={t.id} className="border-t border-line">
+                      <td className="whitespace-nowrap py-1.5 tabular-nums">{formatDate(t.tradeDate)}</td>
+                      <td className="py-1.5 pl-3 text-fg-3">{t.action}</td>
+                      <td className="max-w-56 truncate py-1.5 pl-3">{label(t)}</td>
+                      <td className="py-1.5 pl-3 text-right tabular-nums">{qty(t.quantity)}</td>
+                      <td className="py-1.5 pl-3 text-right tabular-nums text-fg-3">
+                        {t.price != null ? formatMoney(t.price) : "—"}
+                      </td>
+                      <td className="py-1.5 pl-3 text-right">
+                        {cash != null ? <Money value={t.direction === "Debit" ? -cash : cash} kind="neutral" /> : "—"}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </details>
+      )}
+    </>
   );
 }
 

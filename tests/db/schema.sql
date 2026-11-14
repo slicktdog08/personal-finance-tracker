@@ -300,6 +300,44 @@ CREATE TABLE `goal_contributions` (
 ) ENGINE=InnoDB AUTO_INCREMENT=18 DEFAULT CHARSET=utf8mb4;
 /*!40101 SET character_set_client = @saved_cs_client */;
 DROP TABLE IF EXISTS `import_batches`;
+CREATE TABLE `investment_positions` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `account_id` int(11) NOT NULL,
+  `as_of` date NOT NULL,
+  `asset_class` varchar(8) NOT NULL,
+  `symbol` varchar(32) DEFAULT NULL,
+  `name` varchar(255) NOT NULL,
+  `quantity` decimal(24,8) NOT NULL,
+  `price` decimal(18,8) DEFAULT NULL,
+  `market_value` decimal(14,2) DEFAULT NULL,
+  `source` varchar(32) NOT NULL DEFAULT 'pdf',
+  `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_ip_acct_date` (`account_id`,`as_of`),
+  CONSTRAINT `investment_positions_account_id_fk` FOREIGN KEY (`account_id`) REFERENCES `accounts` (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE `investment_trades` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `account_id` int(11) NOT NULL,
+  `trade_date` date NOT NULL,
+  `kind` varchar(8) NOT NULL,
+  `action` varchar(16) NOT NULL,
+  `asset_class` varchar(8) NOT NULL,
+  `symbol` varchar(32) DEFAULT NULL,
+  `name` varchar(255) NOT NULL,
+  `quantity` decimal(24,8) DEFAULT NULL,
+  `price` decimal(18,8) DEFAULT NULL,
+  `amount` decimal(12,2) DEFAULT NULL,
+  `direction` varchar(8) DEFAULT NULL,
+  `dedup_hash` char(64) NOT NULL,
+  `source` varchar(32) NOT NULL DEFAULT 'pdf',
+  `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_it_dedup` (`dedup_hash`),
+  KEY `idx_it_acct_date` (`account_id`,`trade_date`),
+  KEY `idx_it_symbol` (`symbol`),
+  CONSTRAINT `investment_trades_account_id_fk` FOREIGN KEY (`account_id`) REFERENCES `accounts` (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
 CREATE TABLE `import_batches` (

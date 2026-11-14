@@ -27,6 +27,8 @@ import {
   syncAccounts,
   syncEnrollments,
   uiLayouts,
+  investmentPositions,
+  investmentTrades,
 } from "@/server/db/schema";
 import { alias } from "drizzle-orm/mysql-core";
 import type { PayFrequency } from "@/constants/enums";
@@ -248,6 +250,26 @@ export async function getBalancesForAccount(accountId: number) {
     .from(accountBalances)
     .where(eq(accountBalances.accountId, accountId))
     .orderBy(desc(accountBalances.asOf), desc(accountBalances.id));
+}
+// What each investment account held at its most recent statement close (largest value first).
+export async function getInvestmentHoldings() {
+  await requireSession();
+  const latest = await db
+    .select({ accountId: investmentPositions.accountId, asOf: sql<string>`MAX(${investmentPositions.asOf})` })
+    .from(investmentPositions)
+    .groupBy(investmentPositions.accountId);
+  if (!latest.length) return [];
+  const rows = await db
+    .select()
+    .from(investmentPositions)
+    .where(or(...latest.map((l) => and(eq(investmentPositions.accountId, l.accountId), eq(investmentPositions.asOf, l.asOf)))))
+    .orderBy(desc(investmentPositions.marketValue), asc(investmentPositions.name));
+  return rows;
+}
+// Every recorded trade, newest first. A few hundred rows per account over years of statements.
+export async function getInvestmentTrades() {
+  await requireSession();
+  return db.select().from(investmentTrades).orderBy(desc(investmentTrades.tradeDate), desc(investmentTrades.id));
 }
 // Which local accounts are fed by bank sync, and when each last synced. Keyed by local
 // account id; an account mapped from two external accounts reports the latest.

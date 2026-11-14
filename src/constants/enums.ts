@@ -206,7 +206,7 @@ export const PAY_FREQUENCY_META: Record<
   },
 };
 
-export const ACCOUNT_TYPES = ["Checking", "Savings", "Cash", "Retirement", "Credit", "Loan", "Other"] as const;
+export const ACCOUNT_TYPES = ["Checking", "Savings", "Cash", "Retirement", "Investment", "Credit", "Loan", "Other"] as const;
 export type AccountType = (typeof ACCOUNT_TYPES)[number];
 export const CASH_ACCOUNT_TYPES: readonly string[] = ["Checking", "Savings", "Cash"];
 
@@ -231,7 +231,20 @@ export const LIABILITY_ACCOUNT_TYPES: readonly string[] = ["Credit", "Loan"];
 // 401(k), 403(b), IRA, HSA-invested — money you own but can't spend this month without penalty.
 // It counts toward net worth, never toward cash on hand / safe-to-spend. Balances go in the same
 // account_balances ledger as everything else (record them by hand, or let bank sync feed them).
-export const RETIREMENT_ACCOUNT_TYPES: readonly string[] = ["Retirement"];
+//
+// "Investment" is a taxable brokerage or crypto account. It rides in the same bucket for the same
+// reason: its balance is a market value (holdings + uninvested cash), not money to budget with.
+// Trades inside it are not transactions — see planning/features/pdf-import.md.
+export const RETIREMENT_ACCOUNT_TYPES: readonly string[] = ["Retirement", "Investment"];
+
+// ---- Investment trades & positions --------------------------------------------------------
+// investment_trades.kind — which way the holding moved. "other" covers events with no buy/sell
+// sense: an option expiring, a reward share arriving, coins withdrawn, cash sent to crypto.
+export const TRADE_KINDS = ["buy", "sell", "other"] as const;
+export type TradeKind = (typeof TRADE_KINDS)[number];
+// "cash" is a move of dollars between two investment accounts (brokerage ↔ crypto).
+export const ASSET_CLASSES = ["equity", "option", "crypto", "cash"] as const;
+export type AssetClass = (typeof ASSET_CLASSES)[number];
 
 // ---- Assets ------------------------------------------------------------------------------
 // Things you own that hold value but aren't money: a car, a house, equipment. Each one has a

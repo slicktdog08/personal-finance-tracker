@@ -1,7 +1,8 @@
 "use server";
 
 import { db } from "@/server/db";
-import { transactions, accounts, accountBalances } from "@/server/db/schema";
+import { transactions, accounts, accountBalances, investmentPositions, investmentTrades } from "@/server/db/schema";
+import { positionRows, tradeRows } from "@/server/lib/pdf/investments";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { hashRows } from "@/server/lib/dedup";
@@ -177,7 +178,7 @@ export async function parsePdfStatements(files: PdfFileInput[]): Promise<ParsedS
       continue;
     }
 
-    const { parser, results } = detectAndParse(extracted.lines, extracted.text);
+    const { parser, results } = detectAndParse(extracted.lines, extracted.text, extracted.items);
     if (!parser || results.length === 0) {
       out.push(
         unrecognized(f.name, extracted.lines.slice(0, 12), extracted.pageCount, [
@@ -232,6 +233,8 @@ export async function parsePdfStatements(files: PdfFileInput[]): Promise<ParsedS
           lastTxnDate,
           m.creditLimit ?? null,
         ),
+        trades: result.trades ?? [],
+        positions: result.positions ?? null,
         dailyBalances: result.dailyBalances ?? [],
         reconciled,
         notes: result.notes,
@@ -271,6 +274,8 @@ function unrecognized(
     duplicateCount: 0,
     errorCount: 0,
     balanceSuggestions: [],
+    trades: [],
+    positions: null,
     dailyBalances: [],
     reconciled: null,
     notes,
@@ -307,6 +312,8 @@ export async function commitPdfStatements(
   let balancesRecorded = 0;
   let merged = 0;
   let billsLinked = 0;
+  let tradesRecorded = 0;
+  let positionsRecorded = 0;
 
   // Ensure every referenced account exists (covers balance-only statements too).
   const acctNums = [...new Set(statements.map((s) => s.accountNumber).filter(Boolean))];
@@ -365,6 +372,35 @@ export async function commitPdfStatements(
     }
     const acctId = s.accountNumber ? acctMap.get(s.accountNumber) : undefined;
     if (acctId) {
+      // Holdings movements: their own ledger, deduplicated by hash so re-importing a statement
+      // (or its corrected reissue) adds nothing.
+      const tRows = tradeRows(s.trades ?? [], s.accountNumber, acctId);
+      for (let k = 0; k < tRows.length; k += 500) {
+        const chunk = tRows.slice(k, k + 500);
+        const had = await db
+          .select({ h: investmentTrades.dedupHash })
+          .from(investmentTrades)
+          .where(inArray(investmentTrades.dedupHash, chunk.map((r) => r.dedupHash)));
+        const known = new Set(had.map((r) => r.h));
+        const fresh = chunk.filter((r) => !known.has(r.dedupHash));
+        if (fresh.length) {
+          await db.insert(investmentTrades).values(fresh).onDuplicateKeyUpdate({ set: { id: sql`id` } });
+          tradesRecorded += fresh.length;
+        }
+      }
+      // Holdings at the close: one snapshot per account + date, replaced whole so a re-import
+      // refreshes it. A statement listing nothing still clears the date — the account was empty.
+      if (s.positionsAsOf && s.positions) {
+        const asOf = s.positionsAsOf;
+        const pRows = positionRows(s.positions, asOf, acctId);
+        await db.transaction(async (tx) => {
+          await tx
+            .delete(investmentPositions)
+            .where(and(eq(investmentPositions.accountId, acctId), eq(investmentPositions.asOf, asOf)));
+          if (pRows.length) await tx.insert(investmentPositions).values(pRows);
+        });
+        positionsRecorded += pRows.length;
+      }
       const name = [s.institution, s.accountLabel].filter(Boolean).join(" ") || "Statement";
       const points = statementPoints(s.balances, s.dailyBalances ?? [], `${name} end-of-day balance`);
       if (points.length) {
@@ -415,5 +451,16 @@ export async function commitPdfStatements(
   revalidatePath("/transactions");
   revalidatePath("/dashboard");
   revalidatePath("/import");
-  return { statements: statements.length, inserted, duplicates, finalized, errors, balancesRecorded, merged, billsLinked };
+  return {
+    statements: statements.length,
+    inserted,
+    duplicates,
+    finalized,
+    errors,
+    balancesRecorded,
+    merged,
+    billsLinked,
+    tradesRecorded,
+    positionsRecorded,
+  };
 }

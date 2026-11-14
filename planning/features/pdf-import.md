@@ -27,7 +27,7 @@ multi-file batch upload with cross-statement dedup. No OCR — these are text PD
 
 ## The parser registry — how to add an issuer
 A `StatementParser` (`types.ts`) has `id`, `label`, `detect(text) => boolean` (cheap sniff), and
-`parse(lines, text) => ParserResult`. Registration is first-match: `PARSERS` array in
+`parse(lines, text, pages?) => ParserResult`. Registration is first-match: `PARSERS` array in
 `registry.ts`; `detectAndParse` runs the first whose `detect` passes, else the statement is flagged
 unrecognized. **To add one:**
 1. Copy `parsers/robinhood.ts`.
@@ -61,6 +61,50 @@ impossible date.
   attached to the row as `raw.foreignAmount / foreignCurrency / exchangeRate`, not treated as rows.
 - **Credit limit:** `meta.creditLimit` flows into the closing balance snapshot, so utilization
   history comes with the import. The opening snapshot carries none.
+
+## Investment statements (brokerage, crypto)
+A brokerage or crypto statement is not a cash ledger, and treating it as one corrupts the
+rollups: income/spend totals count every row that isn't categorized `Transfer`, so a `$2,000` buy
+would read as `$2,000` spent and the later sale as income. The rule the Robinhood brokerage and
+crypto parsers follow:
+
+| What the statement shows | What is stored |
+|---|---|
+| Portfolio value (holdings + uninvested cash), opening and closing | `account_balances` snapshots |
+| Cash events: card purchases, bank transfers, fees, margin interest, dividends, interest | `transactions`, like any bank row |
+| Trades, option events, moves between brokerage and crypto | `investment_trades` — never `transactions` |
+| Holdings at the statement's close | `investment_positions` |
+
+Why this is consistent: the account's balance is its *whole* value, so a trade moves money between
+two pockets of the same balance and changes neither net worth nor spending. Only money crossing
+the account's edge is a transaction. Market gains show up as the balance drifting between
+snapshots, which is what they are.
+
+- **Account type `Investment`** (in `RETIREMENT_ACCOUNT_TYPES`): counts toward net worth, never
+  toward cash on hand — same bucket as a 401(k), shown as "Investments".
+- **`investment_trades`** (migration 0033): date, `kind` (buy/sell/other), `action` (the
+  statement's own code, verbatim), `asset_class` (equity/option/crypto/cash), symbol, name, signed
+  `quantity` (negative = left the account), price, and the cash side (`amount` + `direction`, null
+  when no cash moved — an expiry, a reward share, coins withdrawn). `dedup_hash` (built in
+  `lib/pdf/investments.ts`, same occurrence-index idea as transactions) makes re-importing a
+  statement, or its corrected reissue, a no-op.
+- **`investment_positions`**: one snapshot per account + date, replaced whole on re-import (rows
+  have no natural key — two option contracts share their underlying's symbol).
+- **Parsers return** `trades` and `positions` on `ParserResult`; the wizard previews them
+  read-only and always sends them on commit (both writes are idempotent, so there is no toggle).
+  The accounts page shows the latest holdings and the trade list on the account's card.
+- **Reconciliation** can't be "opening + credits − debits = closing" for a market value, so a
+  parser may return its own `reconciled` verdict. The brokerage parser sums *every* activity row
+  (trade or not) against the printed "Total Funds Paid and Received", and its holdings against
+  "Total Securities". Crypto returns `null` (nothing to check).
+- **Column-aware parsing.** The brokerage tables print one amount per row under either Debit or
+  Credit, with no placeholder in the empty column; flattened to a line the two are identical.
+  `extractPdf` therefore also returns `items` (raw positioned text per page) and `parse` receives
+  it as an optional third argument. `readTable` in the brokerage parser finds a heading row, takes
+  each heading's x as its column start, and assigns cells by x. Multi-line descriptions (security
+  name above the row, CUSIP below) are attached to the nearest row by y.
+- **Not built:** cost basis and realized gains. Statements don't print them; reconstructing them
+  from trades means lots, splits, option exercises and pre-history — use the broker's 1099.
 
 ## Text extraction — unpdf, no OCR
 `extractPdf` uses **unpdf** (`getDocumentProxy`, bundler-friendly pdf.js, no worker), reads each

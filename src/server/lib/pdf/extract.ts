@@ -7,6 +7,8 @@ import { groupItemsToLines, type PositionedItem } from "@/server/lib/pdf/lines";
 export interface ExtractedPdf {
   pages: string[][]; // lines per page
   lines: string[]; // all lines, in reading order
+  /** Raw positioned text per page, for parsers that must tell table columns apart by x. */
+  items: PositionedItem[][];
   text: string; // lines joined with "\n"
   pageCount: number;
 }
@@ -14,6 +16,7 @@ export interface ExtractedPdf {
 export async function extractPdf(bytes: Uint8Array): Promise<ExtractedPdf> {
   const pdf = await getDocumentProxy(bytes);
   const pages: string[][] = [];
+  const pageItems: PositionedItem[][] = [];
 
   for (let i = 1; i <= pdf.numPages; i++) {
     const page = await pdf.getPage(i);
@@ -27,8 +30,9 @@ export async function extractPdf(bytes: Uint8Array): Promise<ExtractedPdf> {
       }
     }
     pages.push(groupItemsToLines(items));
+    pageItems.push(items);
   }
 
   const lines = pages.flat();
-  return { pages, lines, text: lines.join("\n"), pageCount: pdf.numPages };
+  return { pages, lines, items: pageItems, text: lines.join("\n"), pageCount: pdf.numPages };
 }

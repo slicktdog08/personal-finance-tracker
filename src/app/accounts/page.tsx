@@ -15,22 +15,24 @@ import {
   getAccounts,
   getAccountBalances,
   getAccountUsageCounts,
-  getAccountLastTxnDates, getAccountSyncInfo, getAssets } from "@/server/queries";
+  getAccountLastTxnDates, getAccountSyncInfo, getAssets, getInvestmentHoldings, getInvestmentTrades } from "@/server/queries";
 
 export const dynamic = "force-dynamic";
 
 const wholeUsd = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
 
 export default async function AccountsPage() {
-  let assets, accounts, balances, usage, lastTxn, syncInfo;
+  let assets, accounts, balances, usage, lastTxn, syncInfo, holdings, trades;
   try {
-    [assets, accounts, balances, usage, lastTxn, syncInfo] = await Promise.all([
+    [assets, accounts, balances, usage, lastTxn, syncInfo, holdings, trades] = await Promise.all([
       getAssets(),
       getAccounts(),
       getAccountBalances(),
       getAccountUsageCounts(),
       getAccountLastTxnDates(),
       getAccountSyncInfo(),
+      getInvestmentHoldings(),
+      getInvestmentTrades(),
     ]);
   } catch (e) {
     return <SetupNotice error={e} />;
@@ -141,6 +143,8 @@ export default async function AccountsPage() {
       txnCount={usageMap.get(a.id) ?? 0}
       lastTxn={lastTxn.get(a.id) ?? null}
       sync={syncFor(a.id)}
+      holdings={holdings.filter((h) => h.accountId === a.id)}
+      trades={trades.filter((t) => t.accountId === a.id)}
     />
   );
 
@@ -244,7 +248,7 @@ export default async function AccountsPage() {
       </Card>
 
       {retirementAccounts.length > 0 && (
-        <Card title="Retirement" meta={`${count(retirementAccounts.length)} · ${wholeUsd.format(retirementTotal)}`}>
+        <Card title="Investments" meta={`${count(retirementAccounts.length)} · ${wholeUsd.format(retirementTotal)}`}>
           {retirementAccounts.map(card)}
         </Card>
       )}

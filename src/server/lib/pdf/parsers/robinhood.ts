@@ -44,9 +44,10 @@ export const robinhoodParser: StatementParser = {
     const notes: string[] = [];
 
     // ---- header metadata ----
+    // An overdrawn balance prints as "$-12.34".
     const acctRaw = firstMatch(text, /ACCOUNT NUMBER\s+(\d{4,})/);
-    const opening = parseMoney(firstMatch(text, /OPENING BALANCE\s+\$?([\d,]+\.\d{2})/) ?? "");
-    const closing = parseMoney(firstMatch(text, /CLOSING BALANCE\s+\$?([\d,]+\.\d{2})/) ?? "");
+    const opening = parseMoney(firstMatch(text, /OPENING BALANCE\s+\$?(-?[\d,]+\.\d{2})/) ?? "");
+    const closing = parseMoney(firstMatch(text, /CLOSING BALANCE\s+\$?(-?[\d,]+\.\d{2})/) ?? "");
 
     const psMatch = /PERIOD START\s+(\d{2})-(\d{2})-(\d{4})/.exec(text);
     const peMatch = /PERIOD END\s+(\d{2})-(\d{2})-(\d{4})/.exec(text);

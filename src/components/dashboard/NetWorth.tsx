@@ -48,7 +48,7 @@ export function NetWorth({
             Cash <Money value={cash} kind="neutral" />
             {retirement !== 0 && (
               <>
-                {" "}· Retirement <Money value={retirement} kind="neutral" />
+                {" "}· Investments <Money value={retirement} kind="neutral" />
               </>
             )}
             {assets !== 0 && (
