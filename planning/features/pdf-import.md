@@ -62,6 +62,36 @@ impossible date.
 - **Credit limit:** `meta.creditLimit` flows into the closing balance snapshot, so utilization
   history comes with the import. The opening snapshot carries none.
 
+**Older Capital One layout (before mid-2021).** Same parser, detected by the absence of the
+"Trans Date Post Date" table head. Differences: the header reads `<product> Account Ending in
+1234`, months carry a dot (`Dec. 25, 2025`), rows have one date, and a long description wraps
+onto the line *below* its row (a payment's `AuthDate` value wraps the same way). The activity
+runs down the left half of the page and continues in the right half beside the interest tables,
+so whole-page lines splice unrelated text onto rows — the parser rebuilds its lines from `pages`
+one column at a time (split at x=320). Credits only ever appear in their own block there, so a
+`-` before a purchase's amount is the tail of a wrapped merchant name, not a sign.
+
+**Airline tickets** add `PSGR:` / `ORIG: …, DEST: …` lines under the row; they are kept in
+`raw.travel`.
+
+`parsers/chase-card.ts` (Chase personal and business cards — one layout) follows the same
+liability rules, with these differences:
+- Rows are `mm/dd description amount` with no `$`; a leading minus is a payment or credit, and a
+  cents-only amount prints as `.54`. Chase prints headings twice (`ACCOUNT ACCOUNT ACTIVITY
+  ACTIVITY`), once for screen readers.
+- Fees and interest are ordinary dated rows (`FOREIGN TRANSACTION FEE`, `PURCHASE INTEREST
+  CHARGE`), so nothing is synthesised. The summary check groups purchases, cash advances, balance
+  transfers and fees together, because only the wording tells them apart.
+- Each card on the account closes its rows with `TRANSACTIONS THIS CYCLE (CARD 1234) $…` (a net
+  credit prints with a trailing minus). The rows above it get `raw.card` and are checked against
+  that total — a business account can carry several employee cards.
+- A foreign purchase adds two lines (currency name; `amount X rate (EXCHG RATE)`), kept on the
+  row as `raw.foreignCurrency / foreignAmount / exchangeRate`.
+- Credit limit is `Revolving Credit Amount` on business cards, `Credit Access Line` on personal.
+- Personal statements group rows under headings (`PAYMENTS AND OTHER CREDITS`, `PURCHASE`, …);
+  they are skipped. That variant is covered by a unit test only — no real personal statement
+  has been run through it yet.
+
 ## Investment statements (brokerage, crypto)
 A brokerage or crypto statement is not a cash ledger, and treating it as one corrupts the
 rollups: income/spend totals count every row that isn't categorized `Transfer`, so a `$2,000` buy
