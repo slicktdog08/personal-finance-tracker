@@ -23,6 +23,8 @@ export interface StatementMeta {
   accountType: string | null;
   openingBalance: number | null;
   closingBalance: number | null;
+  /** A credit card's limit as of the statement's close, when the statement prints one. */
+  creditLimit?: number | null;
   periodStart: string | null; // ISO
   periodEnd: string | null; // ISO
 }
@@ -39,6 +41,13 @@ export interface ParserResult {
   txns: ParsedTxn[];
   /** End-of-day balances, for statements that print a running balance on every row. */
   dailyBalances?: DailyBalance[];
+  /**
+   * The parser's own verdict on whether the statement adds up, for formats where the generic
+   * check (opening + credits − debits == closing) can't apply — a credit card's balances are
+   * amounts owed, so charges raise them and payments lower them. Omit to get the generic
+   * check; null = nothing to check against.
+   */
+  reconciled?: boolean | null;
   notes: string[]; // warnings, e.g. lines that looked transaction-like but didn't parse
 }
 

@@ -3,8 +3,9 @@
 import type { ParserResult, StatementParser } from "@/server/lib/pdf/types";
 import { robinhoodParser } from "@/server/lib/pdf/parsers/robinhood";
 import { capitalOneParser } from "@/server/lib/pdf/parsers/capitalone";
+import { capitalOneCardParser } from "@/server/lib/pdf/parsers/capitalone-card";
 
-export const PARSERS: StatementParser[] = [robinhoodParser, capitalOneParser];
+export const PARSERS: StatementParser[] = [robinhoodParser, capitalOneParser, capitalOneCardParser];
 
 export interface DetectResult {
   parser: StatementParser | null;

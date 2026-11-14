@@ -129,6 +129,7 @@ function buildBalanceSuggestions(
   periodEnd: string | null,
   firstTxnDate: string | null,
   lastTxnDate: string | null,
+  creditLimit: number | null = null,
 ): StatementBalance[] {
   const inst = institution ?? "Statement";
   const periodLabel = (asOf: string) => {
@@ -153,7 +154,8 @@ function buildBalanceSuggestions(
       kind: "closing",
       balance: closing,
       asOf: closeAsOf,
-      creditLimit: null,
+      // The printed limit is the one in force at the close; the opening snapshot stays without.
+      creditLimit,
       note: `${inst} closing balance${periodLabel(closeAsOf)}`,
     });
   }
@@ -197,9 +199,11 @@ export async function parsePdfStatements(files: PdfFileInput[]): Promise<ParsedS
       const lastTxnDate = txnDates[txnDates.length - 1] ?? null;
       const net = result.txns.reduce((n, t) => n + (t.direction === "Credit" ? 1 : -1) * (t.amount ?? 0), 0);
       const reconciled =
-        m.openingBalance != null && m.closingBalance != null
-          ? Math.abs(m.openingBalance + net - m.closingBalance) < 0.005
-          : null;
+        result.reconciled !== undefined
+          ? result.reconciled
+          : m.openingBalance != null && m.closingBalance != null
+            ? Math.abs(m.openingBalance + net - m.closingBalance) < 0.005
+            : null;
 
       out.push({
         filename: f.name,
@@ -226,6 +230,7 @@ export async function parsePdfStatements(files: PdfFileInput[]): Promise<ParsedS
           m.periodEnd,
           firstTxnDate,
           lastTxnDate,
+          m.creditLimit ?? null,
         ),
         dailyBalances: result.dailyBalances ?? [],
         reconciled,

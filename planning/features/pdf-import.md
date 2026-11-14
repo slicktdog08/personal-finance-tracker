@@ -44,6 +44,24 @@ Robinhood's row regex uses two money columns where `--` marks the empty side, so
 determines Credit vs Debit**; `mdyToIso` range-validates dates so a stray match can't inject an
 impossible date.
 
+## Credit card statements
+`parsers/capitalone-card.ts` (Capital One cards) is the model for a liability account:
+- **Balances are amounts owed.** Opening = "Previous Balance", closing = "New Balance". The generic
+  check (opening + credits − debits == closing) has the wrong sign for that, so the parser returns
+  its own `reconciled`: previous + charges − payments/credits == new. Each kind of row (payments
+  and credits, transactions, fees, interest) is also compared with its Account Summary figure, and
+  a mismatch becomes a note naming the kind that is short.
+- **Direction:** purchases, fees and interest are `Debit`; payments, refunds and reward credits
+  (printed with a leading `- `) are `Credit`.
+- **Interest has no row date** — it is imported as one `Debit` per non-zero "Interest Charge on …"
+  line, dated the period end.
+- **Dates:** the transaction date is used (it can fall a few days before the period starts); the
+  post date is kept in `raw.postDate`. Rows print no year, so it is inferred from the period.
+- **Foreign purchases** add three lines under the row (original amount, currency, rate). They are
+  attached to the row as `raw.foreignAmount / foreignCurrency / exchangeRate`, not treated as rows.
+- **Credit limit:** `meta.creditLimit` flows into the closing balance snapshot, so utilization
+  history comes with the import. The opening snapshot carries none.
+
 ## Text extraction — unpdf, no OCR
 `extractPdf` uses **unpdf** (`getDocumentProxy`, bundler-friendly pdf.js, no worker), reads each
 page's positioned text items (x=`transform[4]`, y=`transform[5]`), and `groupItemsToLines`
