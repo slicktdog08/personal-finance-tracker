@@ -97,6 +97,23 @@ export const accounts = mysqlTable(
   ],
 );
 
+// Numbers an account used to go by. A reissued card keeps its history but changes its last
+// four; merging the old account into the current one (lib/account-merge.ts) leaves the old
+// number here, so a statement that still carries it lands on the surviving account instead of
+// recreating the one that was merged away. Lookups go through lib/account-aliases.ts.
+export const accountAliases = mysqlTable(
+  "account_aliases",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    accountId: int("account_id")
+      .notNull()
+      .references(() => accounts.id, { onDelete: "cascade" }),
+    accountNumber: varchar("account_number", { length: 8 }).notNull(),
+    createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`),
+  },
+  (t) => [uniqueIndex("uq_alias_number").on(t.accountNumber), index("idx_alias_acct").on(t.accountId)],
+);
+
 // A bill's state within one month — the row the user edits.
 export const billInstances = mysqlTable(
   "bill_instances",

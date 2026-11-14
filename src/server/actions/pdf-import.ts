@@ -8,7 +8,8 @@ import { revalidatePath } from "next/cache";
 import { hashRows } from "@/server/lib/dedup";
 import { findPendingMatches, findSyncedDuplicates } from "@/server/lib/sync/import-guard";
 import { categorize, type CategoryRule } from "@/server/lib/categorize";
-import { accountIdsByNumber, loadRules } from "@/server/lib/rules";
+import { loadRules } from "@/server/lib/rules";
+import { accountIdsByNumber, ensureAccounts } from "@/server/lib/account-aliases";
 import { commitImport } from "@/server/actions/import";
 import { extractPdf } from "@/server/lib/pdf/extract";
 import { detectAndParse } from "@/server/lib/pdf/registry";
@@ -317,14 +318,9 @@ export async function commitPdfStatements(
 
   // Ensure every referenced account exists (covers balance-only statements too).
   const acctNums = [...new Set(statements.map((s) => s.accountNumber).filter(Boolean))];
-  if (acctNums.length) {
-    await db
-      .insert(accounts)
-      .values(acctNums.map((n) => ({ accountNumber: n })))
-      .onDuplicateKeyUpdate({ set: { id: sql`id` } });
-  }
+  // A former number of a merged account resolves to that account rather than making a new one.
+  const acctMap = await ensureAccounts(acctNums);
   const acctRows = await db.select().from(accounts);
-  const acctMap = new Map(acctRows.map((a) => [a.accountNumber, a.id]));
 
   // Stamp institution/type on accounts that don't have them yet (best-effort enrichment).
   for (const s of statements) {
