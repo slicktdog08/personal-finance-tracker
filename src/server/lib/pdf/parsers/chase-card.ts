@@ -27,6 +27,9 @@
 //   01/21 EURO                                <- a foreign purchase adds two lines: the
 //   16.20 X 1.111111111 (EXCHG RATE)             currency, then original amount and rate
 //   01/21 FOREIGN TRANSACTION FEE .54
+//   01/22 EXAMPLE AIR 0001234567890 800-555-0100 TX 120.00
+//   031526 1 S AAA BBB                        <- an airline ticket lists its legs: departure
+//   2 T BBB AAA                                  date (first leg only), leg, fare class, airports
 //   01/27 PURCHASE INTEREST CHARGE 13.50
 //   PAT EXAMPLE
 //   TRANSACTIONS THIS CYCLE (CARD 1234) $170.00   <- signed sum of that card's rows; a net
@@ -35,6 +38,8 @@
 //
 // Personal statements also break the rows up under headings (PAYMENTS AND OTHER CREDITS,
 // PURCHASE, FEES CHARGED, INTEREST CHARGED); those are skipped and the row's sign decides.
+// A refund of a foreign purchase can print its currency line as a bare date ("01/21"), and a
+// stray "`" sometimes lands inside or between the summary lines.
 //
 // Balances are amounts OWED (previous → new), so the generic check (opening + credits −
 // debits == closing) has the wrong sign for a card. The parser reports its own verdict:
@@ -53,14 +58,16 @@ const ACTIVITY_RE = /^ACCOUNT (?:ACCOUNT )?ACTIVITY\b/;
 const PAGE_FOOTER_RE = /\bPage \d+ of \d+\b/;
 // "<mm/dd> <description> <amount>" — the amount has no "$" and may lack a leading digit.
 const TXN_RE = /^(\d{2})\/(\d{2}) (.+?) (-?[\d,]*\.\d{2})$/;
-// "01/21 EURO" then "16.20 X 1.111111111 (EXCHG RATE)"
-const FX_CURRENCY_RE = /^\d{2}\/\d{2} ([A-Z][A-Z .'-]*)$/;
+// "01/21 EURO" (or just "01/21") then "16.20 X 1.111111111 (EXCHG RATE)"
+const FX_CURRENCY_RE = /^\d{2}\/\d{2}(?: ([A-Z][A-Z .'-]*))?$/;
 const FX_RATE_RE = /^([\d,]*\.\d+) X ([\d.]+) \(EXCHG RATE\)$/;
+// "031526 1 S AAA BBB" then "2 T BBB AAA" — the legs of an airline ticket.
+const TRAVEL_RE = /^(?:\d{6} )?\d [A-Z] [A-Z]{3} [A-Z]{3}$/;
 // "TRANSACTIONS THIS CYCLE (CARD 1234) $170.00" — a trailing minus marks a net credit.
 const CARD_TOTAL_RE = /^TRANSACTIONS THIS CYCLE \(CARD (\d{4})\) (-?)\$([\d,]*\.\d{2})(-?)$/;
 // Lines that sit between rows without being one: column heads and section headings.
 const SKIP_RE =
-  /^(?:Table Summary|Date of|Transaction Merchant Name or Transaction Description \$ Amount|INCLUDING PAYMENTS RECEIVED|PAYMENTS? AND OTHER CREDITS|RETURNS AND OTHER CREDITS|PURCHASES?|CASH ADVANCES?|BALANCE TRANSFERS?|FEES CHARGED|INTEREST CHARGED|TOTAL (?:FEES|INTEREST) FOR THIS PERIOD .*)$/;
+  /^(?:`|Table Summary|Date of|Transaction Merchant Name or Transaction Description \$ Amount|INCLUDING PAYMENTS RECEIVED|PAYMENTS? AND OTHER CREDITS|RETURNS AND OTHER CREDITS|PURCHASES?|CASH ADVANCES?|BALANCE TRANSFERS?|FEES CHARGED|INTEREST CHARGED|TOTAL (?:FEES|INTEREST) FOR THIS PERIOD .*)$/;
 // Everything after the activity is totals and disclosures.
 const END_RE = /Totals Year-to-Date/;
 
@@ -68,7 +75,7 @@ type Kind = "credits" | "charges" | "interest";
 
 // A figure from the Account Summary, signed as printed ("-$300.00" → −300).
 function summary(text: string, label: string): number | null {
-  const m = new RegExp(String.raw`^${label} ([-+]?)(\$[\d,]*\.?\d*)$`, "m").exec(text);
+  const m = new RegExp(String.raw`^${label} (?:\` )?([-+]?)(\$[\d,]*\.?\d*)$`, "m").exec(text);
   if (!m) return null;
   const n = parseMoney(m[2]);
   return n == null ? null : m[1] === "-" ? -n : n;
@@ -183,7 +190,11 @@ export const chaseCardParser: StatementParser = {
       }
       const fc = FX_CURRENCY_RE.exec(line);
       if (last && fc && !last.raw.foreignCurrency) {
-        last.raw.foreignCurrency = fc[1].trim();
+        if (fc[1]) last.raw.foreignCurrency = fc[1].trim();
+        continue;
+      }
+      if (last && TRAVEL_RE.test(line)) {
+        last.raw.travel = last.raw.travel ? `${last.raw.travel}; ${line}` : line;
         continue;
       }
 

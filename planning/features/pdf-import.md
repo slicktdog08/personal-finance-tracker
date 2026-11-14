@@ -89,8 +89,14 @@ liability rules, with these differences:
   row as `raw.foreignCurrency / foreignAmount / exchangeRate`.
 - Credit limit is `Revolving Credit Amount` on business cards, `Credit Access Line` on personal.
 - Personal statements group rows under headings (`PAYMENTS AND OTHER CREDITS`, `PURCHASE`, …);
-  they are skipped. That variant is covered by a unit test only — no real personal statement
-  has been run through it yet.
+  they are skipped.
+- Airline tickets list their legs under the row (`031526 1 S AAA BBB`, then `2 T BBB AAA`); they
+  are kept in `raw.travel`.
+- Quirks seen on personal statements: a stray `` ` `` inside or between summary lines (tolerated
+  — otherwise the figure on that line is lost), and a foreign refund whose currency line is a
+  bare date with no currency name.
+- The printed account number changes when a card is reissued, so older statements of the same
+  account can carry a different last-4; the user picks the account in the import wizard.
 
 ## Investment statements (brokerage, crypto)
 A brokerage or crypto statement is not a cash ledger, and treating it as one corrupts the
