@@ -169,4 +169,34 @@ describe("Chase credit card statement parser", () => {
     const lines = [...STATEMENT.slice(0, i), "Something new", ...STATEMENT.slice(i)];
     assert.deepEqual(parse(lines).notes, ["Unparsed line: Something new"]);
   });
+
+  // Things seen on personal-card statements.
+  test("a stray backtick in the summary does not hide a figure", () => {
+    const lines = STATEMENT.flatMap((l) => {
+      if (l === "Fees Charged +$0.54") return ["Fees Charged ` +$0.54"];
+      if (l === "Revolving Credit Amount $2,000") return ["Credit Access Line ` $2,000", "`"];
+      return [l];
+    });
+    const p = parse(lines);
+    assert.equal(p.meta.creditLimit, 2000);
+    assert.equal(p.reconciled, true);
+    assert.deepEqual(p.notes, []); // a missing fee figure would report the purchase rows as 0.54 over
+  });
+
+  test("an airline ticket's legs stay on the row instead of becoming notes", () => {
+    const lines = STATEMENT.flatMap((l) => (l.startsWith("12/29 ") ? [l, "031526 1 S AAA BBB", "2 T BBB AAA"] : [l]));
+    const p = parse(lines);
+    assert.deepEqual(rows(p), EXPECTED);
+    assert.equal(p.txns[1].raw.travel, "031526 1 S AAA BBB; 2 T BBB AAA");
+    assert.deepEqual(p.notes, []);
+  });
+
+  test("a foreign refund whose currency line is a bare date keeps its rate", () => {
+    const lines = STATEMENT.flatMap((l) => (l === "01/21 EURO" ? ["01/21"] : [l]));
+    const p = parse(lines);
+    assert.deepEqual(rows(p), EXPECTED);
+    assert.equal(p.txns[2].raw.foreignCurrency, undefined);
+    assert.equal(p.txns[2].raw.exchangeRate, "1.111111111");
+    assert.deepEqual(p.notes, []);
+  });
 });
