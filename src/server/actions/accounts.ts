@@ -6,6 +6,7 @@ import { eq, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { requireSession } from "@/server/auth/session";
 import { dropAlias, mergeAccounts, planAccountMerge, type MergeResult } from "@/server/lib/account-merge";
+import { moveBalanceSnapshots, type BalanceConflict, type BalanceMoveResult } from "@/server/lib/balance-move";
 
 // A liability account (Credit/Loan) surfaces on /accounts, /debts, and /dashboard — all three
 // are lenses over the same account_balances ledger, so every write refreshes all of them.
@@ -73,6 +74,24 @@ export async function mergeAccount(fromId: number, intoId: number): Promise<Merg
   await requireSession();
   const res = await mergeAccounts(fromId, intoId);
   // Transactions, budgets, goals and rules all name accounts — refresh everything.
+  if (res.ok) revalidatePath("/", "layout");
+  return res;
+}
+
+/**
+ * Move the chosen balance snapshots (balance, limit, APR, minimum payment) from one account to
+ * another. Dates the destination already has are skipped or replaced, as asked. Reversible by
+ * moving them back, unless `replace` deleted the destination's own rows.
+ */
+export async function moveAccountBalances(
+  ids: number[],
+  fromId: number,
+  intoId: number,
+  conflict: BalanceConflict = "skip",
+): Promise<BalanceMoveResult> {
+  await requireSession();
+  const res = await moveBalanceSnapshots(ids, fromId, intoId, conflict);
+  // Balances feed net worth, debts, the budget's debt lines and the dashboard.
   if (res.ok) revalidatePath("/", "layout");
   return res;
 }

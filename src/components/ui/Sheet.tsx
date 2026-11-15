@@ -25,6 +25,7 @@ export function Sheet({
   desktop = "centered",
   width = 320,
   footer,
+  wide = false,
 }: {
   open: boolean;
   onClose: () => void;
@@ -34,6 +35,8 @@ export function Sheet({
   desktop?: "anchored" | "centered";
   width?: number;
   footer?: ReactNode;
+  /** Centered desktop dialog at a list-friendly width instead of the default form width. */
+  wide?: boolean;
 }) {
   const isDesktop = useIsDesktop();
   const panelRef = useRef<HTMLDivElement>(null);
@@ -156,7 +159,7 @@ export function Sheet({
   }
 
   const panelCls = isDesktop
-    ? `fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-50 w-full max-w-md rounded-sheet border border-line ${surface} shadow-overlay max-h-[85vh] overflow-y-auto p-5 outline-none will-change-[transform,opacity] ${
+    ? `fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-50 w-[calc(100vw-2rem)] ${wide ? "max-w-2xl" : "max-w-md"} rounded-sheet border border-line ${surface} shadow-overlay max-h-[85vh] overflow-y-auto p-5 outline-none will-change-[transform,opacity] ${
         closing
           ? "motion-safe:animate-[dialog-out_.2s_ease-in_forwards]"
           : "motion-safe:animate-[dialog-in_.2s_ease-out]"
