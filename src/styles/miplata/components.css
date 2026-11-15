@@ -100,6 +100,8 @@ button.mp-badge:hover{filter:brightness(.97)}
 .mp-check input{appearance:none;width:18px;height:18px;margin:0;border-radius:5px;border:1.5px solid var(--mp-border-strong);background:var(--mp-bg-surface);display:grid;place-content:center;cursor:pointer;transition:background var(--mp-dur-fast),border-color var(--mp-dur-fast)}
 .mp-check input:checked{background:var(--mp-accent);border-color:var(--mp-accent)}
 .mp-check input:checked::after{content:"";width:9px;height:5px;border:2px solid var(--mp-accent-ink);border-top:0;border-right:0;transform:rotate(-45deg) translate(1px,-1px)}
+.mp-check input:indeterminate{background:var(--mp-accent);border-color:var(--mp-accent)}
+.mp-check input:indeterminate::after{content:"";width:8px;height:2px;border-radius:1px;background:var(--mp-accent-ink)}
 .mp-check input:focus-visible{box-shadow:var(--mp-focus-ring)}
 .mp-switch{display:inline-flex;align-items:center;gap:10px;cursor:pointer;font-size:var(--mp-text-base)}
 .mp-switch input{appearance:none;width:36px;height:22px;margin:0;border-radius:var(--mp-radius-pill);background:var(--mp-border-2);position:relative;cursor:pointer;transition:background var(--mp-dur-base) var(--mp-ease-std);flex:none}

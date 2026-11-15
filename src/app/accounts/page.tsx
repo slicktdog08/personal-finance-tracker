@@ -5,6 +5,7 @@ import { AccountCard } from "@/components/accounts/AccountCard";
 import { AddAccount } from "@/components/accounts/AddAccount";
 import { AddAsset } from "@/components/accounts/AddAsset";
 import { MergeAccounts } from "@/components/accounts/MergeAccounts";
+import { MoveBalances } from "@/components/accounts/MoveBalances";
 import { AssetCard } from "@/components/accounts/AssetCard";
 import { SyncNowButton } from "@/components/accounts/SyncNowButton";
 import { accountGlyph, accountMaskLine } from "@/components/accounts/account-glyph";
@@ -192,6 +193,13 @@ export default async function AccountsPage() {
     </Link>
   );
   const count = (n: number) => `${n} account${n === 1 ? "" : "s"}`;
+  // The account pickers in the Move and Merge dialogs.
+  const choices = accounts.map((a) => ({
+    id: a.id,
+    name: a.label || a.institution || "Account",
+    accountNumber: a.accountNumber,
+    accountType: a.accountType,
+  }));
 
   return (
     <div className="space-y-5">
@@ -201,14 +209,21 @@ export default async function AccountsPage() {
         actions={
           <>
             {canSync && <SyncNowButton />}
-            <MergeAccounts
-              accounts={accounts.map((a) => ({
-                id: a.id,
-                name: a.label || a.institution || "Account",
-                accountNumber: a.accountNumber,
-                accountType: a.accountType,
+            <MoveBalances
+              accounts={choices}
+              balances={balances.map((b) => ({
+                id: b.id,
+                accountId: b.accountId,
+                asOf: b.asOf,
+                balance: b.balance,
+                creditLimit: b.creditLimit,
+                apr: b.apr,
+                minPayment: b.minPayment,
+                note: b.note,
+                source: b.source,
               }))}
             />
+            <MergeAccounts accounts={choices} />
             <AddAsset />
             <AddAccount />
           </>
