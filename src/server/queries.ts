@@ -2839,6 +2839,21 @@ export async function getBudgetedPeriodLabels(): Promise<Set<string>> {
 }
 
 /**
+ * Whether a month has a budget and whether it has been closed out — the dashboard's nudge to
+ * finalize last month. Null when the month has no budget at all.
+ */
+export async function getBudgetCloseState(periodLabel: string): Promise<{ finalized: boolean } | null> {
+  await requireSession();
+  const [row] = await db
+    .select({ finalizedAt: budgets.finalizedAt })
+    .from(budgets)
+    .innerJoin(periods, eq(periods.id, budgets.periodId))
+    .where(eq(periods.label, periodLabel))
+    .limit(1);
+  return row ? { finalized: row.finalizedAt != null } : null;
+}
+
+/**
  * Debit payments toward each liability in a month, keyed by accountId. A payment counts when
  * it's linked (bill_id) to the account's bill and did NOT happen on the liability itself — a
  * card's own linked rows are purchases and interest, not payments.

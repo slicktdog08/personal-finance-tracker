@@ -18,6 +18,10 @@ import { CashAccounts } from "@/components/dashboard/CashAccounts";
 import { GoalsCard } from "@/components/dashboard/GoalsCard";
 import { CardLink, dayLabel } from "@/components/dashboard/kit";
 import { CategoryTrends, type CategoryTrendRow } from "@/components/dashboard/CategoryTrends";
+import { Vitals } from "@/components/dashboard/Vitals";
+import { AdvisorCard } from "@/components/dashboard/AdvisorCard";
+import { Investments } from "@/components/dashboard/Investments";
+import { YearToDate } from "@/components/dashboard/YearToDate";
 import { DashboardGrid, type DashboardWidget } from "@/components/dashboard/DashboardGrid";
 import type { WidgetId } from "@/lib/dashboard-layout";
 import {
@@ -26,6 +30,7 @@ import {
   getStatusConfig,
   getCashflowByPeriod,
   getCategorySpend,
+  getCategorySpendByPeriods,
   getCategoryRows,
   getCashOnHand,
   getLiabilityAccounts,
@@ -46,6 +51,9 @@ import {
   getCashProjection,
   getDailyCashOnHand,
   getDashboardLayout,
+  getRetirementAccounts,
+  getInvestmentHoldings,
+  getBudgetCloseState,
   type TxnSummary,
 } from "@/server/queries";
 import { isoToUtc, todayIso, utcToIso } from "@/server/lib/pay-schedule";
@@ -55,6 +63,9 @@ import { cardRebalanceFrom, rebalancePlans } from "@/server/lib/card-rebalance";
 import { ensureCurrentPeriods } from "@/server/periods";
 import { formatMoney, toNum } from "@/server/lib/money";
 import { monthlyInterest } from "@/server/lib/debt";
+import { computeVitals, yearToDate } from "@/server/lib/dashboard-vitals";
+import { windowStartLabel } from "@/server/lib/trends";
+import { countNewInsights, latestCheckin, listInsights } from "@/server/lib/advisor/store";
 import {
   prettyPeriod,
   shortMonthLabel,
@@ -140,6 +151,10 @@ export default async function DashboardPage({
     projectionBills,
     layout,
     liabilityStart,
+    advisor,
+    investAccounts,
+    holdings,
+    lastMonthBudget,
   ] = await Promise.all([
     getInstances(selected.id),
     getCategorySpend(selected.label),
@@ -163,17 +178,26 @@ export default async function DashboardPage({
     getDashboardLayout(),
     // Card balances as the month began — the rebalance widget measures today against them.
     isCurrentMonth ? getLiabilityStartBalances(monthStart, today) : Promise.resolve(null),
+    // What the advisor has flagged. Its tables arrive with a later migration than the dashboard's,
+    // so a database without them simply has no advisor panel.
+    Promise.all([listInsights({ statuses: ["new", "seen"], limit: 3 }), countNewInsights(), latestCheckin()])
+      .then(([open, fresh, checkin]) => ({ open, fresh, checkin }))
+      .catch(() => null),
+    // Per-account and per-holding detail is the latest on record — about now, like payday.
+    isCurrentMonth ? getRetirementAccounts() : Promise.resolve([]),
+    isCurrentMonth ? getInvestmentHoldings() : Promise.resolve([]),
+    // Is last month still open? Closing it out freezes the plan and writes the outcome report.
+    isCurrentMonth ? getBudgetCloseState(windowStartLabel(selected.label, 2)) : Promise.resolve(null),
   ]);
   // The last six months up to the one viewed, for the category small multiples. The viewed month's
-  // spend is already in hand; the rest are one query each.
+  // spend is already in hand; the rest come back from one grouped query.
   const trendLabels = periods
     .filter((p) => p.label <= selected.label)
     .slice(0, 6)
     .map((p) => p.label)
     .reverse();
-  const spendByMonth = await Promise.all(
-    trendLabels.map((l) => (l === selected.label ? Promise.resolve(catSpend) : getCategorySpend(l))),
-  );
+  const earlierSpend = await getCategorySpendByPeriods(trendLabels.filter((l) => l !== selected.label));
+  const spendByMonth = trendLabels.map((l) => (l === selected.label ? catSpend : (earlierSpend.get(l) ?? [])));
   const activeGoals = goals.filter((g) => g.status !== "archived");
   // Cash projection needs a budget AND a recorded cash balance; shown only while the month is
   // still running (a finished month has nothing left to project).
@@ -322,8 +346,16 @@ export default async function DashboardPage({
     else f.outgoing += toNum(c.total) ?? 0;
     flowMap.set(c.label, f);
   }
-  const flows = [...flowMap.values()].sort((a, b) => (a.label < b.label ? -1 : 1));
+  const allFlows = [...flowMap.values()].sort((a, b) => (a.label < b.label ? -1 : 1));
+  // The chart shows the twelve months ending at the one viewed (or at today, when that's later):
+  // with years of imported history every month no longer fits, and Trends is the place for it.
+  const flowsEnd = currentLabel != null && currentLabel > selected.label ? currentLabel : selected.label;
+  const flows = allFlows.filter((f) => f.label <= flowsEnd).slice(-12);
   const flowsHi = flows.findIndex((f) => f.label === selected.label);
+
+  // ---- Vital signs + the year so far: both read the same month-by-month flow ----
+  const vitals = computeVitals(allFlows, selected.label, hasRecordedCash ? cashTotal : null);
+  const ytd = yearToDate(allFlows, selected.label);
 
   // ---- Income vs outgoing (selected month) ----
   const maxFlow = Math.max(income, outgoing, 1);
@@ -466,6 +498,12 @@ export default async function DashboardPage({
     });
   if (uncategorizedCount > 0)
     attention.push({ key: "uncat", label: `${uncategorizedCount} to categorize`, href: "/transactions/categorize", tone: "info" });
+  if (lastMonthBudget && !lastMonthBudget.finalized) {
+    const prev = windowStartLabel(selected.label, 2);
+    attention.push({ key: "close-out", label: `${shortMonthLabel(prev).replace(/ '\d\d$/, "")} not closed out`, href: `/budget?period=${prev}`, tone: "info" });
+  }
+  if (isCurrentMonth && advisor && advisor.fresh > 0)
+    attention.push({ key: "insights", label: `${advisor.fresh} new insight${advisor.fresh === 1 ? "" : "s"}`, href: "/insights", tone: "info" });
   for (const g of activeGoals.filter((g) => g.shortfall > 0))
     attention.push({ key: `goal-${g.id}`, label: `${g.name} short`, amount: g.shortfall, href: "/goals", tone: "amber" });
   // Last bank sync — shown in the header always; its health chips only on the current month.
@@ -519,6 +557,16 @@ export default async function DashboardPage({
   const assetsNow = selTrend?.assets ?? 0;
   const netNow = cashTotal + retirementNow + assetsNow - creditOwed - debtOwed;
   const netPrev = trendHi > 0 ? netTrend[trendHi - 1].value : null;
+
+  // ---- Investments: retirement + brokerage, as of the selected month's end ----
+  // 0 means "nothing recorded yet" in the trend (see BalanceTrendPoint), so it draws as a gap.
+  const investTrend = balanceTrends.map((t) => ({ label: shortMonthLabel(t.label), value: t.retirement !== 0 ? t.retirement : null }));
+  const investAt = (i: number) => (i >= 0 && i < balanceTrends.length && balanceTrends[i].retirement !== 0 ? balanceTrends[i].retirement : null);
+  const topHoldings = holdings
+    .map((h) => ({ key: `${h.accountId}-${h.id}`, symbol: h.symbol, name: h.name, value: toNum(h.marketValue) ?? 0 }))
+    .filter((h) => h.value > 0)
+    .slice(0, 5);
+  const holdingsAsOf = holdings.reduce<string | null>((m, h) => (!m || h.asOf > m ? h.asOf : m), null);
 
   // ---- Category small multiples: the six biggest categories over the trailing months ----
   const spendMaps = spendByMonth.map((rows) => new Map(rows.map((r) => [r.category ?? "", toNum(r.total) ?? 0])));
@@ -575,6 +623,24 @@ export default async function DashboardPage({
   // other month rather than showing a "next paycheck" unrelated to the screen.
   if (isCurrentMonth) add("payday", "Payday", <PaydayCountdown schedule={paySchedule} today={today} />);
 
+  // The ratios to steer by. Runway and savings rate need a finished month behind them; the two
+  // debt figures need a card or a loan — with neither there is nothing to show yet.
+  if (vitals.basis.length > 0 || creditAccounts.length > 0 || loanAccounts.length > 0)
+    add(
+      "vitals",
+      "Vital signs",
+      <Card title="Vital signs" action={<CardLink href="/trends">Trends</CardLink>}>
+        <Vitals
+          vitals={vitals}
+          cash={hasRecordedCash ? cashTotal : null}
+          utilization={hasRecordedCredit ? creditUtil : null}
+          creditOwed={creditOwed}
+          creditLimit={creditLimitTotal}
+          interest={debtInterest}
+        />
+      </Card>,
+    );
+
   // What the cards have grown by since the 1st — about today, so only on the current month.
   if (rebalance && (rebalance.rows.length || rebalance.missing.length))
     add(
@@ -607,6 +673,23 @@ export default async function DashboardPage({
       "cash-month",
       "Cash this month",
       <CashChartCard daily={dailyCash} projection={cashProjection} periodLabel={selected.label} lines={budget?.lines ?? []} unplanned={budget?.unplannedSpend} today={today} />,
+    );
+
+  // What the advisor has flagged and nobody has dealt with — about now, so only on this month.
+  if (isCurrentMonth && advisor && (advisor.open.length > 0 || advisor.checkin?.summary))
+    add(
+      "advisor",
+      "Advisor",
+      <Card
+        title="From your advisor"
+        meta={advisor.fresh > 0 ? `${advisor.fresh} new` : undefined}
+        action={<CardLink href="/insights">Insights</CardLink>}
+      >
+        <AdvisorCard
+          insights={advisor.open}
+          checkin={advisor.checkin?.summary ? { summary: advisor.checkin.summary, finishedAt: advisor.checkin.finishedAt } : null}
+        />
+      </Card>,
     );
 
   // 3 · Is it going down? Debt, the month's budget, net worth.
@@ -672,6 +755,36 @@ export default async function DashboardPage({
       "Savings goals",
       <Card title="Savings goals" action={<CardLink href="/goals">Goals</CardLink>}>
         <GoalsCard goals={activeGoals.slice(0, 6)} />
+      </Card>,
+    );
+
+  // The long-term money: what's invested, and the year so far against the last one.
+  if (retirementNow !== 0)
+    add(
+      "investments",
+      "Investments",
+      <Card title="Investments" action={<CardLink href="/accounts">Accounts</CardLink>}>
+        <Investments
+          total={retirementNow}
+          prev={investAt(trendHi - 1)}
+          prevLabel={trendHi > 0 ? shortMonthLabel(balanceTrends[trendHi - 1].label).replace(/ '\d\d$/, "") : null}
+          yearAgo={investAt(trendHi - 12)}
+          trend={investTrend}
+          highlightIndex={trendHi}
+          accounts={investAccounts
+            .filter((a) => a.active || (a.balance ?? 0) !== 0)
+            .map((a) => ({ id: a.id, name: a.label || a.institution || `··${a.accountNumber.slice(-4)}`, balance: a.balance, asOf: a.asOf }))}
+          holdings={topHoldings}
+          holdingsAsOf={holdingsAsOf}
+        />
+      </Card>,
+    );
+  if (ytd)
+    add(
+      "year-to-date",
+      "This year",
+      <Card title={`${ytd.year} so far`} meta={ytd.months > 1 ? `Jan–${shortMonthLabel(selected.label).replace(/ '\d\d$/, "")}` : "Jan"} action={<CardLink href="/trends">Trends</CardLink>}>
+        <YearToDate data={ytd} />
       </Card>,
     );
 
@@ -982,7 +1095,7 @@ export default async function DashboardPage({
   add(
     "income-vs-outgoing",
     "Income vs outgoing",
-    <Card title="Income vs outgoing" meta="by month">
+    <Card title="Income vs outgoing" meta={flows.length < allFlows.length ? `last ${flows.length} months` : "by month"} action={<CardLink href="/trends">Trends</CardLink>}>
       {flows.length === 0 ? (
         <p className="text-sm text-fg-3">No transaction data yet. Fills in as you import bank CSVs.</p>
       ) : (

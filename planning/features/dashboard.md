@@ -132,3 +132,36 @@ as a payment owed to that card on top of the debt payoff payment."
 - Same figure exposed to agents as MCP tool `get_card_rebalance` (per card: start, balance,
   pending, now, change, owe; plus totalOwe and missing). Dashboard and tool both build it through
   `cardRebalanceFrom` so they can't disagree.
+
+## Growing with the data: hide/show + four widgets (2026-11-14)
+The app now holds advisor findings, investment statements and years of imported history, none of
+which the dashboard showed. Added, each a normal widget (`WIDGET_IDS` + `DEFAULT_LAYOUT` + `add()`):
+- **Vital signs** (`vitals`, full width under the hero) — `Vitals.tsx`, rule in
+  `src/server/lib/dashboard-vitals.ts` (`computeVitals`, unit-tested). Runway = cash on hand ÷
+  average monthly outgoing; savings rate = (in − out) ÷ in. Both average the last three months
+  *before* the one viewed that recorded any flow — the month in progress is left out because it
+  swings daily. Card utilization and cost of debt (interest/mo, ×12) reuse figures the page
+  already had. Tones: runway < 1 mo over, < 3 warn; utilization ≥ 30% warn, ≥ 50% over.
+- **From your advisor** (`advisor`, current month only) — `AdvisorCard.tsx`. Top three open
+  insights (`listInsights`, severity first) plus the latest check-in's summary. Reading them here
+  does not mark them seen. The fetch is wrapped in a catch so a DB without the advisor tables just
+  has no panel.
+- **Investments** (`investments`) — `Investments.tsx`. Total and sparkline from
+  `getBalanceTrends().retirement` as of the viewed month (vs last month, vs twelve months back);
+  per-account balances and the five largest holdings (`getInvestmentHoldings`) are latest-on-record,
+  so they are fetched for the current month only. Shown when the total is non-zero.
+- **This year** (`year-to-date`) — `YearToDate.tsx`, `yearToDate()` in the same lib. January
+  through the viewed month beside the same months a year earlier; spending up is toned as bad.
+
+Tidy-ups in the same pass:
+- **Hide a widget.** `LayoutItem.hidden?: true` (absent when shown, so old saved layouts are
+  unchanged). Customize mode has an eye button per widget and a "Hidden:" row of chips to bring
+  one back. Desktop and phone hide independently (`lg:hidden` / `max-lg:hidden` on the tile); an
+  uncustomized phone layout follows the desktop's hidden set. A hidden widget's width goes to its
+  row neighbours through `effectiveWidths`, same as an absent one. Its data is still fetched.
+- **Income vs outgoing** shows the twelve months ending at the viewed month (or today) and links
+  to Trends — with years of history every month no longer fits.
+- **Top categories** loads its earlier months with one `getCategorySpendByPeriods` call instead of
+  a query per month.
+- **Attention chips:** "<Month> not closed out" (last month has a budget that isn't finalized,
+  `getBudgetCloseState`) and "N new insights".

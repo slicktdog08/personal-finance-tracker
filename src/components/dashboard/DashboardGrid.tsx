@@ -12,10 +12,12 @@ import {
   MOBILE_COLS,
   colsOf,
   effectiveWidths,
+  hiddenIds,
   minWOf,
   moveItem,
   normalizeMobileLayout,
   sameLayout,
+  setHidden,
   type DashboardLayouts,
   type LayoutItem,
   type LayoutKind,
@@ -166,10 +168,23 @@ export function DashboardGrid({
 
   const byId = useMemo(() => new Map(widgets.map((w) => [w.id, w])), [widgets]);
   const present = useMemo(() => new Set(widgets.map((w) => w.id)), [widgets]);
-  const desktopWidths = useMemo(() => effectiveWidths(layouts.desktop, present), [layouts.desktop, present]);
-  const mobileWidths = useMemo(() => effectiveWidths(layouts.mobile, present, MOBILE_COLS), [layouts.mobile, present]);
-  const shown = layouts.desktop.filter((l) => present.has(l.id));
-  const mobileShown = layouts.mobile.filter((l) => present.has(l.id));
+  // A hidden widget gives its width to its row neighbours exactly as an absent one does. Each
+  // layout hides its own set, so a widget can be off the phone and still on the desktop.
+  const desktopHidden = useMemo(() => hiddenIds(layouts.desktop), [layouts.desktop]);
+  const mobileHidden = useMemo(() => hiddenIds(layouts.mobile), [layouts.mobile]);
+  const desktopWidths = useMemo(
+    () => effectiveWidths(layouts.desktop, new Set([...present].filter((id) => !desktopHidden.has(id)))),
+    [layouts.desktop, present, desktopHidden],
+  );
+  const mobileWidths = useMemo(
+    () => effectiveWidths(layouts.mobile, new Set([...present].filter((id) => !mobileHidden.has(id))), MOBILE_COLS),
+    [layouts.mobile, present, mobileHidden],
+  );
+  // The DOM carries every widget either layout shows (CSS drops the other breakpoint's hidden
+  // ones), so the server still renders both arrangements without knowing the screen.
+  const shown = layouts.desktop.filter((l) => present.has(l.id) && !(desktopHidden.has(l.id) && mobileHidden.has(l.id)));
+  const mobileShown = layouts.mobile.filter((l) => present.has(l.id) && !l.hidden);
+  const hiddenNow = (isDesktop ? layouts.desktop : layouts.mobile).filter((l) => l.hidden && present.has(l.id));
   const mobileIndex = new Map(mobileShown.map((l, i) => [l.id, i]));
   const mobileItem = new Map(layouts.mobile.map((l) => [l.id, l]));
 
@@ -461,7 +476,7 @@ export function DashboardGrid({
 
   /** Keyboard / button move: swap places with the neighbouring widget that's on screen. */
   function shift(id: WidgetId, delta: -1 | 1) {
-    const order = kind === "desktop" ? shown : mobileShown;
+    const order = kind === "desktop" ? shown.filter((l) => !desktopHidden.has(l.id)) : mobileShown;
     const i = order.findIndex((l) => l.id === id);
     const neighbour = order[i + delta];
     if (neighbour) commit(kind, moveItem(layoutsRef.current[kind], id, neighbour.id, delta > 0));
@@ -470,6 +485,11 @@ export function DashboardGrid({
   function setWidth(id: WidgetId, w: number) {
     const ww = clamp(w, minWOf(kind), colsOf(kind));
     commit(kind, layoutsRef.current[kind].map((l) => (l.id === id ? { ...l, w: ww } : l)));
+  }
+
+  function setVisible(id: WidgetId, visible: boolean) {
+    snapshotPositions();
+    commit(kind, setHidden(layoutsRef.current[kind], id, !visible));
   }
 
   function setAutoHeight(id: WidgetId) {
@@ -499,14 +519,31 @@ export function DashboardGrid({
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-panel border border-accent/30 bg-accent-soft px-3 py-2 text-xs text-fg">
           <span className="flex-1 min-w-0">
             {kind === "desktop" ? (
-              <>Drag a widget to move it. Drag its right or bottom edge to resize; double-click the bottom edge to fit the content again.</>
+              <>Drag a widget to move it. Drag its right or bottom edge to resize; double-click the bottom edge to fit the content again. The eye hides one.</>
             ) : (
               <>
-                Hold a widget, or drag its label, to move it. Drag the corner to resize. This arranges the{" "}
+                Hold a widget, or drag its label, to move it. Drag the corner to resize; the eye hides one. This arranges the{" "}
                 <strong className="font-semibold">phone</strong> layout — desktop keeps its own.
               </>
             )}
           </span>
+          {hiddenNow.length > 0 && (
+            <span className="order-last flex w-full flex-wrap items-center gap-1.5 border-t border-accent/20 pt-2">
+              <span className="text-fg-2">Hidden:</span>
+              {hiddenNow.map((l) => (
+                <button
+                  key={l.id}
+                  type="button"
+                  onClick={() => setVisible(l.id, true)}
+                  title={`Show ${byId.get(l.id)!.title} again`}
+                  className="inline-flex items-center gap-1 rounded-full border border-line bg-surface px-2.5 py-1 pointer-coarse:py-1.5 text-[11px] font-medium text-fg hover:bg-hover"
+                >
+                  <Icon name="circle-plus" size={13} />
+                  {byId.get(l.id)!.title}
+                </button>
+              ))}
+            </span>
+          )}
           <span className="tabular-nums text-accent-text" aria-live="polite">
             {saveState === "saving" ? "Saving…" : saveState === "saved" ? "Saved" : saveState === "error" ? "Couldn't save — try again" : ""}
           </span>
@@ -538,7 +575,7 @@ export function DashboardGrid({
             "--h": l.h != null ? `${l.h}px` : undefined,
             "--mh": m.h != null ? `${m.h}px` : undefined,
           } as CSSProperties;
-          const place = `relative min-w-0 max-lg:[grid-column:var(--mw)] max-lg:[order:var(--mo)] lg:[grid-column:var(--w)]`;
+          const place = `relative min-w-0 max-lg:[grid-column:var(--mw)] max-lg:[order:var(--mo)] lg:[grid-column:var(--w)] ${desktopHidden.has(l.id) ? "lg:hidden" : ""} ${mobileHidden.has(l.id) ? "max-lg:hidden" : ""}`;
           // What the edit controls act on: the layout for the screen in use.
           const cur = kind === "desktop" ? { w, h: l.h } : { w: mw, h: m.h };
           const cols = colsOf(kind);
@@ -636,6 +673,11 @@ export function DashboardGrid({
                           auto ↕
                         </SizeButton>
                       )}
+                    </span>
+                    <span className="inline-flex shrink-0 pointer-events-auto rounded-md bg-surface/95 border border-neutral-200 dark:border-neutral-700 shadow-sm text-neutral-600 dark:text-neutral-300">
+                      <SizeButton label={`Hide ${wdg.title}`} onClick={() => setVisible(l.id, false)} wide>
+                        <Icon name="eye-off" size={13} />
+                      </SizeButton>
                     </span>
                   </div>
 

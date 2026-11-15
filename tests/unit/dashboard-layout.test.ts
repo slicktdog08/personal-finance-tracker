@@ -146,3 +146,31 @@ describe("moveItem", () => {
     assert.equal(moveItem(l, "cash", "credit", false), l);
   });
 });
+
+describe("hidden widgets", () => {
+  test("hidden survives normalizing; a shown widget carries no key", async () => {
+    const { setHidden, hiddenIds, sameLayout } = await import("@/lib/dashboard-layout");
+    const hid = setHidden(DEFAULT_LAYOUT, "loans", true);
+    assert.deepEqual([...hiddenIds(hid)], ["loans"]);
+    assert.deepEqual(normalizeLayout(hid), hid);
+    assert.equal(sameLayout(hid, DEFAULT_LAYOUT), false);
+    assert.deepEqual(setHidden(hid, "loans", false), DEFAULT_LAYOUT);
+    assert.equal(setHidden(DEFAULT_LAYOUT, "loans", false), DEFAULT_LAYOUT);
+    // Anything but a literal true is "shown".
+    assert.deepEqual(normalizeLayout([{ id: "loans", w: 4, h: null, hidden: "yes" }]).find((l) => l.id === "loans"), { id: "loans", w: 4, h: null });
+  });
+
+  test("an uncustomized phone layout hides what the desktop hides", async () => {
+    const { setHidden } = await import("@/lib/dashboard-layout");
+    const desktop = setHidden(DEFAULT_LAYOUT, "top-spending", true);
+    assert.equal(mobileDefaultFrom(desktop).find((l) => l.id === "top-spending")!.hidden, true);
+    assert.equal(normalizeMobileLayout(null, desktop).find((l) => l.id === "top-spending")!.hidden, true);
+  });
+
+  test("a hidden widget's width goes to its row neighbours", () => {
+    const present = new Set<WidgetId>(DEFAULT_LAYOUT.map((l) => l.id));
+    present.delete("budget");
+    const w = effectiveWidths(DEFAULT_LAYOUT, present);
+    assert.equal((w.get("debt-payoff") ?? 0) + (w.get("net-worth") ?? 0), GRID_COLS);
+  });
+});

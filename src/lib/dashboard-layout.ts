@@ -23,6 +23,10 @@ export const H_STEP = 8;
 export const WIDGET_IDS = [
   "attention",
   "safe-to-spend",
+  "vitals",
+  "advisor",
+  "investments",
+  "year-to-date",
   "cash",
   "credit",
   "loans",
@@ -50,6 +54,11 @@ export interface LayoutItem {
   w: number;
   /** Fixed height in px; null = as tall as the content. */
   h: number | null;
+  /**
+   * Taken off the dashboard in Customize. Only ever present as `true` — a shown widget carries no
+   * key at all, so layouts saved before hiding existed compare equal to their normalized selves.
+   */
+  hidden?: true;
 }
 
 /** Which arrangement: desktop (lg+, 12 columns) or mobile (phones and tablets, 2 columns). */
@@ -66,23 +75,28 @@ export const minWOf = (kind: LayoutKind) => (kind === "desktop" ? MIN_W : MOBILE
 
 /**
  * The arrangement a new dashboard starts with — and what "Reset" goes back to. It follows the
- * MiPlata hierarchy: Safe to spend + payday, then the forward look (next 7 days beside the cash
- * line), then "is it going down?" (debt, budget, net worth), where the cash sits and what it's
- * saved toward — and only then the detail panels the old dashboard led with. Saved layouts keep
+ * MiPlata hierarchy: Safe to spend + payday, the vital signs, then the forward look (next 7 days
+ * beside the cash line) and what the advisor has flagged, then "is it going down?" (debt, budget,
+ * net worth), where the cash sits and what it's saved toward, the long-term money (investments,
+ * the year so far) — and only then the detail panels the old dashboard led with. Saved layouts keep
  * their own order; normalizeLayout only slots in widgets they've never seen.
  */
 export const DEFAULT_LAYOUT: LayoutItem[] = [
   { id: "attention", w: 12, h: null },
   { id: "safe-to-spend", w: 8, h: null },
   { id: "payday", w: 4, h: null },
+  { id: "vitals", w: 12, h: null },
   { id: "card-rebalance", w: 12, h: null },
   { id: "next-7-days", w: 6, h: null },
   { id: "cash-month", w: 6, h: null },
+  { id: "advisor", w: 12, h: null },
   { id: "debt-payoff", w: 4, h: null },
   { id: "budget", w: 4, h: null },
   { id: "net-worth", w: 4, h: null },
   { id: "cash-accounts", w: 6, h: null },
   { id: "goals", w: 6, h: null },
+  { id: "investments", w: 6, h: null },
+  { id: "year-to-date", w: 6, h: null },
   { id: "cash", w: 4, h: null },
   { id: "credit", w: 4, h: null },
   { id: "loans", w: 4, h: null },
@@ -102,7 +116,7 @@ const MOBILE_HALF: ReadonlySet<WidgetId> = new Set<WidgetId>(["cash", "credit", 
  * stay in step until the user rearranges on a phone), each widget at its default phone width.
  */
 export function mobileDefaultFrom(desktop: LayoutItem[]): LayoutItem[] {
-  return desktop.map((d) => ({ id: d.id, w: MOBILE_HALF.has(d.id) ? 1 : MOBILE_COLS, h: null }));
+  return desktop.map((d) => ({ id: d.id, w: MOBILE_HALF.has(d.id) ? 1 : MOBILE_COLS, h: null, ...(d.hidden ? { hidden: true as const } : {}) }));
 }
 
 const isWidgetId = (v: unknown): v is WidgetId => typeof v === "string" && (WIDGET_IDS as readonly string[]).includes(v);
@@ -133,13 +147,14 @@ function normalizeAgainst(raw: unknown, defaults: LayoutItem[], minW: number, co
   const seen = new Set<WidgetId>();
   for (const r of items) {
     if (!r || typeof r !== "object") continue;
-    const { id, w, h } = r as Record<string, unknown>;
+    const { id, w, h, hidden } = r as Record<string, unknown>;
     if (!isWidgetId(id) || seen.has(id)) continue;
     seen.add(id);
     out.push({
       id,
       w: typeof w === "number" && Number.isFinite(w) ? clamp(Math.round(w), minW, cols) : defaultOf(id).w,
       h: typeof h === "number" && Number.isFinite(h) ? clamp(Math.round(h), MIN_H, MAX_H) : null,
+      ...(hidden === true ? { hidden: true as const } : {}),
     });
   }
   defaults.forEach((d, i) => {
@@ -219,4 +234,18 @@ export function moveItem(layout: LayoutItem[], id: WidgetId, target: WidgetId, a
 }
 
 export const sameLayout = (a: LayoutItem[], b: LayoutItem[]) =>
-  a.length === b.length && a.every((x, i) => x.id === b[i].id && x.w === b[i].w && x.h === b[i].h);
+  a.length === b.length && a.every((x, i) => x.id === b[i].id && x.w === b[i].w && x.h === b[i].h && !!x.hidden === !!b[i].hidden);
+
+/** Hide or show one widget. Returns the same array when nothing changes. */
+export function setHidden(layout: LayoutItem[], id: WidgetId, hidden: boolean): LayoutItem[] {
+  const cur = layout.find((l) => l.id === id);
+  if (!cur || !!cur.hidden === hidden) return layout;
+  return layout.map((l) => {
+    if (l.id !== id) return l;
+    const rest: LayoutItem = { id: l.id, w: l.w, h: l.h };
+    return hidden ? { ...rest, hidden: true as const } : rest;
+  });
+}
+
+/** The ids a layout keeps off the dashboard. */
+export const hiddenIds = (layout: LayoutItem[]): Set<WidgetId> => new Set(layout.filter((l) => l.hidden).map((l) => l.id));
