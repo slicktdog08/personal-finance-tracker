@@ -21,7 +21,7 @@ mechanism (see below).
   `{updated, rule}`), `applySavedRules` (SQL mirror of the engine: runs each rule by priority over
   uncategorized), `bulkSetCategory`, `updateCategoryRule` (edit + optional re-apply),
   `deleteCategoryRule` (optional "also clear categories it set"), `getRuleUsage`,
-  `suggestRuleForDescription`.
+  `suggestRuleForTransaction` (the inline offer; reads the whole ledger grouped by description).
 - **Rule provenance** (2026-09-09): `transactions.category_rule_id` is stamped by every path that
   applies a rule (import commit, `applySavedRules`, rule-saving bulk categorize) and **cleared by
   every manual set** (`updateTransactionCategory`, `updateTransaction` on category change,
@@ -29,26 +29,53 @@ mechanism (see below).
   rule behind a row: the stamp first, else the first matching rule that agrees with the current
   category (so pre-stamp rows still show one).
 - **Rule editor (shared)**: `src/components/transactions/RuleEditor.tsx` — one Sheet for create /
-  edit / delete (field, match type, pattern, category, live "N uncategorized match" preview,
-  "re-apply" on edit, "also clear categories" on delete). `RuleBadge.tsx` is the `⚙ rule "X"` chip
-  next to a category that opens it; it turns amber ("still active") when the row's category no
-  longer agrees with the rule — i.e. right after you re-categorized an auto-categorized row by
-  hand, which is exactly when you'd want to fix or remove the rule.
+  edit / delete. Opened from a transaction (`source` prop) it is mostly taps: the description is
+  laid out as **word chips** (`describeWords`) — tap to grow or shrink the pattern; store numbers,
+  places and bank boilerplate are dashed — and "only on this account / money out / exactly $X"
+  are one-tap limits taken from that transaction. Match field, match type, any account and an
+  amount range sit under "More options". The live preview counts what it would categorize / link
+  and warns **"probably too broad"** when the pattern also matches transactions already filed in
+  other categories (`previewRule` → `elsewhere`). `RuleBadge.tsx` is the `rule "X"` chip next to a
+  category that opens it; it turns amber ("still active") when the row's category no longer
+  agrees with the rule — i.e. right after you re-categorized an auto-categorized row by hand,
+  which is exactly when you'd want to fix or remove the rule.
 - **Import review** (`src/components/import/ImportCategoryCell.tsx`): same chip + the same
-  "save rule" offer as the ledger. The phrase is computed client-side
-  (`bestPhraseForDescription`, seeded with the row itself so there's always an offer) with counts
-  for rows on screen and uncategorized rows in the DB. Saving/editing/deleting a rule mid-review
-  re-applies it to the on-screen rows via pure helpers in `src/components/import/rule-helpers.ts`
-  (stamped rows follow the rule; hand-picked rows never move; `raw_category` rules only apply at
-  analyze time).
+  "Always for “X”" offer as the ledger. The phrase is computed client-side (`suggestRule` over the
+  rows on screen, so there's always an offer) with counts for rows on screen and uncategorized
+  rows in the DB. Saving/editing/deleting a rule mid-review re-applies it to the on-screen rows
+  via pure helpers in `src/components/import/rule-helpers.ts` (stamped rows follow the rule;
+  hand-picked rows never move; `raw_category` rules only apply at analyze time).
 - **Mass-categorize**: `src/app/transactions/categorize/page.tsx` +
   `src/components/transactions/MassCategorize.tsx` — Suggested rules, Auto-apply, Bulk-by-match
   builder w/ Preview, Saved-rules table.
 - **Inline cell**: `src/components/transactions/CategoryCell.tsx` — assign → offer
-  `+N like "PHRASE"` rule save (one click) or ✎ to customize in the editor first; shows the
-  `RuleBadge` for the rule that set the current category.
-- **Suggestion engine (pure)**: `src/server/lib/suggest.ts` — n-grams + longest-specific-phrase
-  ("UBER TRIP" beats bare "UBER"), auto-infers a category when past matches agree.
+  `Always for "MERCHANT" · +N now` (one click saves the rule; ✎ opens the editor on that
+  transaction; × dismisses). The offer is made even when nothing else matches today (a merchant
+  seen once is still worth a rule), skipped when a saved rule already files the description
+  there, and opens the editor instead of saving when the phrase also hits rows filed elsewhere.
+- **Rows stay put while you work a filtered list**: categorizing a row under the Uncategorized
+  filter (or a category filter) refreshes the list without it. `TransactionsTable` holds such
+  rows (`held`, keyed by id, at the index they had) and shows them with a ✓ until the filter,
+  sort or page changes — or "Hide" in the summary line — so the rule offer is still there to use.
+- **Suggestion engine (pure)**: `src/server/lib/suggest.ts`. It reads a description's
+  *structure* instead of counting common words (which used to crown the city):
+  `[bank boilerplate] [processor*] MERCHANT [store # / ref] [CITY ST]` → `merchantPhrase()` keeps
+  MERCHANT, always as a verbatim slice (rules are case-insensitive "contains").
+  - boilerplate lead-ins ("Debit Card Purchase -", "CHECKCARD 0102", "Withdrawal from") and
+    processor tags before a `*` ("SQ *", "TST*", any 1–3 letter tag) are skipped; a brand before
+    the star ("UBER *TRIP") is kept;
+  - the name ends at the first store number / reference / date, ACH field label, or place;
+  - places: a trailing state (plus zip / country / "CARD 1234" after it) and the city before it
+    — `learnPlaces()` learns city words from the ledger (a word before the state on ≥2 different
+    merchants), which also strips a city that has no state after it; with no evidence it assumes
+    one city word (two after SAN / NEW / FORT …) and never eats the first word of the name.
+  - `suggestRule(description, corpus, category)` — the inline offer. Default is the full merchant
+    phrase; it only shortens ("AMAZON MKTPL" → "AMAZON") when the ledger already files other
+    descriptions under the shorter phrase in the same category and none anywhere else. Returns
+    `matchCount` (uncategorized it would catch), `conflicts` (filed elsewhere) and the other
+    phrase lengths as `alternatives`.
+  - `computeSuggestions()` — the categorize screen: uncategorized rows grouped by merchant phrase
+    (≥2 matches), with the category their categorized look-alikes agree on.
 - **Category management**: `src/app/settings/categories/` + `src/server/actions/config.ts`
   (`addCategory`, `updateCategoryColor/Emoji`, `reorderCategories`, `renameCategory`,
   `deleteCategory`).

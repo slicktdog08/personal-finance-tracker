@@ -3,8 +3,8 @@
 import { useRef, useState, useTransition } from "react";
 import { RuleBadge } from "@/components/transactions/RuleBadge";
 import { RuleEditor, type RuleSavedEvent } from "@/components/transactions/RuleEditor";
-import { previewCategorizeMatch, bulkCategorizeByMatch } from "@/server/actions/categorize";
-import { bestPhraseForDescription } from "@/server/lib/suggest";
+import { previewCategorizeMatch, createRule } from "@/server/actions/categorize";
+import { suggestRule } from "@/server/lib/suggest";
 import { countLocalMatches } from "@/components/import/rule-helpers";
 import type { CategoryRule, RuleInput } from "@/server/lib/categorize";
 import { settledCategory, settlesPending, type PreviewRow } from "@/server/lib/import-types";
@@ -61,15 +61,17 @@ export function ImportCategoryCell({
     onChange(category);
     setSuggest(null);
     if (!category) return;
-    // Best phrase from this description, scored against the other uncategorized rows on
-    // screen. Seeding the list with the row itself guarantees a phrase even when nothing
-    // else here matches — a rule is still worth saving for the next import.
-    const others = rows
-      .filter((r) => r !== row && r.status === "new" && !r.category)
-      .map((r) => r.description);
-    const best = bestPhraseForDescription(row.description, [row.description, ...others]);
-    if (!best) return;
-    const fileCount = Math.max(0, best.matchCount - 1);
+    // The merchant phrase from this description, read against the other rows on screen (their
+    // cities and store numbers tell it what to leave out). There's always an offer, even when
+    // nothing else here matches — a rule is still worth saving for the next import.
+    const others = rows.filter((r) => r !== row && r.status === "new");
+    const best = suggestRule(
+      row.description,
+      others.map((r) => ({ description: r.description, category: r.category })),
+      category,
+    );
+    if (!best.pattern) return;
+    const fileCount = best.matchCount;
     setSuggest({ pattern: best.pattern, category, fileCount, dbCount: null });
     start(async () => {
       try {
@@ -90,22 +92,23 @@ export function ImportCategoryCell({
     if (!suggest) return;
     const s = suggest;
     start(async () => {
-      const res = await bulkCategorizeByMatch({
+      const res = await createRule({
         field: "description",
         matchType: "contains",
         pattern: s.pattern,
-        onlyUncategorized: true,
+        accountId: null,
+        direction: null,
+        amountMin: null,
+        amountMax: null,
         category: s.category,
-        saveRule: true,
+        billId: null,
       });
       setSuggest(null);
-      if (res.rule) {
-        onRuleSaved({
-          rule: res.rule,
-          created: true,
-          message: `Saved rule and categorized ${res.updated} existing transaction${res.updated === 1 ? "" : "s"}.`,
-        });
-      }
+      onRuleSaved({
+        rule: res.rule,
+        created: true,
+        message: `Saved rule and categorized ${res.categorized} existing transaction${res.categorized === 1 ? "" : "s"}.`,
+      });
     });
   }
 
@@ -147,6 +150,7 @@ export function ImportCategoryCell({
           categoryOptions={categoryOptions}
           extraCount={localCount}
           extraLabel="on screen"
+          source={{ description: row.description, amount: row.amount, direction: row.direction }}
           onSaved={onRuleSaved}
           onDeleted={onRuleDeleted}
         />
@@ -161,14 +165,14 @@ export function ImportCategoryCell({
             title={`Save rule: description contains "${suggest.pattern}" → ${suggest.category}. Applies to matching rows here and to uncategorized transactions already imported; future imports use it automatically.`}
             className="min-w-0 break-words text-xs text-accent-text hover:underline text-left disabled:opacity-50"
           >
-            Save rule “{suggest.pattern}”{counts.length ? ` (${counts.join(" · ")})` : ""}
+            Always for “{suggest.pattern}”{counts.length ? ` (${counts.join(" · ")})` : ""}
           </button>
           <button
             ref={editBtnRef}
             type="button"
             onClick={() => setEditing((o) => !o)}
             disabled={pending}
-            title="Customize the pattern before saving the rule"
+            title="Choose the words, or limit the rule to an amount or direction"
             aria-label="Customize rule"
             className="inline-flex text-fg-3 hover:text-accent-text disabled:opacity-50"
           >
@@ -180,6 +184,7 @@ export function ImportCategoryCell({
             anchorRef={editBtnRef}
             categoryOptions={categoryOptions}
             mode={{ kind: "create", pattern: suggest.pattern, category: suggest.category }}
+            source={{ description: row.description, amount: row.amount, direction: row.direction }}
             extraCount={localCount}
             extraLabel="on screen"
             onSaved={(e) => {

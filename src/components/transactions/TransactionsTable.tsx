@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useCallback, useRef, useState, useTransition } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { CategoryCell } from "@/components/transactions/CategoryCell";
 import { ConvertToBill, type BillOption } from "@/components/transactions/ConvertToBill";
@@ -14,6 +14,7 @@ import { CashOffsetDetail } from "@/components/transactions/CashOffsetDetail";
 import { SplitTransaction, SplitSummary } from "@/components/transactions/SplitTransaction";
 import { Sheet } from "@/components/ui/Sheet";
 import { memoDeep, useStable } from "@/components/ui/useStable";
+import { holdRow, mergeHeldRows, type HeldRow } from "@/lib/held-rows";
 import {
   Badge,
   Button,
@@ -210,6 +211,8 @@ interface TxRowProps {
   deleting: boolean;
   /** Listed in date order under date bands, so the row doesn't repeat its date. */
   grouped: boolean;
+  /** Categorized here a moment ago and no longer in the filtered list — shown until the view changes. */
+  kept: boolean;
   basePath: string;
   categoryOptions: CategoryOption[];
   accounts: EditAccountOption[];
@@ -218,6 +221,19 @@ interface TxRowProps {
   onToggle: (id: number) => void;
   onToggleExpanded: (id: number) => void;
   onDelete: (t: TxRow) => void;
+  onCategorized: (id: number, category: string | null) => void;
+}
+
+function KeptMark() {
+  return (
+    <span
+      className="inline-flex shrink-0 text-ok"
+      title="Categorized just now. It no longer matches this filter, but stays here until you reload or change the view — so there's time to make a rule from it."
+    >
+      <Icon name="check" size={13} />
+      <span className="sr-only">Categorized just now</span>
+    </span>
+  );
 }
 
 function RowActions({ t, accounts, categoryOptions, bills, basePath, deleting, onDelete }: Pick<TxRowProps, "t" | "accounts" | "categoryOptions" | "bills" | "basePath" | "deleting" | "onDelete">) {
@@ -299,6 +315,7 @@ const TxTableRow = memo(function TxTableRow({
   expanded,
   deleting,
   grouped,
+  kept,
   colCount,
   basePath,
   categoryOptions,
@@ -308,6 +325,7 @@ const TxTableRow = memo(function TxTableRow({
   onToggle,
   onToggleExpanded,
   onDelete,
+  onCategorized,
 }: TxRowProps & { colCount: number }) {
   const f = cashFacts(t);
   return (
@@ -323,6 +341,7 @@ const TxTableRow = memo(function TxTableRow({
             <span className={cx("truncate font-medium", t.pending && "text-fg-2")} title={t.description}>
               {t.description}
             </span>
+            {kept && <KeptMark />}
             <TitleBits t={t} bills={bills} basePath={basePath} categoryOptions={categoryOptions} />
           </div>
           <NoteCell id={t.id} value={t.notes} path={basePath} />
@@ -335,8 +354,10 @@ const TxTableRow = memo(function TxTableRow({
             options={categoryOptions}
             path={basePath}
             description={t.description}
+            txn={{ accountId: t.accountId ?? null, accountName: t.accountLabel, amount: t.amount, direction: t.direction }}
             rules={rules}
             categoryRuleId={t.categoryRuleId ?? null}
+            onCategorized={onCategorized}
           />
           <SplitSummary amount={t.amount} splits={t.splits ?? []} categoryOptions={categoryOptions} />
         </td>
@@ -373,6 +394,7 @@ const TxCardRow = memo(function TxCardRow({
   expanded,
   deleting,
   grouped,
+  kept,
   trayOpen,
   meta,
   basePath,
@@ -384,6 +406,7 @@ const TxCardRow = memo(function TxCardRow({
   onToggleExpanded,
   onToggleTray,
   onDelete,
+  onCategorized,
 }: TxRowProps & {
   /** The action tray (edit, split, link, delete) is open. */
   trayOpen: boolean;
@@ -415,6 +438,7 @@ const TxCardRow = memo(function TxCardRow({
               <span className="truncate text-sm font-medium" title={t.description}>
                 {t.description}
               </span>
+              {kept && <KeptMark />}
             </div>
             <div className="shrink-0 text-right text-sm font-semibold">
               <Money value={signed(t)} kind={t.pending ? "pending" : "auto"} sign={t.pending ? "always" : "auto"} />
@@ -429,8 +453,10 @@ const TxCardRow = memo(function TxCardRow({
                 options={categoryOptions}
                 path={basePath}
                 description={t.description}
+                txn={{ accountId: t.accountId ?? null, accountName: t.accountLabel, amount: t.amount, direction: t.direction }}
                 rules={rules}
                 categoryRuleId={t.categoryRuleId ?? null}
+                onCategorized={onCategorized}
               />
             </div>
             <div className="shrink-0 text-right text-xs text-fg-3">
@@ -493,7 +519,7 @@ function TransactionsTableImpl({
 }: TransactionsTableProps) {
   // A refresh that changed one transaction hands back every other row, and the lists the rows
   // share, as the objects they already were — which is what lets the memoised rows sit it out.
-  const rows = useStable(rowsProp);
+  const serverRows = useStable(rowsProp);
   const categoryOptions = useStable(categoryOptionsProp);
   const accounts = useStable(accountsProp);
   const bills = useStable(billsProp);
@@ -514,6 +540,34 @@ function TransactionsTableImpl({
   const [linkBill, setLinkBill] = useState("");
   const [bulkError, setBulkError] = useState("");
   const linkBtnRef = useRef<HTMLButtonElement>(null);
+
+  // Rows categorized here since this view loaded. Setting a category refreshes the list, and
+  // under a filter the row no longer fits (Uncategorized, or the category it just left) it would
+  // vanish mid-thought — before its "make this a rule" offer could be used. So the row is held
+  // at the position it had, with its new category, until the filter, sort or page changes.
+  const [held, setHeld] = useState<Map<number, HeldRow<TxRow>>>(new Map());
+  const view = params.toString();
+  const [heldView, setHeldView] = useState(view);
+  if (view !== heldView) {
+    setHeldView(view);
+    if (held.size) setHeld(new Map());
+  }
+  const { rows, keptIds } = useMemo(() => mergeHeldRows(serverRows, held), [serverRows, held]);
+  const rowsRef = useRef(rows);
+  useEffect(() => {
+    rowsRef.current = rows;
+  }, [rows]);
+  const hold = useCallback((id: number, category: string | null) => {
+    setHeld((prev) => holdRow(prev, rowsRef.current, id, { category, categoryRuleId: null }) ?? prev);
+  }, []);
+  const release = useCallback((id: number) => {
+    setHeld((prev) => {
+      if (!prev.has(id)) return prev;
+      const n = new Map(prev);
+      n.delete(id);
+      return n;
+    });
+  }, []);
 
   const nav = (overrides: Record<string, string>) => {
     const next = new URLSearchParams(params.toString());
@@ -576,6 +630,7 @@ function TransactionsTableImpl({
       start(async () => {
         try {
           await deleteTransaction(t.id, basePath);
+          release(t.id);
           setSel((prev) => {
             if (!prev.has(t.id)) return prev;
             const n = new Set(prev);
@@ -587,7 +642,7 @@ function TransactionsTableImpl({
         }
       });
     },
-    [basePath],
+    [basePath, release],
   );
 
   const catMeta = new Map(categoryOptions.map((c) => [c.name, c]));
@@ -632,6 +687,7 @@ function TransactionsTableImpl({
     expanded: expanded.has(t.id),
     deleting: deleting === t.id,
     grouped,
+    kept: keptIds.has(t.id),
     basePath,
     categoryOptions,
     accounts,
@@ -640,6 +696,7 @@ function TransactionsTableImpl({
     onToggle: toggle,
     onToggleExpanded: toggleExpanded,
     onDelete: del,
+    onCategorized: hold,
   });
 
   return (
@@ -684,9 +741,20 @@ function TransactionsTableImpl({
           <span className="text-fg-3">
             {summary
               ? summary.total === 0
-                ? "Nothing matches"
+                ? keptIds.size
+                  ? "Nothing else matches"
+                  : "Nothing matches"
                 : `Showing ${summary.from.toLocaleString()}–${summary.to.toLocaleString()} of ${summary.total.toLocaleString()}`
               : `Page ${page} of ${pages}`}
+            {keptIds.size > 0 && (
+              <>
+                {" · "}
+                <span className="text-fg-2">{keptIds.size} just categorized</span>{" "}
+                <button type="button" className="font-medium text-accent-text hover:underline" onClick={() => setHeld(new Map())}>
+                  Hide
+                </button>
+              </>
+            )}
           </span>
         )}
         {summary && summary.total > 0 && (
