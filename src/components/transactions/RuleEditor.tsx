@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useTransition, type RefObject } from "react";
+import { useEffect, useMemo, useState, useTransition, type RefObject } from "react";
 import { Sheet } from "@/components/ui/Sheet";
 import { ColorSelect } from "@/components/ColorSelect";
 import {
@@ -12,6 +12,7 @@ import {
   getRuleEditorOptions,
   type RuleEditorOptions,
 } from "@/server/actions/categorize";
+import type { RulePreview } from "@/server/lib/rules";
 import {
   describeRuleActions,
   describeRuleMatch,
@@ -19,7 +20,9 @@ import {
   type RuleDirection,
   type RuleInput,
 } from "@/server/lib/categorize";
+import { describeWords, phraseFromWords, wordsCovered } from "@/server/lib/suggest";
 import type { CategoryOption } from "@/server/queries";
+import { Icon } from "@/components/ds";
 
 // One editor for every place a rule is born or changed: the inline "+N like X"
 // suggestion (create), the "set by rule" chip on a row (edit/delete), the import
@@ -29,9 +32,23 @@ import type { CategoryOption } from "@/server/queries";
 //
 // A rule is conditions (text match + optional account / direction / amount range) → actions
 // (set a category, link a bill — either or both).
+//
+// Opened from a transaction (`source`), the form is mostly taps: the description is laid out as
+// word chips to pick the pattern from, and "only this account / direction / amount" are one-tap
+// limits filled in from that transaction. The selects and free-form fields sit under "More
+// options" for everything else.
 export type RuleEditorMode =
   | ({ kind: "create" } & Partial<RuleInput>)
   | { kind: "edit"; rule: CategoryRule };
+
+/** The transaction a rule is being made (or fixed) from. */
+export interface RuleSource {
+  description: string;
+  accountId?: number | null;
+  accountName?: string | null;
+  amount?: number | string | null;
+  direction?: string | null;
+}
 
 export interface RuleSavedEvent {
   rule: CategoryRule;
@@ -76,6 +93,24 @@ function initialDraft(mode: RuleEditorMode): RuleInput {
 const hasExtraConditions = (d: RuleInput) =>
   d.accountId != null || d.direction != null || d.amountMin != null || d.amountMax != null;
 
+const sameAmount = (a: number | null, b: number | null) => a != null && b != null && Math.abs(a - b) < 0.005;
+
+const fmtMoney = (n: number) =>
+  `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+// Does the draft need the full controls — something the one-tap limits can't show?
+function needsMore(d: RuleInput, src: RuleSource | undefined): boolean {
+  if (d.field !== "description" || d.matchType !== "contains") return true;
+  if (!src) return hasExtraConditions(d);
+  const amt = src.amount == null ? null : Math.abs(Number(src.amount));
+  if (d.accountId != null && d.accountId !== src.accountId) return true;
+  if (d.direction != null && d.direction !== src.direction) return true;
+  if (d.amountMin != null || d.amountMax != null) {
+    if (!sameAmount(d.amountMin, amt) || !sameAmount(d.amountMax, amt)) return true;
+  }
+  return false;
+}
+
 // Shared across every editor on the page; refreshed each time an editor opens.
 let optionsCache: RuleEditorOptions | null = null;
 
@@ -92,6 +127,7 @@ export function RuleEditor({
   anchorRef,
   categoryOptions,
   mode,
+  source,
   note,
   extraCount,
   extraLabel = "in this file",
@@ -103,6 +139,9 @@ export function RuleEditor({
   anchorRef?: RefObject<HTMLElement | null>;
   categoryOptions: CategoryOption[];
   mode: RuleEditorMode;
+  /** The transaction this was opened from: its words become pattern chips and its account,
+   *  direction and amount become one-tap limits. */
+  source?: RuleSource;
   /** Context line shown above the form, e.g. why the row and the rule disagree. */
   note?: string;
   /** Extra matches outside the database (the import review's on-screen rows). */
@@ -113,14 +152,12 @@ export function RuleEditor({
 }) {
   const [pending, start] = useTransition();
   const [draft, setDraft] = useState<RuleInput>(() => initialDraft(mode));
-  const [showMore, setShowMore] = useState(() => hasExtraConditions(initialDraft(mode)));
+  const [showMore, setShowMore] = useState(() => needsMore(initialDraft(mode), source));
   // Amount inputs keep the raw text so "12." can be typed; the draft holds the parsed number.
   const [minText, setMinText] = useState(() => String(initialDraft(mode).amountMin ?? ""));
   const [maxText, setMaxText] = useState(() => String(initialDraft(mode).amountMax ?? ""));
   const [reapply, setReapply] = useState(true);
-  const [preview, setPreview] = useState<{ key: string; categorized: number; linked: number; samples: string[] } | null>(
-    null,
-  );
+  const [preview, setPreview] = useState<({ key: string } & RulePreview) | null>(null);
   const [usage, setUsage] = useState<{ categories: number; bills: number } | null>(null);
   const [options, setOptions] = useState<RuleEditorOptions | null>(optionsCache);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -136,7 +173,7 @@ export function RuleEditor({
     if (open) {
       const d = initialDraft(mode);
       setDraft(d);
-      setShowMore(hasExtraConditions(d));
+      setShowMore(needsMore(d, source));
       setMinText(d.amountMin != null ? String(d.amountMin) : "");
       setMaxText(d.amountMax != null ? String(d.amountMax) : "");
       setReapply(true);
@@ -262,6 +299,45 @@ export function RuleEditor({
   }
 
   const set = <K extends keyof RuleInput>(k: K, v: RuleInput[K]) => setDraft((d) => ({ ...d, [k]: v }));
+
+  // ---- Pattern from the source transaction's own words ----
+  const words = useMemo(() => (source ? describeWords(source.description) : []), [source]);
+  const pickWords = !!source && draft.field === "description" && draft.matchType === "contains" && words.length > 0;
+  const covered = pickWords ? wordsCovered(source.description, words, draft.pattern) : null;
+  function tapWord(i: number) {
+    if (!source) return;
+    let from = i;
+    let to = i;
+    if (covered) {
+      [from, to] = covered;
+      if (i < from) from = i;
+      else if (i > to) to = i;
+      else if (from === to) return; // the last word can't be dropped; type over it instead
+      else if (i === from) from = i + 1;
+      else to = i === to ? i - 1 : i;
+    }
+    set("pattern", phraseFromWords(source.description, words, from, to));
+  }
+
+  // ---- One-tap limits from the source transaction ----
+  const srcAmount = source?.amount == null || source.amount === "" ? null : Math.abs(Number(source.amount));
+  const srcDirection: RuleDirection | null =
+    source?.direction === "Debit" || source?.direction === "Credit" ? source.direction : null;
+  const srcAccountName =
+    source?.accountId != null ? (accountName(source.accountId) ?? source.accountName ?? null) : null;
+  const amountPinned = sameAmount(draft.amountMin, srcAmount) && sameAmount(draft.amountMax, srcAmount);
+  function setAmounts(min: number | null, max: number | null) {
+    setDraft((d) => ({ ...d, amountMin: min, amountMax: max }));
+    setMinText(min != null ? String(min) : "");
+    setMaxText(max != null ? String(max) : "");
+  }
+  const quickLimits = !!source && (source.accountId != null || srcDirection != null || (srcAmount != null && Number.isFinite(srcAmount)));
+
+  const what = draft.field === "raw_category" ? "bank category" : "description";
+  const how = draft.matchType === "equals" ? "is exactly" : draft.matchType === "regex" ? "matches the regex" : "contains";
+  const elsewhere = shownPreview?.elsewhere;
+  // "Too broad" once the pattern sweeps in more settled transactions than it would newly sort.
+  const tooBroad = !!elsewhere && elsewhere.total >= 3 && elsewhere.total > (shownPreview?.categorized ?? 0);
   const selectCls = "mp-select !h-9";
   const inputCls = "mp-input !h-9";
   const pickable = categoryOptions.filter((c) => c.active || c.name === draft.category);
@@ -279,32 +355,49 @@ export function RuleEditor({
         {note && <p className="rounded-panel bg-warn-soft px-3 py-2 text-xs text-warn">{note}</p>}
 
         {/* ---- When ---- */}
-        <div className="mp-field__label">When a transaction’s</div>
-        <div className="grid grid-cols-2 gap-2">
-          <label className="flex flex-col gap-1">
-            <span className="sr-only">Match on</span>
-            <select
-              value={draft.field}
-              onChange={(e) => set("field", e.target.value as RuleInput["field"])}
-              className={selectCls}
-            >
-              <option value="description">Description</option>
-              <option value="raw_category">Bank category</option>
-            </select>
-          </label>
-          <label className="flex flex-col gap-1">
-            <span className="sr-only">Match type</span>
-            <select
-              value={draft.matchType}
-              onChange={(e) => set("matchType", e.target.value as RuleInput["matchType"])}
-              className={selectCls}
-            >
-              <option value="contains">contains</option>
-              <option value="equals">equals</option>
-              <option value="regex">matches regex</option>
-            </select>
-          </label>
+        <div className="mp-field__label">
+          When the {what} {how}
         </div>
+        {pickWords && (
+          <div>
+            <div className="flex flex-wrap gap-1" role="group" aria-label="Words in this transaction">
+              {words.map((w, i) => {
+                const on = !!covered && i >= covered[0] && i <= covered[1];
+                return (
+                  <button
+                    key={`${w.start}:${w.text}`}
+                    type="button"
+                    aria-pressed={on}
+                    onClick={() => tapWord(i)}
+                    title={
+                      w.kind === "code"
+                        ? "Looks like a store or reference number — it changes from one transaction to the next"
+                        : w.kind === "place"
+                          ? "Looks like a place — shared by every merchant there"
+                          : w.kind === "filler"
+                            ? "Bank or card-processor boilerplate"
+                            : undefined
+                    }
+                    className={
+                      "rounded-md border px-1.5 py-0.5 font-mono text-xs transition-colors " +
+                      (on
+                        ? "border-accent bg-accent-soft text-accent-text"
+                        : w.kind === "name"
+                          ? "border-line-2 bg-surface text-fg hover:bg-hover"
+                          : "border-dashed border-line-2 text-fg-3 hover:bg-hover")
+                    }
+                  >
+                    {w.text}
+                  </button>
+                );
+              })}
+            </div>
+            <p className="mt-1 text-[11px] text-fg-3">
+              Tap words to grow or shrink the match. Dashed ones are store numbers, places and bank
+              boilerplate — usually best left out.
+            </p>
+          </div>
+        )}
         <label className="flex flex-col gap-1">
           <span className="sr-only">Pattern</span>
           <input
@@ -312,12 +405,73 @@ export function RuleEditor({
             onChange={(e) => set("pattern", e.target.value)}
             className={inputCls + " font-mono"}
             placeholder="e.g. UBER"
-            autoFocus
+            autoFocus={!pickWords}
           />
         </label>
 
+        {quickLimits && !showMore && (
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-xs text-fg-3">Only</span>
+            {source?.accountId != null && (
+              <button
+                type="button"
+                className="mp-chip !h-7 !px-2.5 !text-xs"
+                aria-pressed={draft.accountId === source.accountId}
+                onClick={() => set("accountId", draft.accountId === source.accountId ? null : source.accountId!)}
+              >
+                on {srcAccountName ?? "this account"}
+              </button>
+            )}
+            {srcDirection && (
+              <button
+                type="button"
+                className="mp-chip !h-7 !px-2.5 !text-xs"
+                aria-pressed={draft.direction === srcDirection}
+                onClick={() => set("direction", draft.direction === srcDirection ? null : srcDirection)}
+              >
+                {srcDirection === "Credit" ? "money in" : "money out"}
+              </button>
+            )}
+            {srcAmount != null && Number.isFinite(srcAmount) && (
+              <button
+                type="button"
+                className="mp-chip !h-7 !px-2.5 !text-xs"
+                aria-pressed={amountPinned}
+                onClick={() => (amountPinned ? setAmounts(null, null) : setAmounts(srcAmount, srcAmount))}
+              >
+                exactly {fmtMoney(srcAmount)}
+              </button>
+            )}
+          </div>
+        )}
+
         {showMore ? (
           <div className="space-y-2 rounded-panel border border-line p-2.5">
+            <div className="grid grid-cols-2 gap-2">
+              <label className="flex flex-col gap-1">
+                <span className="mp-field__label">Match on</span>
+                <select
+                  value={draft.field}
+                  onChange={(e) => set("field", e.target.value as RuleInput["field"])}
+                  className={selectCls}
+                >
+                  <option value="description">Description</option>
+                  <option value="raw_category">Bank category</option>
+                </select>
+              </label>
+              <label className="flex flex-col gap-1">
+                <span className="mp-field__label">How</span>
+                <select
+                  value={draft.matchType}
+                  onChange={(e) => set("matchType", e.target.value as RuleInput["matchType"])}
+                  className={selectCls}
+                >
+                  <option value="contains">contains</option>
+                  <option value="equals">is exactly</option>
+                  <option value="regex">matches regex</option>
+                </select>
+              </label>
+            </div>
             <div className="grid grid-cols-2 gap-2">
               <label className="flex flex-col gap-1">
                 <span className="mp-field__label">Account</span>
@@ -389,7 +543,8 @@ export function RuleEditor({
             onClick={() => setShowMore(true)}
             className="text-xs font-medium text-accent-text hover:underline"
           >
-            + Limit to an account, direction or amount
+            More options
+            <span className="font-normal text-fg-3"> · exact match, regex, bank category, amount range</span>
           </button>
         )}
 
@@ -475,6 +630,18 @@ export function RuleEditor({
                     </li>
                   ))}
                 </ul>
+              )}
+              {elsewhere && elsewhere.total > 0 && (
+                <div className={tooBroad ? "flex items-start gap-1.5 text-warn" : "text-fg-3"}>
+                  {tooBroad && <Icon name="triangle-alert" size={12} className="mt-0.5 shrink-0" />}
+                  <span>
+                    {tooBroad && <span className="font-medium">Probably too broad. </span>}
+                    Also matches {plural(elsewhere.total, "transaction")} already filed elsewhere (
+                    {elsewhere.top.map((t) => `${t.category} ${t.n.toLocaleString()}`).join(", ")}
+                    {elsewhere.top.reduce((n, t) => n + t.n, 0) < elsewhere.total ? ", …" : ""}). Those stay
+                    put, but new ones like them would become {draft.category}.
+                  </span>
+                </div>
               )}
               {mode.kind === "edit" && usage != null && (usage.categories > 0 || usage.bills > 0) && (
                 <div className="text-fg-3">

@@ -1,4 +1,5 @@
 import { TXN_CATEGORIES } from "../../constants/enums";
+import { merchantPhrase } from "./suggest";
 
 // Saved transaction rules (table `category_mappings`).
 //
@@ -298,15 +299,8 @@ export function cleanRuleInput(input: RuleInput): RuleInput {
   };
 }
 
-// A starting pattern for "make a rule from this transaction": the description's leading words
-// up to the first one carrying a digit (store numbers, dates, reference codes), so
-// "NETFLIX.COM 8663 CA" → "NETFLIX.COM". Falls back to the whole trimmed description.
+// A starting pattern for "make a rule from this transaction": the merchant part of the
+// description — "NETFLIX.COM 8663 CA" → "NETFLIX.COM", "SQ *JOES GRILL ANYTOWN CA" → "JOES GRILL".
 export function ruleSeedPattern(description: string): string {
-  const toks = description.trim().split(/\s+/);
-  const lead: string[] = [];
-  for (const t of toks) {
-    if (/\d/.test(t)) break;
-    lead.push(t);
-  }
-  return (lead.length ? lead.join(" ") : description.trim()).slice(0, 255);
+  return merchantPhrase(description);
 }

@@ -4,6 +4,7 @@ import { useState, useTransition } from "react";
 import {
   previewCategorizeMatch,
   bulkCategorizeByMatch,
+  createRule,
   applySavedRules,
   deleteCategoryRule,
   type RuleEditorOptions,
@@ -55,6 +56,9 @@ export function MassCategorize({
     Object.fromEntries(suggestions.map((s) => [s.pattern, s.suggestedCategory ?? ""])),
   );
   const [donePatterns, setDonePatterns] = useState<Set<string>>(new Set());
+  // The suggestion being fine-tuned in the rule editor before it's saved.
+  const [tuning, setTuning] = useState<Suggestion | null>(null);
+  const [sugMsg, setSugMsg] = useState<string | null>(null);
 
   const active = categoryOptions.filter((c) => c.active);
   const colorOf = (name: string | null | undefined) =>
@@ -64,14 +68,18 @@ export function MassCategorize({
     const category = sugCat[pattern];
     if (!category) return;
     start(async () => {
-      await bulkCategorizeByMatch({
+      const res = await createRule({
         field: "description",
         matchType: "contains",
         pattern,
-        onlyUncategorized: true,
+        accountId: null,
+        direction: null,
+        amountMin: null,
+        amountMax: null,
         category,
-        saveRule: true,
+        billId: null,
       });
+      setSugMsg(`Saved “${pattern}” → ${category} and categorized ${res.categorized} transaction${res.categorized === 1 ? "" : "s"}.`);
       setDonePatterns((p) => new Set(p).add(pattern));
     });
   }
@@ -127,7 +135,12 @@ export function MassCategorize({
     <div className="space-y-4">
       <div className="mp-grid items-start" style={{ "--cols": 2 } as React.CSSProperties}>
         {/* Suggested rules */}
-        <Card title="Suggested rules" meta="from your most common uncategorized descriptions">
+        <Card title="Suggested rules" meta="uncategorized transactions, grouped by merchant">
+          {sugMsg && (
+            <Notice tone="ok" className="mb-3">
+              {sugMsg}
+            </Notice>
+          )}
           {visibleSuggestions.length === 0 ? (
             <EmptyState
               compact
@@ -155,20 +168,28 @@ export function MassCategorize({
                     }
                     sub={
                       <>
-                        Matches {s.matchCount} transaction{s.matchCount === 1 ? "" : "s"}
+                        {s.matchCount} transaction{s.matchCount === 1 ? "" : "s"}
                         {s.samples[0] && <span className="max-sm:hidden"> · e.g. {s.samples[0]}</span>}
                       </>
                     }
                     end={
-                      <Button
-                        size="sm"
-                        variant="soft"
-                        onClick={() => applySuggestion(s.pattern)}
-                        disabled={pending || !sugCat[s.pattern]}
-                        title={sugCat[s.pattern] ? undefined : "Pick a category first"}
-                      >
-                        Apply
-                      </Button>
+                      <span className="flex items-center gap-0.5">
+                        <IconButton
+                          icon="pencil"
+                          label="Adjust this rule before saving"
+                          size="sm"
+                          onClick={() => setTuning(s)}
+                        />
+                        <Button
+                          size="sm"
+                          variant="soft"
+                          onClick={() => applySuggestion(s.pattern)}
+                          disabled={pending || !sugCat[s.pattern]}
+                          title={sugCat[s.pattern] ? undefined : "Pick a category first"}
+                        >
+                          Apply
+                        </Button>
+                      </span>
                     }
                   />
                 </div>
@@ -176,9 +197,23 @@ export function MassCategorize({
             </div>
           )}
           <p className="mt-3 text-xs text-fg-3">
-            Applying one categorizes every matching uncategorized transaction and saves a rule
-            (description contains the phrase) for future imports.
+            Each one is a merchant name with the store numbers and city left off. Applying it
+            categorizes every matching uncategorized transaction and saves the rule for future
+            imports; the pencil lets you change the words or limit it first.
           </p>
+          {tuning && (
+            <RuleEditor
+              open
+              onClose={() => setTuning(null)}
+              categoryOptions={categoryOptions}
+              mode={{ kind: "create", pattern: tuning.pattern, category: sugCat[tuning.pattern] || null }}
+              source={tuning.samples[0] ? { description: tuning.samples[0] } : undefined}
+              onSaved={(e) => {
+                setSugMsg(e.message);
+                setDonePatterns((p) => new Set(p).add(tuning.pattern));
+              }}
+            />
+          )}
         </Card>
 
         {/* Rule builder / bulk apply */}

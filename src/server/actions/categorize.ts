@@ -19,6 +19,7 @@ import {
   type RulePreview,
 } from "@/server/lib/rules";
 import { requireSession } from "@/server/auth/session";
+import type { RuleSuggestion } from "@/server/lib/suggest";
 
 function affected(res: unknown): number {
   return (res as [{ affectedRows?: number }])[0]?.affectedRows ?? 0;
@@ -221,7 +222,7 @@ export async function getRuleEditorOptions(): Promise<RuleEditorOptions> {
 // rows it would link to the bill.
 export async function previewRuleDraft(input: RuleInput): Promise<RulePreview> {
   await requireSession();
-  if (!input.pattern.trim()) return { categorized: 0, linked: 0, samples: [] };
+  if (!input.pattern.trim()) return { categorized: 0, linked: 0, samples: [], elsewhere: { total: 0, top: [] } };
   const draft = draftRule({ ...input, pattern: input.pattern.trim() });
   return previewRule(draft);
 }
@@ -277,16 +278,23 @@ export async function updateCategoryRule(id: number, raw: RuleInput, reapply: bo
   return { rule, ...res };
 }
 
-// For inline "suggest a rule as you categorize": given a description, return the best
-// phrase + how many OTHER uncategorized transactions it would move.
-export async function suggestRuleForDescription(
+// For the inline "make this a rule" offer: the merchant phrase for a transaction that was just
+// put in `category`, how many uncategorized transactions it would also catch, and how many
+// already-categorized ones disagree with it. Read against the whole ledger, so the city names
+// and the brand's other spellings it has seen inform the phrase.
+export async function suggestRuleForTransaction(
   description: string,
-): Promise<{ pattern: string; matchCount: number } | null> {
+  category: string | null,
+): Promise<RuleSuggestion> {
   await requireSession();
-  const { bestPhraseForDescription } = await import("@/server/lib/suggest");
-  const un = await db
-    .select({ d: transactions.description })
+  const { suggestRule } = await import("@/server/lib/suggest");
+  const rows = await db
+    .select({ description: transactions.description, category: transactions.category, n: sql<number>`COUNT(*)` })
     .from(transactions)
-    .where(uncategorizedCond());
-  return bestPhraseForDescription(description, un.map((x) => x.d));
+    .groupBy(transactions.description, transactions.category);
+  return suggestRule(
+    description,
+    rows.map((r) => ({ description: r.description, category: r.category || null, n: Number(r.n) })),
+    category,
+  );
 }

@@ -1,7 +1,7 @@
 import "server-only";
 import { db } from "@/server/db";
 import { transactions, categoryMappings, billInstances } from "@/server/db/schema";
-import { and, eq, gte, inArray, isNull, like, lte, or, sql, type SQL } from "drizzle-orm";
+import { and, eq, gte, inArray, isNull, like, lte, ne, not, or, sql, type SQL } from "drizzle-orm";
 import {
   categorize,
   matchesRule,
@@ -141,6 +141,12 @@ export interface ApplyRulesResult {
 /** What a pass would do, without writing — the editor's live preview. */
 export interface RulePreview extends ApplyRulesResult {
   samples: string[];
+  /**
+   * Transactions the conditions also match that already sit in a different category. The rule
+   * leaves them alone, but new ones like them would get its category — so a big number here means
+   * the pattern is too broad ("ANYTOWN" instead of the merchant).
+   */
+  elsewhere: { total: number; top: { category: string; n: number }[] };
 }
 
 interface PlannedRow {
@@ -220,11 +226,41 @@ export async function applyRules(opts: {
 
 export async function previewRule(rule: CategoryRule): Promise<RulePreview> {
   const planned = await plan({ rules: [rule], categories: true, bills: true });
+  const samples: string[] = [];
+  for (const p of planned) {
+    if (samples.length >= 5) break;
+    if (!samples.includes(p.row.description)) samples.push(p.row.description);
+  }
   return {
     categorized: planned.filter((p) => p.category).length,
     linked: planned.filter((p) => p.bill).length,
-    samples: planned.slice(0, 8).map((p) => p.row.description),
+    samples,
+    elsewhere: await categorizedElsewhere(rule),
   };
+}
+
+async function categorizedElsewhere(rule: CategoryRule): Promise<RulePreview["elsewhere"]> {
+  // A raw_category rule matches on the category column itself, so "elsewhere" has no meaning.
+  if (!rule.category || rule.field === "raw_category") return { total: 0, top: [] };
+  const rows = await db
+    .select({
+      description: transactions.description,
+      category: transactions.category,
+      accountId: transactions.accountId,
+      amount: transactions.amount,
+      direction: transactions.direction,
+    })
+    .from(transactions)
+    .where(and(ruleWhere(rule), not(uncategorized()), ne(transactions.category, rule.category)));
+  const tally = new Map<string, number>();
+  let total = 0;
+  for (const r of rows) {
+    if (!r.category || !matchesRule(rule, { ...txnInput(r), rawCategory: null })) continue;
+    total++;
+    tally.set(r.category, (tally.get(r.category) ?? 0) + 1);
+  }
+  const top = [...tally].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([category, n]) => ({ category, n }));
+  return { total, top };
 }
 
 export interface ReapplyResult extends ApplyRulesResult {

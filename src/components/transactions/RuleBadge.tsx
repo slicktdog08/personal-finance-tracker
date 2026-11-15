@@ -2,7 +2,7 @@
 
 import { useRef, useState } from "react";
 import { Icon } from "@/components/ds";
-import { RuleEditor, type RuleSavedEvent } from "@/components/transactions/RuleEditor";
+import { RuleEditor, type RuleSavedEvent, type RuleSource } from "@/components/transactions/RuleEditor";
 import { describeRuleMatch, type CategoryRule, type RuleInput } from "@/server/lib/categorize";
 import type { CategoryOption } from "@/server/queries";
 
@@ -17,6 +17,7 @@ export function RuleBadge({
   onDeleted,
   extraCount,
   extraLabel,
+  source,
 }: {
   rule: CategoryRule;
   currentCategory: string | null;
@@ -25,6 +26,8 @@ export function RuleBadge({
   onDeleted?: (ruleId: number, cleared: number) => void;
   extraCount?: (draft: RuleInput) => number;
   extraLabel?: string;
+  /** The transaction the chip sits on, so the rule can be narrowed with its words. */
+  source?: RuleSource;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLButtonElement>(null);
@@ -66,6 +69,7 @@ export function RuleBadge({
         anchorRef={ref}
         categoryOptions={categoryOptions}
         mode={{ kind: "edit", rule }}
+        source={source}
         note={
           stale
             ? `This row was changed to ${currentCategory ?? "uncategorized"} by hand, but the rule still maps ${clause} → ${rule.category} for future imports. Change its category, narrow the pattern, or delete it.`
