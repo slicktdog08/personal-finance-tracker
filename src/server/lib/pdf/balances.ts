@@ -11,6 +11,8 @@ export interface BalancePoint {
   asOf: string;
   balance: number;
   creditLimit: number | null;
+  apr?: number | null;
+  minPayment?: number | null;
   note: string | null;
   source: BalanceSource;
 }
@@ -45,6 +47,8 @@ export function statementPoints(
         asOf: b.asOf,
         balance: b.balance,
         creditLimit: b.creditLimit,
+        apr: b.apr ?? null,
+        minPayment: b.minPayment ?? null,
         note: b.note || null,
         source: BALANCE_SOURCES.statement,
       });

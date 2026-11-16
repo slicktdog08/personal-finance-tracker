@@ -132,6 +132,8 @@ function buildBalanceSuggestions(
   firstTxnDate: string | null,
   lastTxnDate: string | null,
   creditLimit: number | null = null,
+  // What a loan statement adds to its closing snapshot: the rate, the payment, a note suffix.
+  extra: { apr?: number | null; minPayment?: number | null; detail?: string | null } = {},
 ): StatementBalance[] {
   const inst = institution ?? "Statement";
   const periodLabel = (asOf: string) => {
@@ -158,7 +160,9 @@ function buildBalanceSuggestions(
       asOf: closeAsOf,
       // The printed limit is the one in force at the close; the opening snapshot stays without.
       creditLimit,
-      note: `${inst} closing balance${periodLabel(closeAsOf)}`,
+      apr: extra.apr ?? null,
+      minPayment: extra.minPayment ?? null,
+      note: `${inst} closing balance${periodLabel(closeAsOf)}${extra.detail ? ` — ${extra.detail}` : ""}`,
     });
   }
   return out;
@@ -233,6 +237,7 @@ export async function parsePdfStatements(files: PdfFileInput[]): Promise<ParsedS
           firstTxnDate,
           lastTxnDate,
           m.creditLimit ?? null,
+          { apr: m.apr, minPayment: m.minPayment, detail: m.balanceDetail },
         ),
         trades: result.trades ?? [],
         positions: result.positions ?? null,
@@ -426,6 +431,8 @@ export async function commitPdfStatements(
               accountId: acctId,
               balance: p.balance.toFixed(2),
               creditLimit: p.creditLimit == null ? null : p.creditLimit.toFixed(2),
+              apr: p.apr == null ? null : p.apr.toFixed(2),
+              minPayment: p.minPayment == null ? null : p.minPayment.toFixed(2),
               asOf: p.asOf,
               note: p.note,
               source: p.source,
@@ -435,7 +442,14 @@ export async function commitPdfStatements(
         for (const u of plan.updates) {
           await db
             .update(accountBalances)
-            .set({ balance: u.point.balance.toFixed(2), note: u.point.note, source: u.point.source })
+            .set({
+              balance: u.point.balance.toFixed(2),
+              note: u.point.note,
+              source: u.point.source,
+              // Only when the statement prints them — a refresh never blanks a known rate.
+              ...(u.point.apr != null && { apr: u.point.apr.toFixed(2) }),
+              ...(u.point.minPayment != null && { minPayment: u.point.minPayment.toFixed(2) }),
+            })
             .where(eq(accountBalances.id, u.id));
         }
         balancesRecorded += plan.inserts.length + plan.updates.length;

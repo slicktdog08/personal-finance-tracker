@@ -8,6 +8,7 @@ import { robinhoodBrokerageParser } from "@/server/lib/pdf/parsers/robinhood-bro
 import { capitalOneParser } from "@/server/lib/pdf/parsers/capitalone";
 import { capitalOneCardParser } from "@/server/lib/pdf/parsers/capitalone-card";
 import { chaseCardParser } from "@/server/lib/pdf/parsers/chase-card";
+import { zableLoanParser } from "@/server/lib/pdf/parsers/zable-loan";
 
 // First match wins, so the narrow sniffs (a titled Spending / Crypto statement) come before
 // the brokerage one, whose statement has no title of its own.
@@ -18,6 +19,7 @@ export const PARSERS: StatementParser[] = [
   capitalOneParser,
   capitalOneCardParser,
   chaseCardParser,
+  zableLoanParser,
 ];
 
 export interface DetectResult {
