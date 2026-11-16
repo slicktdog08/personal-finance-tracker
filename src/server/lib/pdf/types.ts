@@ -55,6 +55,12 @@ export interface StatementMeta {
   closingBalance: number | null;
   /** A credit card's limit as of the statement's close, when the statement prints one. */
   creditLimit?: number | null;
+  /** A loan's or card's APR in percent (20.5), when the statement prints one. */
+  apr?: number | null;
+  /** The minimum / scheduled payment as of the statement's close. */
+  minPayment?: number | null;
+  /** Extra wording for the closing snapshot's note, e.g. a loan's "principal $4,000.00". */
+  balanceDetail?: string | null;
   periodStart: string | null; // ISO
   periodEnd: string | null; // ISO
 }
@@ -107,6 +113,9 @@ export interface StatementBalance {
   balance: number;
   asOf: string; // ISO
   creditLimit: number | null;
+  /** APR (percent) and minimum payment in force at this snapshot, when the statement prints them. */
+  apr?: number | null;
+  minPayment?: number | null;
   note: string;
 }
 

@@ -98,6 +98,27 @@ liability rules, with these differences:
 - The printed account number changes when a card is reissued, so older statements of the same
   account can carry a different last-4; the user picks the account in the import wizard.
 
+## Loan statements
+`parsers/zable-loan.ts` (Zable personal loan, "Loan Periodic Statement") is the model for a loan:
+- **Balance = "Outstanding balance"** (principal plus interest accrued so far — the payoff
+  figure), as of the period end. The principal goes in the snapshot's note via
+  `meta.balanceDetail` ("… closing balance (Dec 2025) — principal $4,000.00").
+- **APR and the scheduled payment** ("Recurring amount") are returned as `meta.apr` /
+  `meta.minPayment` and written to the closing snapshot's `apr` / `min_payment` columns, so debt
+  projections get the rate without hand entry. Any parser may set these.
+- **No opening balance is printed**, so no opening snapshot and `reconciled: null`. Import the
+  statements in a run and each closing balance is the next one's opening.
+- **Payments** are `Credit` rows (`Nov 8, 2025 Payment - Bank Account *1234 -$250.00`). One still
+  clearing prints as `Payment processing - …`; it is imported as `Payment - …` with
+  `raw.status = "processing"` so a relisting on the next statement dedups.
+- **Interest** is one `Debit` per statement, dated the period end, from `TOTAL INTEREST FOR THIS
+  PERIOD` (no per-day rows exist). **Fees** work the same, except that dated rows inside the Fees
+  block (not yet seen on a real statement) are imported as themselves and only the remainder of
+  the total is synthesised.
+- The account number is the last four characters of the loan ID (letters and digits).
+- "Paid Last Period" on page 1 is not checked against the payment rows: it can cover a payment
+  the activity table does not list.
+
 ## Investment statements (brokerage, crypto)
 A brokerage or crypto statement is not a cash ledger, and treating it as one corrupts the
 rollups: income/spend totals count every row that isn't categorized `Transfer`, so a `$2,000` buy
