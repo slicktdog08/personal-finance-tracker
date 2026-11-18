@@ -153,6 +153,36 @@ liability rules, with these differences:
 - "Paid Last Period" on page 1 is not checked against the payment rows: it can cover a payment
   the activity table does not list.
 
+`parsers/edfinancial-loan.ts` (Edfinancial, a federal student-loan servicer) is the model for a
+**servicer account that holds several loans**. The statement has one column per loan
+(`Loan ID 1-01 1-02 … Total`) and the tracker keeps the whole account as **one** loan:
+- **Balance = the Total "Current Balance"** (unpaid principal + unpaid interest), as of the
+  billing cycle's end. Principal, unpaid interest and the loan count go in the snapshot note.
+- **Every row is checked across**: the per-loan figures must add up to the Total, and principal +
+  unpaid interest must equal the balance (`reconciled`). A mismatch is a note naming the row.
+- **APR = the principal-weighted average** of the loans' rates (interest accrues on principal);
+  the payment is page 1's "Regular Monthly Payment Amount".
+- Labels that wrap (`Capitalized` / figures / `Interest`) print their figures on a line of their
+  own; such a row is keyed by the label's first half (`Payments`, `Applied to`, …).
+- **Transactions**: the cycle's "Payments Received" total as one `Credit` dated the latest "Last
+  Payment Date", and its "Applied to Interest" part as an `Interest charged` `Debit` the same day.
+  Only totals are printed, so two payments in one cycle become one row (noted). A payment made on
+  the statement date itself is usually reported on the *next* statement.
+- The account number is the last four digits before the `-1` suffix.
+
+**Backfilling a loan's past.** A servicer hands out a few months of statements, but its
+transaction-history export (Date, Description, Principal, Interest, Fees, Total — no balance
+column) goes back to the first disbursement. Principal can be rebuilt exactly by summing the
+Principal column forward (disbursements +, capitalized interest +, payments −) and checking it
+against a statement's Unpaid Principal. If the sum falls short, the export is missing events —
+typically payments made while the loan was with an earlier servicer, which the bank side of the
+ledger still holds, and capitalizations that print as `$0.00`. The statement's life-of-loan
+totals (Capitalized Interest, Total Principal Paid, Total Interest Paid) give the size of each
+gap. Interest owed between events is not in the export; spread the interest each payment or
+capitalization settled over the days since the previous one, in proportion to principal × days
+(zero during a 0% period). Write the month-ends as `account_balances` snapshots. Do this as a
+one-off against live data (`planning/progress/`), not as an import path.
+
 ## Investment statements (brokerage, crypto)
 A brokerage or crypto statement is not a cash ledger, and treating it as one corrupts the
 rollups: income/spend totals count every row that isn't categorized `Transfer`, so a `$2,000` buy
