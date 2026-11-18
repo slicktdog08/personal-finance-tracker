@@ -16,7 +16,7 @@ import {
 import { SAVINGS_CATEGORY, type DebtStrategy } from "@/constants/enums";
 import { formatMoney } from "@/server/lib/money";
 import { formatDate, monthBounds } from "@/server/lib/period";
-import { EXCESS_THRESHOLD, budgetExcess, isSnowballDebt, orderDebts, type DebtInput, type PayoffProjection } from "@/server/lib/budget";
+import { EXCESS_THRESHOLD, budgetExcess, round2, isSnowballDebt, orderDebts, type DebtInput, type PayoffProjection } from "@/server/lib/budget";
 import type { BudgetView as BudgetViewData, BudgetLineRow, CategoryOption } from "@/server/queries";
 import { Button, Card, Icon, IconButton, Input, Money, Notice, PageHeader, Segmented, StatTile, Switch, buttonClass, cx } from "@/components/ds";
 import { ColorSelect } from "@/components/ColorSelect";
@@ -133,6 +133,7 @@ export function BudgetView({
   const spendLines = lines.filter((l) => l.kind === "category");
   const savingsLines = lines.filter((l) => l.kind === "savings");
   const target = debtLines.find((l) => l.isTarget) ?? null;
+  const rebalanceOwe = round2(debtLines.reduce((t, l) => t + (l.standing?.toCover ?? 0), 0));
   const isSink = (l: BudgetLineRow) => view.autoRebalance && l.isTarget;
 
   // "Adjust" opens every everyday envelope so they trade with each other (the pool rule below);
@@ -328,7 +329,25 @@ export function BudgetView({
         title="Debts"
         total={debtPlanned}
         note={
-          view.unassignedDebtPayments > 0 ? (
+          rebalanceOwe > 0 || view.unassignedDebtPayments > 0 ? (
+            <div className="space-y-2">
+              {rebalanceOwe > 0 && (
+                // The dashboard's "Pay to rebalance": charges made on the cards this month. They're
+                // already counted in their own categories, so this is cash spoken for, not more spending.
+                <div className="flex items-start gap-2 text-sm">
+                  <Icon name="credit-card" size={15} className="mt-0.5 shrink-0 text-owed" />
+                  <p className="min-w-0">
+                    <span className="font-medium">
+                      <Money value={rebalanceOwe} kind="owed" sign="none" /> to rebalance cards
+                    </span>
+                    <span className="text-fg-3">
+                      {" "}
+                      — this month&apos;s card spending, already budgeted in its categories. Not extra spending: it&apos;s cash still to send to the cards.
+                    </span>
+                  </p>
+                </div>
+              )}
+              {view.unassignedDebtPayments > 0 && (
             <Notice
               tone="warn"
               action={
@@ -340,6 +359,8 @@ export function BudgetView({
               <Money value={view.unassignedDebtPayments} kind="neutral" />
               {" of Debt Repayment isn't linked to a bill yet."}
             </Notice>
+              )}
+            </div>
           ) : undefined
         }
       >
