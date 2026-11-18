@@ -9,12 +9,29 @@ extracted out of PDFs**. What it adds over CSV: per-issuer parsing, **statement 
 as of period start, closing as of period end → dated snapshots in `account_balances`), and
 multi-file batch upload with cross-statement dedup. No OCR — these are text PDFs.
 
+## Supported statements
+`PARSERS` in `registry.ts`, in match order (first `detect` wins, so the titled Robinhood
+Spending / Crypto sniffs sit ahead of the untitled brokerage one):
+
+| Parser | Statement | Account kind | Section below |
+|---|---|---|---|
+| `robinhood.ts` | Robinhood Spending | cash | [registry](#the-parser-registry--how-to-add-an-issuer) (the template) |
+| `robinhood-crypto.ts` | Robinhood Crypto | investment | [Investment statements](#investment-statements-brokerage-crypto) |
+| `robinhood-brokerage.ts` | Robinhood brokerage ("Individual") | investment | [Investment statements](#investment-statements-brokerage-crypto) |
+| `capitalone.ts` | Capital One 360 checking + savings | cash, **one result per account** | [Bank statements](#bank-statements-capital-one-360) |
+| `capitalone-card.ts` | Capital One credit card (current + pre-mid-2021 layout) | liability | [Credit card statements](#credit-card-statements) |
+| `chase-card.ts` | Chase credit card, personal + business (Ink) | liability | [Credit card statements](#credit-card-statements) |
+| `zable-loan.ts` | Zable personal loan | liability | [Loan statements](#loan-statements) |
+
 ## How it works today
 - Tab shell: `src/app/import/page.tsx` → `src/components/import/ImportTabs.tsx` (csv/pdf toggle).
 - Client wizard: `src/components/import/PdfImportWizard.tsx` (`upload → review → done`). Guards:
-  `MAX_FILES=12`, `MAX_FILE_MB=15`, `MAX_TOTAL_MB=18`; base64-encodes files (chunked, to dodge
-  `String.fromCharCode` arg limits); re-analyzes on account change (stale-response guarded, carries
-  over user-set categories); per-balance record toggles.
+  `MAX_FILES=200`, `MAX_FILE_MB=15`, `MAX_TOTAL_MB=300`; files are parsed in batches
+  (`BATCH_FILES=8`, `BATCH_BYTES=6MB`) to stay under the server-action body limit, then sorted
+  oldest first; base64-encodes files (chunked, to dodge `String.fromCharCode` arg limits);
+  re-analyzes on account change (stale-response guarded, carries over user-set categories);
+  per-balance record toggles plus a per-statement "Daily balances (N days)" toggle, all covered
+  by the summary list's All/None.
 - Server actions: `src/server/actions/pdf-import.ts` — `parsePdfStatements` (decode → `extractPdf`
   → `detectAndParse` → `analyzeRows`), `analyzeStatement` (re-analyze on account change),
   `commitPdfStatements`.
@@ -27,7 +44,8 @@ multi-file batch upload with cross-statement dedup. No OCR — these are text PD
 
 ## The parser registry — how to add an issuer
 A `StatementParser` (`types.ts`) has `id`, `label`, `detect(text) => boolean` (cheap sniff), and
-`parse(lines, text, pages?) => ParserResult`. Registration is first-match: `PARSERS` array in
+`parse(lines, text, pages?) => ParserResult | ParserResult[]` (an array when one statement
+covers several accounts — each result becomes its own reviewable statement). Registration is first-match: `PARSERS` array in
 `registry.ts`; `detectAndParse` runs the first whose `detect` passes, else the statement is flagged
 unrecognized. **To add one:**
 1. Copy `parsers/robinhood.ts`.
@@ -43,6 +61,22 @@ unrecognized. **To add one:**
 Robinhood's row regex uses two money columns where `--` marks the empty side, so **column position
 determines Credit vs Debit**; `mdyToIso` range-validates dates so a stray match can't inject an
 impossible date.
+
+## Bank statements (Capital One 360)
+`parsers/capitalone.ts` reads the 360 statement, which covers **every** deposit account the
+customer holds:
+- **One result per account section.** A section starts at `<nickname> - <account number>`,
+  confirmed by the APY block under it; the product line (`360 CHECKING`) is absent when the
+  nickname already is one.
+- **Every row carries the running balance**, so each transaction is checked against it — a
+  mis-signed or dropped row becomes a note rather than silent drift. Rows that carry only a
+  balance (an interest-rate notice) are skipped, not flagged.
+- **Wrapped descriptions** put their first line *above* the amount row and the rest below; both
+  are rejoined onto the row.
+- **Daily balances.** The parser returns `dailyBalances`: the last running balance of each day,
+  carried forward over quiet days, so a statement yields a gap-free end-of-day series (see
+  [Balances](#balances--reuse-of-commitimport)). Any parser whose statement prints a running
+  balance can do the same.
 
 ## Credit card statements
 `parsers/capitalone-card.ts` (Capital One cards) is the model for a liability account:
@@ -175,12 +209,24 @@ statement with a "Could not read PDF" note.
 `seenHashes`** to fold cross-statement duplicates (per-statement occurrence indexes would otherwise
 double-count), then call **`commitImport(s.filename, rows)`** (the CSV commit path) for
 transactions. **Balances are recorded in a separate loop** (not through `commitImport`'s optional
-`balances` arg): for each chosen `StatementBalance` it inserts into `account_balances` only if no
-row exists for that `(accountId, asOf)` — **idempotent per account + as-of date**.
+`balances` arg), planned by the pure helpers in `src/server/lib/pdf/balances.ts`
+(`statementPoints` + the upsert plan; unit-tested in `tests/unit/pdf-balances.test.ts`). One
+snapshot per account per date:
+- a date with no row gets a new one;
+- a date holding an **imported** row (`account_balances.source` set — `statement` for
+  opening/closing, `statement-daily` for end-of-day points; migration 0032) is **refreshed**, so
+  re-importing a statement corrects it;
+- a date holding a hand-entered or synced row (`source` null) is **never touched**.
 
-`StatementBalance` (`types.ts`): `{ kind: "opening"|"closing", balance, asOf, creditLimit, note }`.
-`buildBalanceSuggestions` emits opening (`periodStart ?? firstTxnDate`) and closing
-(`periodEnd ?? lastTxnDate`); each is a checkbox with editable amount/date in the UI (default on).
+Each account's existing snapshots are loaded once and inserts are chunked. Opening/closing win a
+date they share with a daily point. The accounts page hides `statement-daily` rows behind a
+show/hide toggle in the history.
+
+`StatementBalance` (`types.ts`): `{ kind: "opening"|"closing", balance, asOf, creditLimit, note }`
+(plus `apr` / `minPayment` from `meta`). `buildBalanceSuggestions` emits opening and closing; the
+**opening is dated the day before the period starts** (`dayBefore` — the end of that day), so it
+doesn't collide with the first day's end-of-day point. Each is a checkbox with editable
+amount/date in the UI (default on).
 
 ## Edge cases / gotchas
 - `serverExternalPackages: ["unpdf"]` is mandatory; `bodySizeLimit: "25mb"` is the backstop behind
@@ -190,11 +236,16 @@ row exists for that `(accountId, asOf)` — **idempotent per account + as-of dat
 - **Stale-response race**: free-text last-4 fires analyze per keystroke; results are applied only if
   the account still matches.
 - **Category-edit preservation** on re-analyze; **empty balance input ignored** (won't write $0);
-  **idempotent balances** (two statements same as-of → only first recorded).
+  **balances upsert per account + date** (imported rows refresh on re-import; hand-entered rows
+  win).
 - Unrecognized PDFs are non-fatal (flagged with `sampleLines`); only detected statements commit.
 
 ## How to extend it
-Add `parsers/<issuer>.ts` (copy Robinhood) + register in `registry.ts` — that's the only wiring.
+Add `parsers/<issuer>.ts` + register in `registry.ts` — that's the only wiring. Copy the closest
+existing parser: `robinhood.ts` for a simple cash statement, `capitalone.ts` for running balances
+or several accounts per file, `capitalone-card.ts` / `chase-card.ts` for a card, `zable-loan.ts`
+for a loan, `robinhood-brokerage.ts` for anything needing column positions. Add the row to
+[Supported statements](#supported-statements) and to the table in `docs/importing.md`.
 
 ## Related
 - Shares the commit/dedup/categorize path with [csv-import.md](csv-import.md); engine

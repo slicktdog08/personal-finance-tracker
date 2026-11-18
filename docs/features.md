@@ -35,9 +35,11 @@ Claude. [importing.md](importing.md) compares them.
   description), not the bank's IDs, which change between exports. Re-importing an overlapping
   date range is harmless.
 - **Running balances.** If the CSV has a balance column, it's recorded as a dated balance snapshot.
-- **PDF statement import** for accounts that only give you PDFs. It records the opening and
-  closing balances and de-duplicates across statements. Parsers are per-issuer; one ships
-  today (Robinhood Spending).
+- **PDF statement import**, in bulk. Parsers ship for Capital One (360 bank accounts and
+  credit cards), Chase credit cards, Robinhood (Spending, brokerage and crypto) and Zable
+  loans. It records statement balances (every day's balance where the statement prints one),
+  carries APR and credit limits into the debt view, checks each statement against its own
+  totals and de-duplicates across statements.
 - **A review step before anything is saved.** Every import shows a preview where you can
   categorize, write notes and settle pending charges. It works on a phone too.
 - **Categorization in three layers:**
@@ -70,8 +72,9 @@ Claude. [importing.md](importing.md) compares them.
 - **Debts.** Each debt shows APR, minimum payment, credit limit, utilization and what it costs
   you in interest this month, plus avalanche or snowball payoff projections with a debt-free
   date and total interest.
-- **Net worth.** Retirement accounts and assets (a car, a home) count toward net worth
-  without muddying your spendable cash.
+- **Net worth.** Retirement and investment accounts and assets (a car, a home) count toward
+  net worth without muddying your spendable cash. Imported brokerage and crypto statements
+  show holdings and trades on the account, and a trade never counts as spending or income.
 - **Dashboard.** Rearrangeable widgets, with separate layouts for desktop and phone. For any month: cash on hand, total owed, bill status, income vs. spending,
   spending by category, goal progress and trends. Switching months re-renders the whole page
   from that month's data.
@@ -112,11 +115,13 @@ The app runs its own [MCP](https://modelcontextprotocol.io) server. You can conn
 claude.ai or Claude Code and have a real conversation about your actual numbers: "Can I afford
 this?", "How did this month go?", "What's my fastest path out of debt?"
 
-- **15 read tools:** snapshot, month summaries, spending and balance trends, debts and payoff
-  projections, cash projection, budget, goals and transaction search.
-- **9 write tools that only add or edit, never delete:** categorize, split, update bill
+- **16 read tools:** snapshot, month summaries, spending and balance trends, debts and payoff
+  projections, card rebalancing, cash projection, budget, goals, transaction search, bank-sync
+  status and pending charges.
+- **10 write tools that only add or edit, never delete:** categorize, split, update bill
   status, add a goal contribution, adjust a budget line, set a debt target, add a transaction,
-  record a balance, update the advisor profile. Claude has to tell you exactly what will change and wait for your OK.
+  record a balance, update the advisor profile, run a bank sync. Claude has to tell you exactly
+  what will change and wait for your OK.
 - **Built-in prompts:** `monthly_review`, `can_i_afford`, `debt_payoff_plan` and
   `budget_check_in`.
 - **A private advisor profile**, stored in your database (never in the repo). It gives
@@ -150,9 +155,10 @@ This is a tool I built for myself, so these are the trade-offs I live with:
   means downloading a CSV or PDF from each bank and importing it, and typing pending charges
   in by hand. Adding another provider is one adapter behind
   `src/server/lib/sync/provider.ts`; see `planning/features/bank-sync.md`.
-- **One PDF parser.** Only Robinhood Spending statements are supported out of the box. Other
-  banks need a CSV export or a new parser in `src/server/lib/pdf/parsers/`. Scanned (image)
-  PDFs aren't supported because there's no OCR.
+- **A handful of PDF parsers.** PDF import covers the issuers listed in
+  [importing.md](importing.md#2-pdf-statement). Other banks need a CSV export or a new parser
+  in `src/server/lib/pdf/parsers/`. Scanned (image) PDFs aren't supported because there's no
+  OCR, and investment imports don't compute cost basis or realized gains.
 - **Single user, single currency.** No households, shared access or roles, and everything is
   in USD.
 - **Cash takes discipline.** Cash spending is only as accurate as the purchases you log and
