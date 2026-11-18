@@ -13,7 +13,8 @@ planning/features/<feature-slug>.md      e.g. csv-import.md, savings-goals.md, d
 | Feature | Doc | What it covers |
 |---|---|---|
 | CSV import | [csv-import.md](csv-import.md) | Mapping-driven bank-CSV import: column guessing, split Debit/Credit, dedup, balances → ledger |
-| PDF statement import | [pdf-import.md](pdf-import.md) | Per-issuer PDF parsing (unpdf, no OCR), statement balances, reuses the CSV commit path |
+| PDF statement import | [pdf-import.md](pdf-import.md) | Per-issuer PDF parsing (unpdf, no OCR): banks, cards, a loan, brokerage/crypto; statement + daily balances; reuses the CSV commit path |
+| Bank sync | [bank-sync.md](bank-sync.md) | SimpleFIN Bridge + Plaid adapters behind one provider contract; scheduler, webhooks, account matching, pending rows |
 | Categorization & rules | [categorization.md](categorization.md) | Rule engine, mass-categorize, category management, bill linking |
 | Accounts & balances | [accounts-and-balances.md](accounts-and-balances.md) | One dated ledger for cash + liabilities; /accounts, /debts, /dashboard as three lenses |
 | Savings goals | [savings-goals.md](savings-goals.md) | Contribution ledger + funding-account regress reality-check |

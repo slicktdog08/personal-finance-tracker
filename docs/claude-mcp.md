@@ -4,10 +4,14 @@ The app runs its own [MCP](https://modelcontextprotocol.io) server at `/api/mcp`
 Claude to it and you can talk about your actual numbers: "Can I afford this?", "How did this
 month go?", "What's my fastest path out of debt?"
 
-- **15 read tools:** snapshot, month summaries, spending and balance trends, debts and payoff
-  projections, cash projection, budget, goals and transaction search.
-- **9 write tools that only add or edit, never delete.** Claude has to say exactly what will
-  change and wait for your OK.
+- **16 read tools:** snapshot, month summaries, spending and balance trends, debts and payoff
+  projections, card rebalancing, cash projection, budget, goals, transaction search, bank-sync
+  status and pending charges.
+- **10 write tools that only add or edit, never delete** (including running a bank sync).
+  Claude has to say exactly what will change and wait for your OK.
+- **6 advisor-channel tools** the in-app [insights and chat](../planning/features/ai-advisor.md)
+  routine uses to read its inbox and write its own notes back; they never touch financial
+  records.
 - **Prompts:** `monthly_review`, `can_i_afford`, `debt_payoff_plan`, `budget_check_in`.
 - **An advisor profile** stored in your database gives Claude standing context: your
   situation, your plan, what money is off-limits.

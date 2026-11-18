@@ -105,7 +105,7 @@ transfer pairing, cash tracking, recurring-bill suggestions, and AI insights.
 | Way | Good for |
 |---|---|
 | **CSV file** | Any bank. Map the columns once; overlapping exports never double-count |
-| **PDF statement** | Accounts with no CSV export |
+| **PDF statement** | Capital One, Chase, Robinhood and Zable statements, in bulk, with daily balances where printed |
 | **Bank sync** | Hands-off updates through SimpleFIN or Plaid, including pending charges |
 | **By hand** | Cash, or a charge that hasn't posted yet |
 | **Through Claude** | "Add the $40 I spent at lunch" |

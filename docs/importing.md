@@ -6,7 +6,7 @@ same ledger, and they all share one duplicate check, so overlapping sources don'
 | | Best for | Effort | Pending charges | Balances |
 |---|---|---|---|---|
 | [1. CSV file](#1-csv-file) | Any bank, any time | Download + upload | No (banks don't export them) | If the file has a balance column |
-| [2. PDF statement](#2-pdf-statement) | Accounts with no CSV export | Upload | No | Opening and closing |
+| [2. PDF statement](#2-pdf-statement) | Supported banks, cards and loans; accounts with no CSV export | Upload | No | Opening and closing (daily where the statement prints a running balance) |
 | [3. Bank sync](#3-bank-sync) | Hands-off daily updates | One-time link | Yes | Yes |
 | [4. By hand](#4-by-hand) | Cash, or a charge that hasn't posted | Type it | Yes, that's the point | Record separately |
 | [5. Through Claude](#5-through-claude) | "Add the $40 I spent at lunch" | Ask | Yes | Yes |
@@ -40,14 +40,30 @@ Things worth knowing:
 
 ## 2. PDF statement
 
-**Import → PDF statements.** For accounts that only hand you a PDF. Upload up to 12
-statements at once; the app reads the text, pulls out the transactions plus the statement's
-opening and closing balances, and takes you to the same review step as a CSV.
+**Import → PDF statements.** Upload one statement or a whole folder of them (up to 200 at
+once, oldest first); the app recognizes the issuer from the text, pulls out the transactions
+plus the statement's balances, and takes you to the same review step as a CSV. Statements
+that overlap, or that you import twice, don't double-count.
 
-- **One issuer is supported today: Robinhood Spending.** Parsers are small and per-issuer;
-  adding your bank means one file in `src/server/lib/pdf/parsers/`
-  ([how](../planning/features/pdf-import.md)). When a statement isn't recognized, the page
-  shows the first lines it extracted, which is the spec for a new parser.
+Supported out of the box:
+
+| Issuer | Statement | What you get |
+|---|---|---|
+| Capital One | 360 checking and savings | Every account on the statement, each row checked against the running balance, and an end-of-day balance for every day of the period |
+| Capital One | Credit card (current and pre-2021 layouts) | Charges, payments, fees and interest; balance owed and credit limit |
+| Chase | Credit card, personal and business (Ink) | Charges, payments, fees and interest, per employee card; balance owed and credit limit |
+| Robinhood | Spending | Transactions and opening/closing balances |
+| Robinhood | Brokerage (investing) | Cash events as transactions; trades and closing holdings kept separately, so a buy isn't spending |
+| Robinhood | Crypto | Account value, trades and holdings (no transactions) |
+| Zable | Personal loan | Payments, interest and fees; balance owed, APR and monthly payment |
+
+- **Statements are checked.** Where a statement prints totals, the parser compares what it
+  read with them and flags a mismatch on the review screen instead of importing silently
+  wrong numbers.
+- **Your bank not listed?** Parsers are small and per-issuer; adding one is one file in
+  `src/server/lib/pdf/parsers/` ([how](../planning/features/pdf-import.md)). When a statement
+  isn't recognized, the page shows the first lines it extracted, which is the spec for a new
+  parser.
 - **Text PDFs only.** A scanned statement is an image, and there is no OCR.
 
 ## 3. Bank sync
