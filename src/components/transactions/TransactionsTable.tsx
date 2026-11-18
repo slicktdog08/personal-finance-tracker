@@ -39,6 +39,7 @@ import { deleteTransaction, setTransactionBill } from "@/server/actions/transact
 import type { CategoryOption, SplitPiece } from "@/server/queries";
 import type { CategoryRule } from "@/server/lib/categorize";
 import { MarkPostedButton, SourceGlyph } from "./StatusBadge";
+import { IncomeDebitBadge } from "./IncomeDebitNote";
 
 export interface TxRow {
   id: number;
@@ -290,6 +291,7 @@ function TitleBits({ t, bills, basePath, categoryOptions }: Pick<TxRowProps, "t"
   return (
     <>
       {t.pending && <PendingBadge />}
+      <IncomeDebitBadge row={t} />
       <MarkPostedButton id={t.id} pending={t.pending} source={t.source} path={basePath} />
       <SourceGlyph source={t.source} />
       {t.billId != null && (

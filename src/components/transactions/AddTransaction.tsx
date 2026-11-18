@@ -15,6 +15,7 @@ import {
 import { formatMoney } from "@/server/lib/money";
 import { formatDate } from "@/server/lib/period";
 import type { CategoryOption } from "@/server/queries";
+import { IncomeDebitNote } from "./IncomeDebitNote";
 
 interface AccountOption {
   id: number;
@@ -316,6 +317,7 @@ export function AddTransaction({
               className="mp-input !h-auto py-2 leading-snug resize-y"
             />
           </div>
+          <IncomeDebitNote row={{ direction, category: cat, description: desc }} onSwitch={() => setDirection("Credit")} />
           {showOffset && (
             <div className="rounded-panel bg-sunken p-3 space-y-2">
               <div className="flex items-center gap-1.5 text-xs font-semibold text-fg">

@@ -145,3 +145,26 @@ export function isPayrollDescription(description: string | null | undefined, pat
     return false;
   }
 }
+
+/** The category that marks a row as income. */
+export const DEPOSIT_CATEGORY = "Deposit";
+
+/**
+ * A row that reads as income but is recorded as money OUT — almost always the Direction select
+ * left on its Debit default. It isn't blocked (a reversed paycheck or a clawback is a real
+ * Debit), but it is worth flagging: the payday matcher only looks at Credits, so the deposit
+ * never fills its payday, and as a Debit it is counted as spending on top. Returns the reason
+ * to show, or null when the row looks consistent.
+ */
+export function incomeDebitWarning(row: {
+  direction: string;
+  category?: string | null;
+  description?: string | null;
+}): string | null {
+  if (row.direction !== "Debit") return null;
+  const deposit = row.category === DEPOSIT_CATEGORY;
+  const payroll = isPayrollDescription(row.description);
+  if (!deposit && !payroll) return null;
+  const why = deposit ? `categorized ${DEPOSIT_CATEGORY}` : "reads as payroll";
+  return `This is ${why} but recorded as a Debit (money out). It won't count toward your payday and will be treated as spending. Switch to Credit unless the money really left.`;
+}

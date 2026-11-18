@@ -8,6 +8,7 @@ import { Icon } from "@/components/ds";
 import { updateTransaction } from "@/server/actions/transactions";
 import { toNum } from "@/server/lib/money";
 import type { CategoryOption } from "@/server/queries";
+import { IncomeDebitNote } from "./IncomeDebitNote";
 
 export interface EditAccountOption {
   id: number;
@@ -202,6 +203,7 @@ export function EditTransaction({
                 className={inputCls + " resize-y"}
               />
             </div>
+            <IncomeDebitNote row={{ direction, category: cat, description: desc }} onSwitch={() => setDirection("Credit")} />
             {!synced && (
               <label className="flex items-center gap-2 cursor-pointer select-none">
                 <input

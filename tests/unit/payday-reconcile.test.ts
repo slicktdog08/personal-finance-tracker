@@ -2,6 +2,7 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import {
   DEFAULT_DEPOSIT_MATCH,
+  incomeDebitWarning,
   isPayrollDescription,
   reconcilePaydays,
   type ObservedDeposit,
@@ -129,5 +130,20 @@ describe("isPayrollDescription", () => {
 
   test("an invalid regex matches nothing instead of throwing", () => {
     assert.equal(isPayrollDescription("PAYROLL", "([unclosed"), false);
+  });
+});
+
+describe("incomeDebitWarning", () => {
+  test("flags a Deposit-category Debit", () => {
+    assert.match(incomeDebitWarning({ direction: "Debit", category: "Deposit", description: "Mobile deposit" }) ?? "", /categorized Deposit/);
+  });
+
+  test("flags a payroll description on a Debit even without a category", () => {
+    assert.match(incomeDebitWarning({ direction: "Debit", category: null, description: "ACME CORP PAYROLL" }) ?? "", /reads as payroll/);
+  });
+
+  test("is quiet for Credits and for ordinary Debits", () => {
+    assert.equal(incomeDebitWarning({ direction: "Credit", category: "Deposit", description: "ACME CORP PAYROLL" }), null);
+    assert.equal(incomeDebitWarning({ direction: "Debit", category: "Food/Groceries", description: "GROCER" }), null);
   });
 });
