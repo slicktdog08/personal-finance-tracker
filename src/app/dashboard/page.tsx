@@ -284,6 +284,7 @@ export default async function DashboardPage({
   const rebalance = liabilityStart
     ? cardRebalanceFrom(creditAccounts, liabilityStart, pendingTxns, rebalancePlans(budget?.lines ?? []))
     : null;
+  const rebalanceOwe = rebalance?.owe ?? 0;
 
   // ---- Loans (as of end of selected month): balance owed + interest + min payment ----
   let debtOwed = 0;
@@ -799,7 +800,13 @@ export default async function DashboardPage({
       value={hasRecordedCash ? cashTotal : null}
       caption={
         hasRecordedCash ? (
-          <>as of {dayLabel(cashAsOf)}</>
+          rebalanceOwe > 0 ? (
+            <>
+              <Money value={cashTotal - rebalanceOwe} kind="neutral" whole /> after card rebalance · as of {dayLabel(cashAsOf)}
+            </>
+          ) : (
+            <>as of {dayLabel(cashAsOf)}</>
+          )
         ) : (
           <Link href="/accounts" className="text-accent-text hover:underline">
             Record balances
@@ -812,6 +819,9 @@ export default async function DashboardPage({
               { label: "Checking", value: checkingTotal },
               { label: "Savings", value: savingsTotal },
               ...(hasWallet ? [{ label: "Pocket", value: walletTotal }] : []),
+              // Card charges not yet paid back are cash that's already spoken for — it leaves
+              // with the rebalance payment. Pending, in effect.
+              ...(rebalanceOwe > 0 ? [{ label: "Card rebalance", value: -rebalanceOwe }] : []),
             ]
           : []
       }

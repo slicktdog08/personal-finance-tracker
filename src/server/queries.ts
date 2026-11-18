@@ -611,15 +611,25 @@ export async function getLiabilityAccounts(asOf?: string): Promise<LiabilityAcco
 export async function getLiabilityStartBalances(
   monthStart: string,
   asOf: string,
-): Promise<Map<number, { balance: number; asOf: string }>> {
+): Promise<Map<number, { balance: number; asOf: string; postedSince: number | null }>> {
   const before = await getLiabilityAccounts(dayBefore(monthStart));
-  const out = new Map<number, { balance: number; asOf: string }>();
+  const out = new Map<number, { balance: number; asOf: string; postedSince: number | null }>();
   for (const l of before) {
     const b = toNum(l.balance);
-    if (b != null && l.asOf) out.set(l.id, { balance: b, asOf: l.asOf });
+    if (b != null && l.asOf) out.set(l.id, { balance: b, asOf: l.asOf, postedSince: null });
   }
   const unseen = before.filter((l) => !out.has(l.id)).map((l) => l.id);
-  if (!unseen.length) return out;
+  if (unseen.length) await firstSnapshotsThisMonth(out, unseen, monthStart, asOf);
+  await attachPostedSince(out, asOf);
+  return out;
+}
+
+async function firstSnapshotsThisMonth(
+  out: Map<number, { balance: number; asOf: string; postedSince: number | null }>,
+  unseen: number[],
+  monthStart: string,
+  asOf: string,
+) {
   const rows = await db
     .select({ accountId: accountBalances.accountId, balance: accountBalances.balance, asOf: accountBalances.asOf })
     .from(accountBalances)
@@ -633,9 +643,40 @@ export async function getLiabilityStartBalances(
     .orderBy(asc(accountBalances.asOf), asc(accountBalances.id));
   for (const r of rows) {
     const b = toNum(r.balance);
-    if (b != null && !out.has(r.accountId)) out.set(r.accountId, { balance: b, asOf: r.asOf });
+    if (b != null && !out.has(r.accountId)) out.set(r.accountId, { balance: b, asOf: r.asOf, postedSince: null });
   }
-  return out;
+}
+
+/**
+ * Net POSTED activity on each account dated after its starting snapshot, up to `asOf` (Debit adds
+ * to what's owed, Credit subtracts). The card rebalance uses it to recover a credit balance that
+ * the bank reports as 0 — see server/lib/card-rebalance.ts.
+ */
+async function attachPostedSince(out: Map<number, { balance: number; asOf: string; postedSince: number | null }>, asOf: string) {
+  if (!out.size) return;
+  const from = [...out.values()].reduce((m, v) => (v.asOf < m ? v.asOf : m), asOf);
+  const rows = await db
+    .select({
+      accountId: transactions.accountId,
+      date: transactions.txnDate,
+      net: sql<string>`SUM(CASE WHEN ${transactions.direction} = 'Credit' THEN -${transactions.amount} ELSE ${transactions.amount} END)`,
+    })
+    .from(transactions)
+    .where(
+      and(
+        inArray(transactions.accountId, [...out.keys()]),
+        eq(transactions.pending, false),
+        gt(transactions.txnDate, from),
+        lte(transactions.txnDate, asOf),
+      ),
+    )
+    .groupBy(transactions.accountId, transactions.txnDate);
+  for (const v of out.values()) v.postedSince = 0;
+  for (const r of rows) {
+    const v = r.accountId != null ? out.get(r.accountId) : undefined;
+    if (!v || String(r.date) <= v.asOf) continue;
+    v.postedSince = round2((v.postedSince ?? 0) + (toNum(r.net) ?? 0));
+  }
 }
 
 // Full balance ledger for every liability account (newest first), grouped by accountId in the

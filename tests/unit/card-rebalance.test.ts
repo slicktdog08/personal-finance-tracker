@@ -176,4 +176,49 @@ describe("cardRebalance", () => {
       assert.equal(r.owe, 0);
     });
   });
+
+  describe("credit balances", () => {
+    test("a credit absorbs new charges before anything is owed", () => {
+      // Started the month 50 in credit, charged 30: still 20 in credit.
+      const r = cardRebalance([card({ start: -50, balance: -20 })]);
+      assert.equal(r.rows[0].target, 0);
+      assert.equal(r.rows[0].now, -20);
+      assert.equal(r.owe, 0);
+    });
+
+    test("charges past the credit are owed from zero", () => {
+      const r = cardRebalance([card({ start: -50, balance: 30 })]);
+      assert.equal(r.owe, 30);
+    });
+
+    test("a payoff bigger than the balance leaves a target of 0, not a credit", () => {
+      // 1000 owed, 1100 planned: the plan's balance is 0, and the extra 100 is a credit.
+      const r = cardRebalance([card({ start: 1000, balance: 0, pending: 80, plan: { planned: 1100, apr: null, paid: 1100 } })]);
+      assert.equal(r.rows[0].expected, 0);
+      assert.equal(r.rows[0].target, 0);
+      assert.equal(r.owe, 80);
+    });
+
+    test("a bank balance of 0 gives way to the ledger's credit", () => {
+      // Start 1000 + 400 charged − 1500 paid = 100 in credit; 80 pending still fits in it.
+      const r = cardRebalance([card({ start: 1000, balance: 0, postedSince: -1100, pending: 80, plan: { planned: 1100, apr: null, paid: 1500 } })]);
+      assert.equal(r.rows[0].balance, -100);
+      assert.equal(r.rows[0].bankBalance, 0);
+      assert.equal(r.rows[0].now, -20);
+      assert.equal(r.owe, 0);
+    });
+
+    test("a non-zero bank balance is trusted over the ledger", () => {
+      const r = cardRebalance([card({ balance: 1100, postedSince: -100 })]);
+      assert.equal(r.rows[0].balance, 1100);
+      assert.equal(r.rows[0].bankBalance, null);
+      assert.equal(r.owe, 100);
+    });
+
+    test("a bank balance of 0 with a ledger that isn't in credit stays 0", () => {
+      const r = cardRebalance([card({ start: 1000, balance: 0, postedSince: -1000, pending: 25 })]);
+      assert.equal(r.rows[0].balance, 0);
+      assert.equal(r.rows[0].bankBalance, null);
+    });
+  });
 });

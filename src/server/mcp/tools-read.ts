@@ -401,7 +401,7 @@ export function registerReadTools(server: McpServer) {
     {
       title: "Card rebalance (owed to cards this month)",
       description:
-        "How far each active credit card is over the balance it started the current month at — the payment that brings it back after charging to it. Before this month's budgeted payoff payment is made, it's measured against the starting balance and excludes the payoff. Once payments linked to the card reach the budget's planned amount (`planPaid`), it's measured against the balance the plan leaves (`target` = start + a month's interest − planned), so charges after the payoff still show. Per card: `start` (balance before the 1st, or the first one recorded this month), `balance` (latest posted balance), `pending` (net pending activity on the card: charges minus credits/payments, which the posted balance doesn't include yet), `pendingPayments` (payments still pending on another account, linked to the card's bill — on their way to the card), `now` = balance + pending − pendingPayments, `change` = now − start, `target` = start (or the plan's balance once `planPaid`), `owe` = max(0, now − target). `totalOwe` sums `owe`. Cards missing a start or current balance are listed in `missing`. Same figure as the dashboard's \"Pay to rebalance\" widget.",
+        "How far each active credit card is over the balance it started the current month at — the payment that brings it back after charging to it. Before this month's budgeted payoff payment is made, it's measured against the starting balance and excludes the payoff. Once payments linked to the card reach the budget's planned amount (`planPaid`), it's measured against the balance the plan leaves (`target` = start + a month's interest − planned), so charges after the payoff still show. Per card: `start` (balance before the 1st, or the first one recorded this month), `balance` (latest posted balance; a negative balance is a credit, which absorbs new charges — when the bank reports 0 but the start plus this month's posted rows is negative, that credit is used and the bank's figure is in `bankBalance`), `pending` (net pending activity on the card: charges minus credits/payments, which the posted balance doesn't include yet), `pendingPayments` (payments still pending on another account, linked to the card's bill — on their way to the card), `now` = balance + pending − pendingPayments, `change` = now − start, `target` = start (or the plan's balance once `planPaid`), never below 0, `owe` = max(0, now − target). `totalOwe` sums `owe`. Cards missing a start or current balance are listed in `missing`. The charges it pays back are already budgeted in their own categories, so `totalOwe` is cash already spoken for, not new spending. Same figure as the dashboard's \"Pay to rebalance\" widget.",
       inputSchema: z.object({}),
       annotations: READ_ONLY,
     },
@@ -426,6 +426,7 @@ export function registerReadTools(server: McpServer) {
           start: money0(c.start),
           startAsOf: c.startAsOf,
           balance: money0(c.balance),
+          bankBalance: c.bankBalance != null ? money0(c.bankBalance) : null,
           balanceAsOf: c.nowAsOf,
           pending: money0(c.pending),
           pendingPayments: money0(c.pendingPayments),

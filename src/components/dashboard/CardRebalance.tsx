@@ -18,7 +18,7 @@ export function CardRebalance({ data }: { data: CardRebalanceData }) {
         kind={owe > 0 ? "owed" : "neutral"}
         sub={
           owe > 0
-            ? `${over} card${over === 1 ? "" : "s"} over target · start of month, or the plan's balance once the payoff is paid`
+            ? `${over} card${over === 1 ? "" : "s"} over target · start of month, or the plan's balance once the payoff is paid · the spending is already in its categories`
             : "Every card is at or under its target"
         }
       />
@@ -31,11 +31,12 @@ export function CardRebalance({ data }: { data: CardRebalanceData }) {
             className="sm:border-b-0!"
             lead={<Glyph icon="credit-card" color="var(--mp-money-owed)" size="sm" />}
             title={r.label}
-            tooltip={`Started the month at ${r.start.toFixed(2)} (${dayLabel(r.startAsOf)})${r.planPaid ? `; payoff paid, so the plan's ${r.target.toFixed(2)} is the target` : ""}; balance ${r.balance.toFixed(2)} as of ${dayLabel(r.nowAsOf)}${r.pending ? ` ${r.pending > 0 ? "+" : "−"} ${Math.abs(r.pending).toFixed(2)} pending` : ""}${r.pendingPayments ? ` − ${r.pendingPayments.toFixed(2)} payment on its way` : ""} = ${r.now.toFixed(2)}`}
+            tooltip={`Started the month at ${r.start.toFixed(2)} (${dayLabel(r.startAsOf)})${r.planPaid ? `; payoff paid, so the plan's ${r.target.toFixed(2)} is the target` : ""}; balance ${r.balance.toFixed(2)}${r.bankBalance != null ? ` (bank reports ${r.bankBalance.toFixed(2)}; the credit comes from this month's posted activity)` : ""} as of ${dayLabel(r.nowAsOf)}${r.pending ? ` ${r.pending > 0 ? "+" : "−"} ${Math.abs(r.pending).toFixed(2)} pending` : ""}${r.pendingPayments ? ` − ${r.pendingPayments.toFixed(2)} payment on its way` : ""} = ${r.now.toFixed(2)}`}
             sub={
               <>
                 {r.planPaid ? "After payoff" : "Started"} <Money value={r.target} kind="neutral" whole /> · now{" "}
                 <Money value={r.now} kind="neutral" whole />
+                {r.now < 0 && " credit"}
                 {r.pendingPayments > 0 && (
                   <>
                     {" "}
