@@ -22,6 +22,7 @@ import { Vitals } from "@/components/dashboard/Vitals";
 import { AdvisorCard } from "@/components/dashboard/AdvisorCard";
 import { Investments } from "@/components/dashboard/Investments";
 import { YearToDate } from "@/components/dashboard/YearToDate";
+import { SpendingPower } from "@/components/dashboard/SpendingPower";
 import { DashboardGrid, type DashboardWidget } from "@/components/dashboard/DashboardGrid";
 import type { WidgetId } from "@/lib/dashboard-layout";
 import {
@@ -64,6 +65,7 @@ import { ensureCurrentPeriods } from "@/server/periods";
 import { formatMoney, toNum } from "@/server/lib/money";
 import { monthlyInterest } from "@/server/lib/debt";
 import { computeVitals, yearToDate } from "@/server/lib/dashboard-vitals";
+import { spendingPower } from "@/server/lib/spending-power";
 import { windowStartLabel } from "@/server/lib/trends";
 import { countNewInsights, latestCheckin, listInsights } from "@/server/lib/advisor/store";
 import {
@@ -641,6 +643,30 @@ export default async function DashboardPage({
         />
       </Card>,
     );
+
+  // Spending power: cash on hand plus the unused credit on open cards — the capacity to pay for
+  // something today, before bills (that's Safe to spend). Needs a cash balance or a card limit.
+  const power = spendingPower(
+    cashTotal,
+    creditAccounts.map((a) => ({
+      id: a.id,
+      name: a.label || a.institution || `··${a.accountNumber.slice(-4)}`,
+      active: a.active,
+      balance: toNum(a.balance),
+      creditLimit: toNum(a.creditLimit),
+    })),
+  );
+  if (hasRecordedCash || power.cards.length > 0) {
+    const goalReserved = cashByAccount.reduce((s, a) => s + a.reserved, 0);
+    const powerAsOf = [cashAsOf, creditAsOf].reduce<string | null>((m, d) => (d && (!m || d > m) ? d : m), null);
+    add(
+      "spending-power",
+      "Spending power",
+      <Card>
+        <SpendingPower data={power} reservedForGoals={goalReserved} asOf={powerAsOf ? dayLabel(powerAsOf) : null} />
+      </Card>,
+    );
+  }
 
   // What the cards have grown by since the 1st — about today, so only on the current month.
   if (rebalance && (rebalance.rows.length || rebalance.missing.length))
