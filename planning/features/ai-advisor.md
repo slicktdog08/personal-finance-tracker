@@ -27,8 +27,11 @@
   this", Done / Dismiss), the latest check-in report, and the runs list. Buttons: *Generate
   insights*, *Run check-in*. The page polls while a run is in flight.
 - **/advisor:** chat threads. A message is stored as pending and fires the routine; the reply
-  lands in the thread. A message sent while a run is answering waits; the reply re-fires the
-  routine for it.
+  **streams into the thread as the run writes it** (see "Live replies" below). A message sent
+  while a run is answering waits; the reply re-fires the routine for it.
+- **Categorizing history** is a chat too (`/advisor?start=categorize`, linked from the
+  categorize page and Settings → Categories): see
+  [categorization.md](categorization.md#categorizing-history-in-the-advisor-chat).
 
 ## How it works today
 ```
@@ -37,8 +40,10 @@ app button ─► advisor_runs (queued) ─► fire routine "INSIGHTS" | "CHECKI
 routine session ─► get_advisor_inbox(payload) → request + playbook + thread/insight context
                 ─► start_advisor_run        → claims the queued run (status running)
                 ─► read tools (snapshot, trends, search_transactions…)
+                ─► stream_advisor_reply (chat: activity line + the reply so far, as it goes)
                 ─► save_insights / reply_to_advisor_thread / finish_advisor_run
-app page ◄── LiveRefresh polls advisorLiveState every 4s while a run is active
+chat page ◄── EventSource /api/advisor/stream (SSE; the server reads the DB once a second)
+other pages ◄── LiveRefresh polls advisorLiveState every 4s while a run is active
 ```
 - Shared types, payload format/parse, normalization: `src/lib/advisor.ts`
 - Fire the routine: `src/server/lib/advisor/routine.ts` (`fireAdvisorRoutine`)
@@ -49,6 +54,28 @@ app page ◄── LiveRefresh polls advisorLiveState every 4s while a run is ac
 - MCP tools: `src/server/mcp/tools-advisor.ts`
 - Server actions: `src/server/actions/advisor.ts`
 - UI: `src/app/insights/page.tsx`, `src/app/advisor/page.tsx`, `src/components/advisor/*`
+
+## Live replies (streaming)
+The routine can't stream tokens to the app: it is a Claude Code session on claude.ai whose only
+channel back is the MCP connector. So it streams **at the granularity it writes**:
+- `stream_advisor_reply({threadId, runId, activity?, text?, mode})` (advisor tool, no
+  confirmation): `activity` is one line on `advisor_runs.activity` ("Grouping the backlog…");
+  `text` appends to (or replaces) a draft assistant message with status `streaming`.
+  `reply_to_advisor_thread` then turns that same row into the final answer (`finalizeDraft`), so
+  the thread never shows the draft and the reply twice.
+- `/api/advisor/stream?thread=<id>` (`src/app/api/advisor/stream/route.ts`) is a Server-Sent
+  Events route: it reads `liveThreadState` every second and sends `state` only when something
+  changed, then `done` once nothing is expected. It ends itself after 4 minutes (under nginx's
+  300s `proxy_read_timeout`; `nginx/template` already has `proxy_buffering off`) and the browser's
+  EventSource reconnects.
+- `ChatView` + `useLiveThread` overlay the streamed messages on the server-rendered ones and show
+  `activity` as the status line; `StreamingMarkdown` reveals each new chunk over ~half a second
+  (instant with reduced motion). On `done` the page refreshes once.
+- The chat playbook tells every chat run to stream: an activity line right after
+  `start_advisor_run`, one before each slow step, and each finished section as it's ready.
+- A draft whose run died is marked `failed` by `sweepStale` (its text stays, shown as
+  "couldn't finish"). Migration: `drizzle/0036_advisor_streaming.sql` (`advisor_runs.activity`).
+- The chat's markdown renderer also does pipe tables now (categorization proposals use them).
 
 ## Non-obvious logic / edge cases
 - **The payload is untrusted.** Only `INSIGHTS`, `CHECKIN` and `^CHAT-\d+$` are accepted
@@ -72,7 +99,7 @@ app page ◄── LiveRefresh polls advisorLiveState every 4s while a run is ac
 
 ## Data model
 `drizzle/0027_add_advisor.sql`: `advisor_runs`, `advisor_insights`, `advisor_threads`,
-`advisor_messages` (Drizzle definitions at the end of `src/server/db/schema.ts`). Nothing in the
+`advisor_messages`; `drizzle/0036_advisor_streaming.sql` adds `advisor_runs.activity` (Drizzle definitions at the end of `src/server/db/schema.ts`). Nothing in the
 ledger reads them. After applying the migration, regenerate the test schema
 (`npm run db:test:schema`).
 

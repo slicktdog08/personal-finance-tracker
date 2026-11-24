@@ -5,6 +5,7 @@ import { advisorInsights, advisorMessages, advisorRuns, advisorThreads } from "@
 import type { AdvisorInsight, AdvisorMessage, AdvisorRun } from "@/server/db/schema";
 import {
   clip,
+  mergeDraft,
   nextInsightStatus,
   normalizeCategory,
   normalizeSeverity,
@@ -45,6 +46,7 @@ export function toRunDto(r: AdvisorRun): AdvisorRunDto {
     threadId: r.threadId ?? null,
     sessionUrl: r.sessionUrl ?? null,
     summary: r.summary ?? null,
+    activity: r.activity ?? null,
     report: r.report ?? null,
     insightsSaved: r.insightsSaved,
     startedAt: iso(r.startedAt) ?? new Date(0).toISOString(),
@@ -95,6 +97,7 @@ export async function createRun(data: {
 export type RunPatch = Partial<{
   status: RunStatus;
   summary: string | null;
+  activity: string | null;
   report: string | null;
   sessionUrl: string | null;
   routine: string | null;
@@ -104,7 +107,10 @@ export type RunPatch = Partial<{
 export async function updateRun(id: number, patch: RunPatch): Promise<AdvisorRunDto | null> {
   const set: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(patch)) if (v !== undefined) set[k] = v;
-  if (patch.status === "ok" || patch.status === "failed") set.finishedAt = sql`CURRENT_TIMESTAMP`;
+  if (patch.status === "ok" || patch.status === "failed") {
+    set.finishedAt = sql`CURRENT_TIMESTAMP`;
+    set.activity = null;
+  }
   if (Object.keys(set).length) await db.update(advisorRuns).set(set).where(eq(advisorRuns.id, id));
   return getRun(id);
 }
@@ -206,6 +212,17 @@ export async function sweepStale(): Promise<void> {
         eq(advisorMessages.role, "user"),
         eq(advisorMessages.status, "pending"),
         sql`${advisorMessages.createdAt} < DATE_SUB(CURRENT_TIMESTAMP, INTERVAL ${RUNNING_STALE_MIN} MINUTE)`,
+      ),
+    );
+  // A reply that was being streamed when its run died keeps what it wrote, marked unfinished.
+  await db
+    .update(advisorMessages)
+    .set({ status: "failed", answeredAt: sql`CURRENT_TIMESTAMP` })
+    .where(
+      and(
+        eq(advisorMessages.role, "assistant"),
+        eq(advisorMessages.status, "streaming"),
+        sql`(${advisorMessages.runId} IS NULL OR ${advisorMessages.runId} IN (SELECT r.id FROM advisor_runs r WHERE r.status IN ('ok', 'failed')))`,
       ),
     );
 }
@@ -478,4 +495,73 @@ export async function threadsWithPending(limit = 5): Promise<number[]> {
     .orderBy(sql`MIN(${advisorMessages.id})`)
     .limit(limit);
   return rows.map((r) => r.threadId);
+}
+
+// ---- streamed replies -------------------------------------------------------------------
+
+/** The reply a run is still writing in a thread, if it has posted one. */
+export async function getDraft(threadId: number, runId: number): Promise<AdvisorMessageDto | null> {
+  const [row] = await db
+    .select()
+    .from(advisorMessages)
+    .where(
+      and(
+        eq(advisorMessages.threadId, threadId),
+        eq(advisorMessages.runId, runId),
+        eq(advisorMessages.role, "assistant"),
+        eq(advisorMessages.status, "streaming"),
+      ),
+    )
+    .orderBy(desc(advisorMessages.id))
+    .limit(1);
+  return row ? toMessageDto(row) : null;
+}
+
+/** Post more of a reply (or replace it): creates the streaming draft on the first call. */
+export async function writeDraft(threadId: number, runId: number, text: string, mode: "append" | "replace"): Promise<AdvisorMessageDto> {
+  const draft = await getDraft(threadId, runId);
+  if (!draft) return addMessage(threadId, "assistant", mergeDraft("", text, "replace"), { status: "streaming", runId });
+  const body = mergeDraft(draft.body, text, mode);
+  await db.update(advisorMessages).set({ body }).where(eq(advisorMessages.id, draft.id));
+  await db.update(advisorThreads).set({ updatedAt: sql`CURRENT_TIMESTAMP` }).where(eq(advisorThreads.id, threadId));
+  return { ...draft, body };
+}
+
+/** Turn the draft into the final reply (or store a new one when nothing was streamed). */
+export async function finalizeDraft(
+  threadId: number,
+  runId: number | null,
+  body: string,
+  status: "answered" | "failed",
+): Promise<AdvisorMessageDto> {
+  const draft = runId ? await getDraft(threadId, runId) : null;
+  if (!draft) return addMessage(threadId, "assistant", body, { status, runId });
+  await db
+    .update(advisorMessages)
+    .set({ body: body.trim(), status, answeredAt: sql`CURRENT_TIMESTAMP` })
+    .where(eq(advisorMessages.id, draft.id));
+  await db.update(advisorThreads).set({ updatedAt: sql`CURRENT_TIMESTAMP` }).where(eq(advisorThreads.id, threadId));
+  const [row] = await db.select().from(advisorMessages).where(eq(advisorMessages.id, draft.id)).limit(1);
+  return toMessageDto(row);
+}
+
+export interface LiveThreadState {
+  /** The run answering this thread right now, if any. */
+  run: Pick<AdvisorRunDto, "id" | "status" | "activity" | "sessionUrl"> | null;
+  /** The newest messages (enough to cover the turn in flight and its streaming reply). */
+  messages: AdvisorMessageDto[];
+  /** Something is still expected: a run in flight, an unanswered turn or a reply being written. */
+  active: boolean;
+}
+
+/** What /api/advisor/stream pushes to an open chat. */
+export async function liveThreadState(threadId: number): Promise<LiveThreadState> {
+  const [run, messages] = await Promise.all([activeRun("chat", threadId), listMessages(threadId, 12)]);
+  const active =
+    Boolean(run) || messages.some((m) => (m.role === "user" && m.status === "pending") || m.status === "streaming");
+  return {
+    run: run ? { id: run.id, status: run.status, activity: run.activity, sessionUrl: run.sessionUrl } : null,
+    messages,
+    active,
+  };
 }

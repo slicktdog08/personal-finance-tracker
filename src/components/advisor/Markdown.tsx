@@ -1,7 +1,8 @@
 import { Fragment } from "react";
 
 // A deliberately small markdown renderer for what the advisor writes: headings, paragraphs,
-// bullet and numbered lists, fenced code, **bold**, *italic*, `code` and [links](https://…).
+// bullet and numbered lists, pipe tables, fenced code, **bold**, *italic*, `code` and
+// [links](https://…).
 // It builds React elements (never innerHTML), so nothing in a reply can inject markup, and
 // links only render for http(s) and same-app paths.
 
@@ -10,7 +11,18 @@ type Block =
   | { t: "p"; text: string }
   | { t: "ul" | "ol"; items: string[] }
   | { t: "code"; text: string }
+  | { t: "table"; head: string[]; rows: string[][]; align: ("left" | "right" | "center")[] }
   | { t: "hr" };
+
+const TABLE_SEP = /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/;
+
+/** "| a | b |" → ["a", "b"]; a `\|` stays a literal pipe. */
+export function tableCells(line: string): string[] {
+  let t = line.trim();
+  if (t.startsWith("|")) t = t.slice(1);
+  if (t.endsWith("|") && !t.endsWith("\\|")) t = t.slice(0, -1);
+  return t.split(/(?<!\\)\|/).map((c) => c.trim().replace(/\\\|/g, "|"));
+}
 
 export function parseBlocks(src: string): Block[] {
   const lines = src.replace(/\r\n?/g, "\n").split("\n");
@@ -27,6 +39,20 @@ export function parseBlocks(src: string): Block[] {
       const body: string[] = [];
       for (i++; i < lines.length && !/^```/.test(lines[i]); i++) body.push(lines[i]);
       out.push({ t: "code", text: body.join("\n") });
+      continue;
+    }
+    // A pipe table: header row, then a |---|---| separator, then rows until a non-table line.
+    if (line.includes("|") && i + 1 < lines.length && TABLE_SEP.test(lines[i + 1]) && lines[i + 1].includes("|")) {
+      flush();
+      const head = tableCells(line);
+      const align = tableCells(lines[i + 1]).map((c) => (c.startsWith(":") && c.endsWith(":") ? "center" : c.endsWith(":") ? "right" : "left") as "left" | "right" | "center");
+      const rows: string[][] = [];
+      for (i += 2; i < lines.length && lines[i].includes("|") && lines[i].trim(); i++) {
+        const cells = tableCells(lines[i]);
+        rows.push(head.map((_, j) => cells[j] ?? ""));
+      }
+      i--;
+      out.push({ t: "table", head, rows, align });
       continue;
     }
     const h = /^(#{1,4})\s+(.*)$/.exec(line);
@@ -131,6 +157,33 @@ export function Markdown({ text, className = "" }: { text: string; className?: s
               <pre key={i} className="overflow-x-auto rounded-lg bg-sunken p-3 text-xs leading-snug whitespace-pre-wrap">
                 {b.text}
               </pre>
+            );
+          case "table":
+            return (
+              <div key={i} className="-mx-1 overflow-x-auto">
+                <table className="w-full border-collapse text-xs">
+                  <thead>
+                    <tr className="border-b border-line text-fg-2">
+                      {b.head.map((c, j) => (
+                        <th key={j} className="px-1.5 py-1 font-semibold whitespace-nowrap" style={{ textAlign: b.align[j] ?? "left" }}>
+                          {inline(c)}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {b.rows.map((r, j) => (
+                      <tr key={j} className="border-b border-line/60 align-top">
+                        {r.map((c, k) => (
+                          <td key={k} className="px-1.5 py-1" style={{ textAlign: b.align[k] ?? "left" }}>
+                            {inline(c)}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             );
           case "hr":
             return <hr key={i} className="border-line" />;

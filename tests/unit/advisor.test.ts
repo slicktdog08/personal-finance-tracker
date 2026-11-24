@@ -2,6 +2,7 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import {
   formatPayload,
+  mergeDraft,
   nextInsightStatus,
   normalizeCategory,
   normalizeSeverity,
@@ -10,7 +11,7 @@ import {
   slugKey,
   threadTitle,
 } from "@/lib/advisor";
-import { parseBlocks } from "@/components/advisor/Markdown";
+import { parseBlocks, tableCells } from "@/components/advisor/Markdown";
 
 describe("routine payload", () => {
   test("round-trips every request shape", () => {
@@ -83,5 +84,31 @@ describe("markdown blocks", () => {
     assert.deepEqual((blocks[1] as { items: string[] }).items, ["Cash: $2,000", "Bills: 2 due this week"]);
     assert.equal((blocks[3] as { text: string }).text, "raw *text*");
     assert.equal((blocks[4] as { text: string }).text, "Plain line\nsecond line");
+  });
+});
+
+describe("streamed replies", () => {
+  test("append adds a section with a blank line; replace swaps the draft", () => {
+    assert.equal(mergeDraft("", "  First part ", "append"), "First part");
+    assert.equal(mergeDraft("First part", "Second part", "append"), "First part\n\nSecond part");
+    assert.equal(mergeDraft("Line one", "\nline two", "append"), "Line one\nline two");
+    assert.equal(mergeDraft("Old draft", "New draft", "replace"), "New draft");
+    assert.equal(mergeDraft("Kept", "   ", "append"), "Kept");
+  });
+});
+
+describe("markdown tables", () => {
+  test("a pipe table with alignment, ragged rows padded", () => {
+    const blocks = parseBlocks("Proposal:\n\n| # | Merchant | n |\n|---|:---|---:|\n| 1 | JOES GRILL | 12 |\n| 2 | ACME |\n\nAfter.");
+    assert.deepEqual(blocks.map((b) => b.t), ["p", "table", "p"]);
+    const t = blocks[1] as { head: string[]; rows: string[][]; align: string[] };
+    assert.deepEqual(t.head, ["#", "Merchant", "n"]);
+    assert.deepEqual(t.align, ["left", "left", "right"]);
+    assert.deepEqual(t.rows, [["1", "JOES GRILL", "12"], ["2", "ACME", ""]]);
+  });
+
+  test("an escaped pipe stays in its cell; a lone --- is still a rule", () => {
+    assert.deepEqual(tableCells("| a \\| b | c |"), ["a | b", "c"]);
+    assert.deepEqual(parseBlocks("text\n\n---\n\nmore").map((b) => b.t), ["p", "hr", "p"]);
   });
 });
