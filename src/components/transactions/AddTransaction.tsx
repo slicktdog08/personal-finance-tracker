@@ -1,10 +1,10 @@
 "use client";
 
-import { useRef, useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { Sheet } from "@/components/ui/Sheet";
 import { ColorSelect } from "@/components/ColorSelect";
 import { Icon } from "@/components/ds";
-import { createTransaction } from "@/server/actions/transactions";
+import { createTransaction, type RuleOutcome } from "@/server/actions/transactions";
 import { LIABILITY_ACCOUNT_TYPES, WALLET_ACCOUNT_TYPES } from "@/constants/enums";
 import {
   canFund,
@@ -67,6 +67,14 @@ export function AddTransaction({
   const [offsetRows, setOffsetRows] = useState<{ wid: string; amt: string }[]>([]);
   const [offsetTouched, setOffsetTouched] = useState(false);
   const [error, setError] = useState("");
+  // What the saved rules did to the last saved row, shown under the button after the form closes
+  // so it's clear the category / bill link came from a rule (and a bill got marked paid).
+  const [ruleNote, setRuleNote] = useState<RuleOutcome | null>(null);
+  useEffect(() => {
+    if (!ruleNote) return;
+    const t = setTimeout(() => setRuleNote(null), 9000);
+    return () => clearTimeout(t);
+  }, [ruleNote]);
 
   const inputCls =
     "mp-input !h-9";
@@ -92,6 +100,7 @@ export function AddTransaction({
     setOffsetRows([]);
     setOffsetTouched(false);
     setError("");
+    setRuleNote(null);
     setOpen(true);
   }
 
@@ -126,6 +135,7 @@ export function AddTransaction({
         setError(res.offset.error);
         return;
       }
+      setRuleNote(res?.rules ?? null);
       setOpen(false);
     });
   }
@@ -216,14 +226,35 @@ export function AddTransaction({
 
   return (
     <>
-      <button
-        ref={btnRef}
-        onClick={toggle}
-        className="mp-btn mp-btn--primary"
-      >
-        <Icon name={open ? "x" : "plus"} size={16} />
-        {open ? "Close" : "Add"}
-      </button>
+      <span className="relative inline-flex">
+        <button
+          ref={btnRef}
+          onClick={toggle}
+          className="mp-btn mp-btn--primary"
+        >
+          <Icon name={open ? "x" : "plus"} size={16} />
+          {open ? "Close" : "Add"}
+        </button>
+        {ruleNote && !open && (
+          <button
+            type="button"
+            onClick={() => setRuleNote(null)}
+            title="Dismiss"
+            className="absolute right-0 top-full mt-1 z-20 w-64 rounded-panel border border-line bg-raised p-2 text-left text-xs text-fg-2 shadow-lg"
+          >
+            <span className="flex items-center gap-1 font-semibold text-fg">
+              <Icon name="sparkles" size={12} /> Saved rules applied
+            </span>
+            {ruleNote.category && <span className="block">Category set to {ruleNote.category}.</span>}
+            {ruleNote.billName && (
+              <span className="block">
+                Linked to {ruleNote.billName}
+                {ruleNote.billPaid ? " and marked paid for the month." : "."}
+              </span>
+            )}
+          </button>
+        )}
+      </span>
 
       <Sheet
         open={open}
@@ -305,6 +336,12 @@ export function AddTransaction({
                 onSelect={setCat}
               />
             </div>
+            {!cat && (
+              <span className="text-[11px] leading-snug text-fg-3">
+                Leave blank to let your saved rules pick it. A rule that links a bill also marks
+                that bill paid for the month{isPending ? " — once this posts" : ""}.
+              </span>
+            )}
           </div>
           <div className="flex flex-col gap-1">
             <span className="mp-field__label">Notes</span>

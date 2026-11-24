@@ -649,6 +649,12 @@ async function syncAccount(
         })
         .where(and(eq(transactions.id, s.existingId), eq(transactions.pending, true)));
     }
+    // A settled placeholder is now posted: bill-link rules get their turn (a link the user made
+    // on the placeholder stays — applyRules only links unlinked rows).
+    const settledIds = settles.filter((s) => s.fetched.status === "posted").map((s) => s.existingId);
+    if (settledIds.length && ctx.rules.length) {
+      await applyRules({ rules: ctx.rules, where: inArray(transactions.id, settledIds), categories: false, bills: true });
+    }
   }
 
   if (ctx.settings.recordBalances && sa.syncBalances) {

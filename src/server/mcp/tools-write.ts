@@ -257,7 +257,7 @@ export function registerWriteTools(server: McpServer) {
         if (!match || !match.active) return fail(`Unknown or disabled category "${input.category}".`);
         input.category = match.name;
       }
-      await createTransaction(
+      const created = await createTransaction(
         null,
         {
           txnDate: input.date,
@@ -278,13 +278,16 @@ export function registerWriteTools(server: McpServer) {
       const row = page.rows.find((r) => r.txnDate === input.date && toNum(r.amount) === input.amount && r.direction === input.direction);
       return ok({
         recorded: true,
-        transactionId: row?.id ?? null,
+        transactionId: created.transactionId ?? row?.id ?? null,
         date: input.date,
         description: input.description,
         amount: money0(input.amount),
         direction: input.direction,
-        category: input.category ?? null,
+        category: input.category ?? created.rules?.category ?? null,
         account: input.accountNumber ?? null,
+        // Saved rules run on manual rows too: a category when none was given, and a bill link
+        // (which marks that month's bill paid) once the row is posted.
+        appliedByRules: created.rules ?? null,
       });
     },
   );
