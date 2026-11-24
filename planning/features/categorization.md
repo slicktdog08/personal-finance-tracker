@@ -81,6 +81,50 @@ mechanism (see below).
   `deleteCategory`).
 - **Import application**: `import.ts` / `pdf-import.ts` load rules and call `categorize()` per row.
 
+## Categorizing history in the advisor chat
+For a large historical backlog (thousands of rows, years back) the per-row and per-rule tools
+are too slow, so the advisor works through it with the user in an ordinary `/advisor` chat. No
+extra review screen: the chat *is* the review, and nothing is written until the user confirms
+in the thread. Entry: the "Start in chat" card on the categorize page and Settings →
+Categories (`CategorizeWithAdvisor`, shown while anything is uncategorized) →
+`/advisor?start=categorize`, which prefills `CATEGORIZE_PROMPT`.
+
+**Rounds.** Each user turn fires one routine run (chat playbook, `CATEGORIZE` section in
+`src/server/lib/advisor/playbooks.ts`):
+1. Context: `get_categorization_overview` — backlog by year and account, a month-by-month
+   timeline of the places named in descriptions (a block of months in another city usually
+   means a move or a long trip, which decides how a whole run of restaurants/shops is filed),
+   active categories, bills with ids, saved-rule count. Earlier answers in the thread are
+   standing instructions.
+2. Batch: `get_uncategorized_groups` — uncategorized rows grouped by merchant phrase, biggest
+   first, paged by offset (filters: dates, accounts, direction, search).
+3. Proposal: a numbered table (merchant · n · dates · → category · rule or these rows · bill ·
+   confidence) plus ≤5 questions chosen to settle many groups at once.
+4. Apply what the user confirmed ("all but 4", "7 is Groceries"): `categorize_with_rule`
+   (recurring merchants — the rule also files future imports; `dryRun` + `elsewhere` to catch a
+   too-broad pattern; `billId` links payments to a bill), `set_transaction_category` (one-offs,
+   up to 500 ids), `link_transactions_to_bill` (specific payments). Then report and propose the
+   next round.
+
+**Tools** (`src/server/mcp/tools-categorize.ts`, pure grouping in `src/server/lib/backlog.ts`):
+- `groupBacklog()` puts every uncategorized row in exactly one group (keyed by
+  `merchantPhrase`, unlike `computeSuggestions`, which counts substring matches). Per group:
+  count, money out/in, amount range, first/last date, months, `monthly` (3+ months, median gap
+  25–35 days), accounts, samples, places, ids (capped, `idsTruncated`), and `lookalikes` —
+  what categorized descriptions with the same phrase (else containing it) are filed under.
+- `backlogTimeline()` / `placesIn()` read places with `describeWords` (kind `place`).
+- `categorize_with_rule` wraps `createRule` (upsert by conditions + `applyRules` scoped to the
+  rule), so it stamps `category_rule_id` / `bill_rule_id` and never touches categorized rows;
+  it refuses patterns with no letters in them (store numbers). Undo is the rule editor's
+  delete with "also clear what it set".
+- `link_transactions_to_bill` wraps `setTransactionBill` (hand-made link: `bill_rule_id`
+  cleared, instance in the row's own month when one exists).
+- Writes still follow the MCP rule: the playbook only writes what the user's latest message
+  confirmed; a claude.ai conversation asks before each write as usual.
+
+The reply streams into the chat while the run works — see
+[ai-advisor.md](ai-advisor.md#live-replies-streaming).
+
 ## Data model
 - `category_mappings` (`schema.ts`): `matchType` (`contains`|`equals`|`regex`), `pattern`,
   `field` (`description`|`raw_category`), `category`, `billId?` (FK bills), **`priority`

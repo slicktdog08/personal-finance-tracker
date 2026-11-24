@@ -947,6 +947,9 @@ export const advisorRuns = mysqlTable(
     threadId: int("thread_id").references(() => advisorThreads.id, { onDelete: "set null" }),
     sessionUrl: varchar("session_url", { length: 512 }),
     summary: text("summary"),
+    // The step a running run is on ("Grouping the uncategorized backlog…"), posted with
+    // stream_advisor_reply and shown live in the chat. Cleared when the run finishes.
+    activity: varchar("activity", { length: 200 }),
     report: mediumtext("report"),
     insightsSaved: int("insights_saved").notNull().default(0),
     startedAt: timestamp("started_at").default(sql`CURRENT_TIMESTAMP`),
@@ -989,7 +992,8 @@ export const advisorMessages = mysqlTable(
       .references(() => advisorThreads.id, { onDelete: "cascade" }),
     role: varchar("role", { length: 10 }).notNull(), // user | assistant
     body: mediumtext("body").notNull(),
-    status: varchar("status", { length: 10 }).notNull().default("pending"), // pending | answered | failed
+    // pending | answered | failed; an assistant reply still being written is `streaming`
+    status: varchar("status", { length: 10 }).notNull().default("pending"),
     runId: int("run_id").references(() => advisorRuns.id, { onDelete: "set null" }),
     createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`),
     answeredAt: timestamp("answered_at"),

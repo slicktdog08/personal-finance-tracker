@@ -1,14 +1,15 @@
 import { SetupNotice } from "@/components/SetupNotice";
 import { SettingsHeader } from "@/components/settings/SettingsHeader";
 import { CategoryList } from "@/components/settings/CategoryList";
-import { getCategoryRows, getCategoryCounts } from "@/server/queries";
+import { CategorizeWithAdvisor } from "@/components/advisor/CategorizeWithAdvisor";
+import { getCategoryRows, getCategoryCounts, getUncategorizedCount } from "@/server/queries";
 
 export const dynamic = "force-dynamic";
 
 export default async function CategoriesPage() {
-  let categoryRows, counts;
+  let categoryRows, counts, uncategorized;
   try {
-    [categoryRows, counts] = await Promise.all([getCategoryRows(), getCategoryCounts()]);
+    [categoryRows, counts, uncategorized] = await Promise.all([getCategoryRows(), getCategoryCounts(), getUncategorizedCount()]);
   } catch (e) {
     return <SetupNotice error={e} />;
   }
@@ -19,6 +20,7 @@ export default async function CategoriesPage() {
         title="Categories"
         description="Transaction categories. Disable one to hide it when categorizing new transactions (existing ones keep it). Deleting requires reassigning its transactions to another category first."
       />
+      <CategorizeWithAdvisor uncategorized={uncategorized} />
       <CategoryList
         categories={categoryRows.map((c) => ({
           id: c.id,

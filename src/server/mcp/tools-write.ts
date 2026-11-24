@@ -39,7 +39,7 @@ export function registerWriteTools(server: McpServer) {
       description:
         "Assign a category to one or more transactions (clears any auto-rule stamp — this is a manual override). Category must be an active name from `list_categories`. Returns before/after so the change can be confirmed. Ask the user before calling.",
       inputSchema: z.object({
-        transactionIds: z.array(z.number().int()).min(1).max(100),
+        transactionIds: z.array(z.number().int()).min(1).max(500),
         category: z.string().min(1),
       }),
       annotations: { ...WRITE, idempotentHint: true },
