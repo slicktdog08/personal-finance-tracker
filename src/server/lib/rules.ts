@@ -10,6 +10,7 @@ import {
   type CategoryRule,
   type CategorizeInput,
 } from "@/server/lib/categorize";
+import { settleLinkedInstances } from "@/server/lib/bill-settle";
 
 // Server half of the rule engine: load rules, turn their conditions into a SQL prefilter, and
 // write their actions (category + bill link) onto transactions. The pure matcher in
@@ -22,7 +23,8 @@ import {
 //   * every write is stamped (categoryRuleId / billRuleId) so editing or deleting the rule can
 //     undo exactly what it did;
 //   * a bill link also points billInstanceId at the bill's instance on the row's own month when
-//     that month's sheet has one (never creates one) — same as linking by hand.
+//     that month's sheet has one (never creates one) — same as linking by hand — and marks
+//     that instance paid (bill-settle.ts).
 
 export async function loadRules(): Promise<CategoryRule[]> {
   const rows = await db.select().from(categoryMappings);
@@ -136,6 +138,8 @@ function push<T>(groups: Map<string, { set: T; ids: number[] }>, key: string, se
 export interface ApplyRulesResult {
   categorized: number;
   linked: number;
+  /** Bill instances moved to paid because a payment was just linked to them. */
+  billsPaid?: number;
 }
 
 /** What a pass would do, without writing — the editor's live preview. */
@@ -221,7 +225,8 @@ export async function applyRules(opts: {
   // read and the write is left alone.
   const categorized = await writeGrouped(cats, uncategorized());
   const linked = await writeGrouped(links, isNull(transactions.billId));
-  return { categorized, linked };
+  const billsPaid = linked ? await settleLinkedInstances({ instanceIds: [...links.values()].map((g) => g.set.billInstanceId) }) : 0;
+  return { categorized, linked, billsPaid };
 }
 
 export async function previewRule(rule: CategoryRule): Promise<RulePreview> {
@@ -304,6 +309,7 @@ export async function reapplyRule(rule: CategoryRule): Promise<ReapplyResult> {
   const recategorized = rule.category ? await writeGrouped(one({ category: rule.category }, keepCat)) : 0;
   const cleared = await writeGrouped(one({ category: null, categoryRuleId: null }, dropCat));
   const relinked = await writeGrouped(keepBill);
+  if (relinked) await settleLinkedInstances({ instanceIds: [...keepBill.values()].map((g) => g.set.billInstanceId) });
   const unlinked = await writeGrouped(one({ billId: null, billInstanceId: null, billRuleId: null }, dropBill));
   const applied = await applyRules({ rules: [rule], where: ruleWhere(rule) });
   return { recategorized, cleared, relinked, unlinked, ...applied };
@@ -345,7 +351,7 @@ export async function ruleUsage(id: number): Promise<{ categories: number; bills
 
 // A month's sheet just gained bill instances: rows already linked to those bills (by a rule or by
 // hand) but with no instance in that month — because the instance didn't exist yet — now point
-// at it. Never re-points a row that already has an instance.
+// at it, and the instance is marked paid. Never re-points a row that already has an instance.
 export async function adoptBillInstances(periodId: number): Promise<number> {
   const res = await db.execute(sql`
     UPDATE ${transactions} t
@@ -357,6 +363,8 @@ export async function adoptBillInstances(periodId: number): Promise<number> {
     SET t.bill_instance_id = bi.id
     WHERE t.period_id = ${periodId} AND t.bill_id IS NOT NULL AND t.bill_instance_id IS NULL
   `);
-  return affected(res);
+  const n = affected(res);
+  if (n) await settleLinkedInstances({ periodId });
+  return n;
 }
 

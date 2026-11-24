@@ -12,6 +12,8 @@ import { createPeriod } from "@/server/actions/periods";
 import { addAccountBalance } from "@/server/actions/accounts";
 import type { AllocateResult } from "@/server/actions/cash";
 import { requireSession } from "@/server/auth/session";
+import { applyRules } from "@/server/lib/rules";
+import { settleLinkedInstances } from "@/server/lib/bill-settle";
 
 export async function updateTransactionCategory(
   id: number,
@@ -55,6 +57,8 @@ export async function linkTransactionToBill(
     .update(transactions)
     .set({ billInstanceId, billRuleId: null })
     .where(eq(transactions.id, id));
+  // A payment linked to this month's bill pays it.
+  await settleLinkedInstances({ instanceIds: [billInstanceId] });
   revalidatePath(path);
 }
 
@@ -88,6 +92,7 @@ export async function setTransactionBill(
     // A link set (or cleared) by hand is the user's — no rule may later claim or undo it.
     .set({ billId, billInstanceId, billRuleId: null })
     .where(eq(transactions.id, id));
+  await settleLinkedInstances({ instanceIds: [billInstanceId] });
   revalidatePath(path);
   revalidatePath("/settings/bills");
   revalidatePath("/transactions");
@@ -299,6 +304,7 @@ async function attachToBill(opts: {
     .update(transactions)
     .set({ billId: opts.billId, billInstanceId: sourceInstanceId, billRuleId: null })
     .where(eq(transactions.id, opts.transactionId));
+  await settleLinkedInstances({ instanceIds: [sourceInstanceId] });
 
   // Link the confirmed other occurrences of the same merchant to the bill.
   if (matchIds.length) {
@@ -542,16 +548,26 @@ async function resolveAccountId(accountNumber: string | null | undefined): Promi
   return (await ensureAccounts([num])).get(num) ?? null;
 }
 
+/** What the saved rules did to a hand-entered transaction — shown so the user knows they ran. */
+export interface RuleOutcome {
+  /** Category a rule set (null when the user picked one or no rule matched). */
+  category: string | null;
+  /** Bill a rule linked the transaction to. */
+  billName: string | null;
+  /** True when that link marked the bill paid on its month's sheet. */
+  billPaid: boolean;
+}
+
 /**
  * Returns the outcome of the cash offset when one was requested, so the caller can surface
  * "the withdrawal was already fully accounted for" instead of dropping it — the transaction
- * itself is saved either way.
+ * itself is saved either way. `rules` says what the saved rules did, when they did anything.
  */
 export async function createTransaction(
   periodId: number | null,
   data: NewTransaction,
   path: string,
-): Promise<{ offset?: AllocateResult }> {
+): Promise<{ offset?: AllocateResult; rules?: RuleOutcome; transactionId?: number }> {
   await requireSession();
   const num = (data.accountNumber ?? "").trim();
   const accountId = await resolveAccountId(num);
@@ -585,15 +601,21 @@ export async function createTransaction(
   if (data.adjustBalance && accountId) {
     await applyBalanceAdjustment(accountId, data);
   }
-  // Tie the purchase to the withdrawals that funded it. The insert above is an upsert, so the
-  // id comes back by dedup hash — the same lookup whether the row was new or already there.
+  // The insert above is an upsert, so the id comes back by dedup hash — the same lookup
+  // whether the row was new or already there.
+  const [row] = await db
+    .select({ id: transactions.id })
+    .from(transactions)
+    .where(eq(transactions.dedupHash, hash))
+    .limit(1);
+
+  // Saved rules, same as a synced or imported row gets: a category when none was picked, and a
+  // bill link (which marks the bill paid) once the row is posted — pending rows wait to post.
+  const rules = row ? await applyRulesTo(row.id) : undefined;
+
+  // Tie the purchase to the withdrawals that funded it.
   let offset: AllocateResult | undefined;
   if (data.offsets?.length) {
-    const [row] = await db
-      .select({ id: transactions.id })
-      .from(transactions)
-      .where(eq(transactions.dedupHash, hash))
-      .limit(1);
     if (!row) {
       offset = { ok: false, error: "Saved, but the transaction couldn't be found to offset." };
     } else {
@@ -612,7 +634,30 @@ export async function createTransaction(
     }
   }
   revalidatePath(path);
-  return { offset };
+  if (rules?.billName) {
+    revalidatePath("/settings/bills");
+    revalidatePath("/months");
+    revalidatePath("/dashboard");
+  }
+  return { offset, rules, transactionId: row?.id };
+}
+
+// Run the saved rules over one transaction and report what they changed. Only fills what is
+// empty — a hand-picked category or bill link is never overwritten.
+async function applyRulesTo(id: number, opts: { categories?: boolean } = {}): Promise<RuleOutcome | undefined> {
+  const res = await applyRules({ where: eq(transactions.id, id), categories: opts.categories ?? true, bills: true });
+  if (!res.categorized && !res.linked) return undefined;
+  const [t] = await db
+    .select({ category: transactions.category, billName: bills.name })
+    .from(transactions)
+    .leftJoin(bills, eq(bills.id, transactions.billId))
+    .where(eq(transactions.id, id))
+    .limit(1);
+  return {
+    category: res.categorized ? (t?.category ?? null) : null,
+    billName: res.linked ? (t?.billName ?? null) : null,
+    billPaid: (res.billsPaid ?? 0) > 0,
+  };
 }
 
 export interface TransactionEdit {
@@ -668,7 +713,13 @@ export async function updateTransaction(
 ): Promise<UpdateTransactionResult> {
   await requireSession();
   const [existing] = await db
-    .select({ id: transactions.id, category: transactions.category, externalId: transactions.externalId, dedupHash: transactions.dedupHash })
+    .select({
+      id: transactions.id,
+      category: transactions.category,
+      externalId: transactions.externalId,
+      dedupHash: transactions.dedupHash,
+      pending: transactions.pending,
+    })
     .from(transactions)
     .where(eq(transactions.id, id))
     .limit(1);
@@ -718,6 +769,11 @@ export async function updateTransaction(
     })
     .where(eq(transactions.id, id));
 
+  // A hand-entered hold marked posted in the edit form: bill-link rules get their turn.
+  if (existing.pending && data.pending === false && !existing.externalId) {
+    await applyRulesTo(id, { categories: false });
+  }
+
   // An edit can invalidate a cash offset (amount cut below what's allocated, purchase moved
   // off the wallet), and a stale offset would understate spending. No-op when there are none.
   // Splits first: a smaller amount can't keep parts that add up to more than it, and trimming
@@ -753,6 +809,8 @@ export async function setTransactionPending(
   if (!row) return { ok: false, error: "Transaction not found." };
   if (row.externalId) return { ok: false, error: "This row is bank-synced; the bank decides when it posts." };
   await db.update(transactions).set({ pending }).where(eq(transactions.id, id));
+  // Now posted: bill-link rules get their turn, as when a synced hold posts.
+  if (!pending) await applyRulesTo(id, { categories: false });
   revalidatePath(path);
   revalidatePath("/transactions");
   revalidatePath("/dashboard");

@@ -19,6 +19,7 @@ import {
   type RulePreview,
 } from "@/server/lib/rules";
 import { requireSession } from "@/server/auth/session";
+import { settleLinkedInstances } from "@/server/lib/bill-settle";
 import type { RuleSuggestion } from "@/server/lib/suggest";
 
 function affected(res: unknown): number {
@@ -168,12 +169,14 @@ export async function bulkCategorizeByMatch(
 }
 
 // Apply every saved rule (by priority) to open transactions: categories onto uncategorized
-// rows, bill links onto unlinked posted rows.
+// rows, bill links onto unlinked posted rows. Also sweeps every month's sheet for bills that
+// already have a payment linked but were never marked paid (links made before auto-paid existed).
 export async function applySavedRules(): Promise<ApplyRulesResult> {
   await requireSession();
   const res = await applyRules({});
+  const swept = await settleLinkedInstances();
   revalidateAll();
-  return res;
+  return { ...res, billsPaid: (res.billsPaid ?? 0) + swept };
 }
 
 export async function bulkSetCategory(ids: number[], category: string | null): Promise<number> {

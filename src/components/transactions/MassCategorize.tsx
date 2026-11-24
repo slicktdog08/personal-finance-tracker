@@ -119,12 +119,15 @@ export function MassCategorize({
   }
   function doAutoApply() {
     start(async () => {
-      const { categorized, linked } = await applySavedRules();
+      const { categorized, linked, billsPaid = 0 } = await applySavedRules();
       const s = (n: number) => `${n} transaction${n === 1 ? "" : "s"}`;
+      const paid = billsPaid ? ` Marked ${billsPaid} bill${billsPaid === 1 ? "" : "s"} paid.` : "";
       setAutoMsg(
         categorized || linked
-          ? `Saved rules categorized ${s(categorized)} and linked ${s(linked)} to bills.`
-          : "Nothing new for the saved rules to do.",
+          ? `Saved rules categorized ${s(categorized)} and linked ${s(linked)} to bills.${paid}`
+          : billsPaid
+            ? `Marked ${billsPaid} bill${billsPaid === 1 ? "" : "s"} with a linked payment paid.`
+            : "Nothing new for the saved rules to do.",
       );
     });
   }
