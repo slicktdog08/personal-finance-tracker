@@ -29,6 +29,8 @@ import {
   uiLayouts,
   investmentPositions,
   investmentTrades,
+  paceOneOffs,
+  syncSettings,
 } from "@/server/db/schema";
 import { alias } from "drizzle-orm/mysql-core";
 import type { PayFrequency } from "@/constants/enums";
@@ -3811,4 +3813,96 @@ export async function getDataCoverageCounts() {
     txns: txns.map((r) => ({ accountId: r.accountId, month: r.month, n: Number(r.n) })),
     balances: bals.map((r) => ({ accountId: r.accountId, month: r.month, n: Number(r.n) })),
   };
+}
+
+// ---- Spending Pace (lib/spending-pace.ts) -------------------------------------------------
+
+/**
+ * Everything the pace engine reads, for transactions dated [from, to]. No session check of its
+ * own: the daily pace job runs in the server process with no request, so pages and actions that
+ * call this must already have called requireSession (see server/pace.ts).
+ *
+ * Split-aware and cash-offset-aware with the SAME share rules the category rollups use: a split
+ * row arrives as its own remainder plus one piece per split part (each under its own category),
+ * and a cash withdrawal arrives as only what logged wallet purchases didn't explain.
+ */
+export async function paceLedger(from: string, to: string) {
+  const wa = allocatedByWithdrawal();
+  const st = splitByTxn();
+  const range = and(gte(transactions.txnDate, from), lte(transactions.txnDate, to));
+  const base = {
+    id: transactions.id,
+    date: transactions.txnDate,
+    direction: transactions.direction,
+    description: transactions.description,
+    accountId: transactions.accountId,
+    accountType: accounts.accountType,
+    billId: transactions.billId,
+    transferPartnerId: transactions.transferPartnerId,
+    pending: transactions.pending,
+  };
+  const [own, pieces, billRows, cardBillRows, instanceRows, statementRows, first, oneOffRows, schedule] = await Promise.all([
+    db
+      .select({ ...base, category: transactions.category, amount: sql<string>`${ownShare(wa, st)}` })
+      .from(transactions)
+      .leftJoin(accounts, eq(accounts.id, transactions.accountId))
+      .leftJoin(wa, eq(wa.txnId, transactions.id))
+      .leftJoin(st, eq(st.txnId, transactions.id))
+      .where(range),
+    db
+      .select({ ...base, category: transactionSplits.category, amount: sql<string>`${pieceShare(wa, st)}` })
+      .from(transactionSplits)
+      .innerJoin(transactions, eq(transactions.id, transactionSplits.txnId))
+      .leftJoin(accounts, eq(accounts.id, transactions.accountId))
+      .leftJoin(wa, eq(wa.txnId, transactions.id))
+      .leftJoin(st, eq(st.txnId, transactions.id))
+      .where(range),
+    db.select({ id: bills.id, name: bills.name }).from(bills),
+    db
+      .select({ billId: accounts.billId })
+      .from(accounts)
+      .where(and(eq(accounts.accountType, "Credit"), sql`${accounts.billId} IS NOT NULL`)),
+    db
+      .select({ label: periods.label, billId: billInstances.billId, amount: billInstances.amount, status: billInstances.status, isCancel: billInstances.isCancel })
+      .from(billInstances)
+      .innerJoin(periods, eq(periods.id, billInstances.periodId))
+      .where(and(gte(periods.label, from.slice(0, 7)), lte(periods.label, to.slice(0, 7)))),
+    db
+      .select({ accountId: accountBalances.accountId, asOf: accountBalances.asOf, balance: accountBalances.balance, label: accounts.label, number: accounts.accountNumber })
+      .from(accountBalances)
+      .innerJoin(accounts, eq(accounts.id, accountBalances.accountId))
+      .where(and(eq(accounts.accountType, "Credit"), eq(accountBalances.source, "statement"), gte(accountBalances.asOf, from), lte(accountBalances.asOf, to))),
+    db.select({ d: sql<string | null>`MIN(${transactions.txnDate})` }).from(transactions),
+    db.select({ txnId: paceOneOffs.txnId, mode: paceOneOffs.mode, note: paceOneOffs.note }).from(paceOneOffs),
+    db.select({ depositMatch: paySchedule.depositMatch }).from(paySchedule).where(eq(paySchedule.active, true)).limit(1),
+  ]);
+  return {
+    own,
+    pieces,
+    billRows,
+    cardBillRows,
+    instanceRows,
+    statementRows,
+    firstDate: first[0]?.d ?? null,
+    oneOffRows,
+    depositMatch: schedule[0]?.depositMatch ?? null,
+  };
+}
+
+/** Oldest last-sync time across the bank accounts that are supposed to be syncing; null = no sync. */
+export async function paceSyncFreshness(): Promise<{ enabled: boolean; oldest: Date | null }> {
+  const [settings] = await db.select({ enabled: syncSettings.enabled }).from(syncSettings).limit(1);
+  if (!settings?.enabled) return { enabled: false, oldest: null };
+  const rows = await db
+    .select({ last: syncAccounts.lastSyncedAt })
+    .from(syncAccounts)
+    .innerJoin(syncEnrollments, eq(syncEnrollments.id, syncAccounts.enrollmentId))
+    .where(and(eq(syncAccounts.enabled, true), sql`${syncAccounts.accountId} IS NOT NULL`, sql`${syncEnrollments.status} <> 'paused'`));
+  if (!rows.length) return { enabled: false, oldest: null };
+  let oldest: Date | null = null;
+  for (const r of rows) {
+    if (!r.last) return { enabled: true, oldest: new Date(0) };
+    if (!oldest || r.last < oldest) oldest = r.last;
+  }
+  return { enabled: true, oldest };
 }

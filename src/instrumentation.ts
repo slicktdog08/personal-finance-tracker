@@ -15,4 +15,9 @@ export async function register() {
   if (!schedulerAllowed()) return;
   const { startSyncScheduler } = await import("./server/sync/scheduler");
   startSyncScheduler();
+  // Spending Pace: daily recompute, escalation notices and the weekly digest (idempotent ticks).
+  if (process.env.PACE_SCHEDULER !== "0") {
+    const { startPaceScheduler } = await import("./server/sync/pace-scheduler");
+    startPaceScheduler();
+  }
 }

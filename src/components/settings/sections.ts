@@ -41,6 +41,12 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     desc: "When your paycheck lands and roughly how much. Drives the payday countdown.",
   },
   {
+    href: "/settings/pace",
+    label: "Spending pace",
+    icon: "trending-up",
+    desc: "Savings target, essentials and excluded categories, status timing and the weekly digest.",
+  },
+  {
     href: "/settings/sync",
     label: "Bank sync",
     icon: "refresh-cw",

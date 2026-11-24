@@ -26,6 +26,7 @@ planning/features/<feature-slug>.md      e.g. csv-import.md, savings-goals.md, d
 | Budget | [budget.md](budget.md) | Monthly plan vs. actual from transactions; debt-snowball generator; payoff projection |
 | Transaction splits | [transaction-splits.md](transaction-splits.md) | Split one transaction across categories; the row's category keeps the remainder |
 | AI advisor | [ai-advisor.md](ai-advisor.md) | Insights, check-ins and chat run on a Claude Code routine fired from the app (no API key); results return over MCP |
+| Spending pace | [spending-pace.md](spending-pace.md) | Slow-moving monitor of discretionary pace vs. break-even/target; hysteresis status, digest, one-off tags |
 
 _Keep this table in sync when you add a feature doc._
 

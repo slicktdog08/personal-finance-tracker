@@ -290,6 +290,23 @@ export const transactionSplits = mysqlTable(
   (t) => [index("idx_ts_txn").on(t.txnId), index("idx_ts_cat").on(t.category)],
 );
 
+// Spending Pace one-offs (drizzle/0035_pace_one_offs.sql): a charge the user tagged as a one-off
+// so the pace monitor excludes it or spreads it over ~90 days (lib/spending-pace.ts). Only ever
+// written by the user's own action — the monitor never tags anything. Cascades with the row.
+export const paceOneOffs = mysqlTable(
+  "pace_one_offs",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    txnId: int("txn_id")
+      .notNull()
+      .references((): AnyMySqlColumn => transactions.id, { onDelete: "cascade" }),
+    mode: varchar("mode", { length: 8 }).notNull().default("spread"), // exclude | spread
+    note: varchar("note", { length: 255 }),
+    createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`),
+  },
+  (t) => [uniqueIndex("uq_pace_one_off_txn").on(t.txnId)],
+);
+
 // Rules that map raw bank text → a system category (and optionally a bill).
 export const categoryMappings = mysqlTable("category_mappings", {
   id: int("id").autoincrement().primaryKey(),
@@ -1000,6 +1017,7 @@ export type SuggestionDismissal = typeof suggestionDismissals.$inferSelect;
 export type SavingsGoal = typeof savingsGoals.$inferSelect;
 export type GoalContribution = typeof goalContributions.$inferSelect;
 export type CashAllocation = typeof cashAllocations.$inferSelect;
+export type PaceOneOffRow = typeof paceOneOffs.$inferSelect;
 export type Budget = typeof budgets.$inferSelect;
 export type BudgetLine = typeof budgetLines.$inferSelect;
 export type ProjectionSnapshot = typeof projectionSnapshots.$inferSelect;
