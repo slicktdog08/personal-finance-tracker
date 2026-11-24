@@ -384,6 +384,17 @@ CREATE TABLE `pay_schedule` (
   PRIMARY KEY (`id`)
 ) ENGINE=InnoDB AUTO_INCREMENT=2 DEFAULT CHARSET=utf8mb4;
 /*!40101 SET character_set_client = @saved_cs_client */;
+DROP TABLE IF EXISTS `pace_one_offs`;
+CREATE TABLE `pace_one_offs` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `txn_id` int(11) NOT NULL,
+  `mode` varchar(8) NOT NULL DEFAULT 'spread',
+  `note` varchar(255) DEFAULT NULL,
+  `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_pace_one_off_txn` (`txn_id`),
+  CONSTRAINT `pace_one_offs_txn_id_fk` FOREIGN KEY (`txn_id`) REFERENCES `transactions` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 DROP TABLE IF EXISTS `payment_types`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;

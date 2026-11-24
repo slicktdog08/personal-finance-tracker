@@ -2,6 +2,7 @@ import "server-only";
 import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { getAdvisorProfile } from "./advisor-context";
+import { computePace } from "@/server/pace";
 import { currentPeriodLabel, fail, money, money0, ok, resolvePeriodLabel, trailingPeriodLabels } from "./result";
 import {
   getAccounts,
@@ -392,6 +393,44 @@ export function registerReadTools(server: McpServer) {
         statuses: statuses.map((s) => ({ name: s.name, settled: s.isSettled })),
         total: money0(rows.filter((b) => !b.cancelled).reduce((s, b) => s + (b.amount ?? 0), 0)),
         bills: rows,
+      });
+    },
+  );
+
+  server.registerTool(
+    "get_spending_pace",
+    {
+      title: "Spending pace (discretionary spend vs. break-even)",
+      description:
+        "The Spending Pace monitor as of today: `status` (green | watch | warning | alert, or `stale` when bank sync is behind), the 7/14/28-day average discretionary spend per day, today's `target` and `breakEven` per day (recomputed daily from the trailing-90-day income, fixed costs and essentials), today's remaining allowance, the projected month-end net, cost of carrying debt, and the leading indicators (charge frequency vs norm, merchant streaks, big nights, card behavior). Status changes slowly by design: Warning needs the 14-day average over break-even for 7 straight days; stepping down needs 7 days below. Indicators are context only.",
+      inputSchema: z.object({}),
+      annotations: READ_ONLY,
+    },
+    async () => {
+      const v = await computePace();
+      if (!v) return fail("No transactions yet.");
+      const d = v.today;
+      return ok({
+        asOf: d.date,
+        status: v.stale ? "stale" : d.status,
+        computedStatus: d.status,
+        averages: { [`${v.config.windows.short}d`]: money(d.avgShort), [`${v.config.windows.mid}d`]: money(d.avgMid), [`${v.config.windows.long}d`]: money(d.avgLong) },
+        target: money(d.target),
+        breakEven: money(d.breakEven),
+        remainingToday: money(v.remainingToday),
+        monthly: { income: money(d.income), fixed: money(d.fixed), essentials: money(d.essentials), savings: money(d.savings) },
+        projectedMonthEndNet: money(v.indicators.monthEnd.projectedNet),
+        carryingCost14d: money(v.indicators.carryingCost),
+        indicators: {
+          frequency: v.indicators.frequency,
+          streaks: v.indicators.streaks,
+          bigNights: v.indicators.bigNights.map((b) => ({ date: b.date, amount: money(b.amount) })),
+          cards: v.indicators.cards,
+        },
+        topMerchants14d: v.indicators.topMerchants,
+        topCategories14d: v.indicators.topCategories.slice(0, 5),
+        oneOffs: v.inputs.oneOffs,
+        recentChanges: v.timeline.days.filter((x) => x.event).slice(-5).map((x) => ({ date: x.date, ...x.event })),
       });
     },
   );
