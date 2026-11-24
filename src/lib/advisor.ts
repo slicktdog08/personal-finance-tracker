@@ -76,6 +76,8 @@ export interface AdvisorRunDto {
   threadId: number | null;
   sessionUrl: string | null;
   summary: string | null;
+  /** What a running run is doing right now (posted with stream_advisor_reply). */
+  activity: string | null;
   report: string | null;
   insightsSaved: number;
   startedAt: string;
@@ -105,7 +107,8 @@ export interface AdvisorMessageDto {
   threadId: number;
   role: "user" | "assistant";
   body: string;
-  status: "pending" | "answered" | "failed";
+  /** `streaming`: an assistant reply the run is still writing (it grows as the run posts). */
+  status: "pending" | "answered" | "failed" | "streaming";
   runId: number | null;
   createdAt: string;
   answeredAt: string | null;
@@ -121,6 +124,10 @@ export interface AdvisorThreadDto {
   /** First line of the newest turn, for the thread list. */
   preview: string | null;
 }
+
+/** The opening message of a "categorize my history" chat (/advisor?start=categorize). */
+export const CATEGORIZE_PROMPT =
+  "Help me categorize my uncategorized transaction history. Start with the biggest merchants, ask me whatever context you need (where I was living, trips, what recurring payments are), and propose a batch for me to confirm.";
 
 // ---- the routine payload --------------------------------------------------------------
 
@@ -200,6 +207,17 @@ export const clip = (s: string, n = 160) => {
 export function threadTitle(firstMessage: string): string {
   const first = firstMessage.trim().split(/(?<=[.?!])\s|\n/)[0] ?? "";
   return clip(first || "New conversation", 80);
+}
+
+/**
+ * A streamed reply: `append` adds to what was posted so far (a blank line between sections
+ * unless the text starts with a newline itself), `replace` swaps the whole draft.
+ */
+export function mergeDraft(current: string, text: string, mode: "append" | "replace"): string {
+  if (mode === "replace" || !current) return text.trim();
+  const piece = text.replace(/\s+$/, "");
+  if (!piece.trim()) return current;
+  return /^\s*\n/.test(piece) || /\n$/.test(current) ? `${current}${piece}` : `${current}\n\n${piece.trimStart()}`;
 }
 
 /** True while a run is still expected to report back. */

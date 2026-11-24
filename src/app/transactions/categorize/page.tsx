@@ -1,6 +1,7 @@
 import { PageHeader } from "@/components/ds";
 import { SetupNotice } from "@/components/SetupNotice";
 import { MassCategorize } from "@/components/transactions/MassCategorize";
+import { CategorizeWithAdvisor } from "@/components/advisor/CategorizeWithAdvisor";
 import {
   getUncategorizedCount,
   getCategoryOptionsRich,
@@ -30,6 +31,8 @@ export default async function CategorizePage() {
       {/* No back link: the Activity sub-tabs above lead back to Transactions. The kit titles
           every Activity view "Activity"; the sub-tab names the view. */}
       <PageHeader title="Activity" />
+
+      <CategorizeWithAdvisor uncategorized={uncategorized} />
 
       <MassCategorize
         uncategorized={uncategorized}

@@ -24,6 +24,7 @@ import {
   threadsWithPending,
   updateRun,
   upsertInsights,
+  writeDraft,
 } from "@/server/lib/advisor/store";
 
 // The advisor channel: how a Claude Code routine fired from the app (or a claude.ai
@@ -166,11 +167,40 @@ export function registerAdvisorTools(server: McpServer) {
   );
 
   server.registerTool(
+    "stream_advisor_reply",
+    {
+      title: "Stream progress into an advisor thread",
+      description:
+        "Show the user your answer as you write it: the chat on the app's Advisor page updates live. `activity` is one short line saying what you're doing now (\"Grouping the uncategorized backlog…\"); `text` is more of the reply (mode append, the default) or the whole reply so far (mode replace). Call it as you go — before slow steps, and once per finished section — then end with reply_to_advisor_thread, which replaces the draft with the final answer. Needs the runId from start_advisor_run. Writes only Claude's notes.",
+      inputSchema: z.object({
+        threadId: z.number().int(),
+        runId: z.number().int(),
+        activity: z.string().max(200).optional().describe("What you're doing right now, one line. Empty string clears it."),
+        text: z.string().max(20000).optional().describe("Markdown: the next part of the reply (append) or all of it so far (replace)."),
+        mode: z.enum(["append", "replace"]).default("append"),
+      }),
+      annotations: NOTE_WRITE,
+    },
+    async ({ threadId, runId, activity, text, mode }) => {
+      if (activity === undefined && !text?.trim()) return fail("Send `activity`, `text`, or both.");
+      const run = await getRun(runId);
+      if (!run) return fail(`No advisor run ${runId}.`);
+      if (run.kind !== "chat" || run.threadId !== threadId) return fail(`Run ${runId} isn't answering thread ${threadId}.`);
+      if (run.status !== "running" && run.status !== "queued") {
+        return fail(`Run ${runId} already finished (${run.status}); nothing more can be streamed into it.`);
+      }
+      if (activity !== undefined) await updateRun(runId, { activity: activity.trim() ? activity.trim().slice(0, 200) : null });
+      const draft = text?.trim() ? await writeDraft(threadId, runId, text, mode) : null;
+      return ok({ messageId: draft?.id ?? null, length: draft?.body.length ?? null });
+    },
+  );
+
+  server.registerTool(
     "reply_to_advisor_thread",
     {
       title: "Reply in an advisor thread",
       description:
-        "Post your answer in a chat thread on the app's Advisor page. Closes the user's pending turns up to `upto` and finishes the run (pass runId). If the user wrote again meanwhile, the app starts the next run for those turns itself; don't answer them here. Use failed: true when you couldn't answer, with the reason in body.",
+        "Post your final answer in a chat thread on the app's Advisor page (if you streamed a draft with stream_advisor_reply, this replaces it — send the complete answer). Closes the user's pending turns up to `upto` and finishes the run (pass runId). If the user wrote again meanwhile, the app starts the next run for those turns itself; don't answer them here. Use failed: true when you couldn't answer, with the reason in body.",
       inputSchema: z.object({
         threadId: z.number().int(),
         body: z.string().min(1).max(20000).describe("Markdown. Short paragraphs and bullets read best on a phone."),

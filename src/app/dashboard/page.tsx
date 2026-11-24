@@ -23,6 +23,8 @@ import { AdvisorCard } from "@/components/dashboard/AdvisorCard";
 import { Investments } from "@/components/dashboard/Investments";
 import { YearToDate } from "@/components/dashboard/YearToDate";
 import { SpendingPower } from "@/components/dashboard/SpendingPower";
+import { PaceCard } from "@/components/dashboard/PaceCard";
+import { computePace, paceCardData } from "@/server/pace";
 import { DashboardGrid, type DashboardWidget } from "@/components/dashboard/DashboardGrid";
 import type { WidgetId } from "@/lib/dashboard-layout";
 import {
@@ -132,6 +134,16 @@ export default async function DashboardPage({
   // Cash on hand reflects the balances recorded as of the END of the selected month,
   // so viewing a past month shows what the balances were back then (snapshots are historical).
   const { start: monthStart, end: monthEnd } = monthBounds(selected.year, selected.month);
+  // Spending pace speaks about now (trailing windows ending today), so only on the current month.
+  // Its table arrives with a later migration, so a database without it simply has no Pace card.
+  const pacePromise = isCurrentMonth
+    ? computePace()
+        .then((v) => (v ? paceCardData(v) : null))
+        .catch((e) => {
+          console.error("[pace] dashboard card unavailable:", e);
+          return null;
+        })
+    : Promise.resolve(null);
   const [
     selInstances,
     catSpend,
@@ -656,6 +668,9 @@ export default async function DashboardPage({
       creditLimit: toNum(a.creditLimit),
     })),
   );
+  const pace = await pacePromise;
+  if (pace) add("pace", "Spending pace", <PaceCard data={pace} />);
+
   if (hasRecordedCash || power.cards.length > 0) {
     const goalReserved = cashByAccount.reduce((s, a) => s + a.reserved, 0);
     const powerAsOf = [cashAsOf, creditAsOf].reduce<string | null>((m, d) => (d && (!m || d > m) ? d : m), null);

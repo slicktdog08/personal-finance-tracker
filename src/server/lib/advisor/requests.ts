@@ -4,6 +4,7 @@ import { fireAdvisorRoutine } from "./routine";
 import {
   activeRun,
   addMessage,
+  finalizeDraft,
   closePending,
   createRun,
   createThread,
@@ -80,7 +81,8 @@ export async function recordReply(input: {
   failed?: boolean;
 }): Promise<{ message: AdvisorMessageDto; remaining: number; refired: boolean }> {
   const status = input.failed ? "failed" : "answered";
-  const message = await addMessage(input.threadId, "assistant", input.body, { status, runId: input.runId ?? null });
+  // A reply that was streamed becomes the final one in place; otherwise it's a new message.
+  const message = await finalizeDraft(input.threadId, input.runId ?? null, input.body, status);
   await closePending(input.threadId, status, { upto: input.upto, runId: input.runId ?? null });
   if (input.runId) await updateRun(input.runId, { status: input.failed ? "failed" : "ok", summary: clip(input.body) });
 

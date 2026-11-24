@@ -3,11 +3,14 @@
 import { useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Button, Icon, Notice, cx } from "@/components/ds";
-import type { AdvisorMessageDto } from "@/lib/advisor";
+import { CATEGORIZE_PROMPT, type AdvisorMessageDto } from "@/lib/advisor";
 import { sendAdvisorMessage } from "@/server/actions/advisor";
 import { Markdown } from "./Markdown";
+import { StreamingMarkdown } from "./StreamingMarkdown";
+import { mergeMessages, useLiveThread } from "./useLiveThread";
 
 const SUGGESTIONS = [
+  CATEGORIZE_PROMPT,
   "What changed in my spending this month compared to the last three?",
   "Which subscriptions or recurring charges went up this year?",
   "Am I on track to cover every bill before my next paycheck?",
@@ -18,7 +21,8 @@ const time = (iso: string) => new Date(iso).toLocaleString("en-US", { month: "sh
 
 /**
  * One conversation with the advisor. A sent message is stored as pending and fires the
- * routine; LiveRefresh (on the page) re-renders this with Claude's reply when it lands.
+ * routine; while it answers, useLiveThread streams its reply and current step into the page
+ * (/api/advisor/stream), and the page refreshes once when it's done.
  * threadId null = a new conversation (the first send creates it and navigates there).
  */
 export function ChatView({
@@ -47,12 +51,18 @@ export function ChatView({
   const input = useRef<HTMLTextAreaElement>(null);
 
   // The server copy replaces the optimistic one once the page re-renders with it.
-  const shown = optimistic && !messages.some((m) => m.id === optimistic.id) ? [...messages, optimistic] : messages;
-  const waiting = working || shown.some((m) => m.role === "user" && m.status === "pending");
+  const base = optimistic && !messages.some((m) => m.id === optimistic.id) ? [...messages, optimistic] : messages;
+  const serverWaiting = working || base.some((m) => (m.role === "user" && m.status === "pending") || m.status === "streaming");
+  const live = useLiveThread(threadId, serverWaiting);
+  const shown = mergeMessages(base, live.messages);
+  const streaming = shown.some((m) => m.status === "streaming");
+  const waiting = serverWaiting && !shown.some((m) => m.role === "assistant" && m.status !== "streaming" && m.id > lastUserId(shown));
+  const streamedLength = shown.reduce((n, m) => (m.status === "streaming" ? n + m.body.length : n), 0);
+  const watchUrl = live.sessionUrl ?? sessionUrl;
 
   useEffect(() => {
     bottom.current?.scrollIntoView({ block: "end" });
-  }, [shown.length, waiting]);
+  }, [shown.length, waiting, streamedLength]);
 
   const send = (text: string) => {
     const body = text.trim();
@@ -109,9 +119,14 @@ export function ChatView({
               {m.role === "assistant" && (
                 <div className="mb-1 flex items-center gap-1.5 text-xs font-semibold text-fg-3">
                   <Icon name="sparkles" size={13} /> Advisor
+                  {m.status === "streaming" && <span className="font-normal">· writing…</span>}
                 </div>
               )}
-              {m.role === "assistant" ? <Markdown text={m.body} /> : <p className="whitespace-pre-wrap text-sm leading-relaxed">{m.body}</p>}
+              {m.role === "assistant" ? (
+                m.status === "streaming" ? <StreamingMarkdown text={m.body} /> : <Markdown text={m.body} />
+              ) : (
+                <p className="whitespace-pre-wrap text-sm leading-relaxed">{m.body}</p>
+              )}
               <div className="mt-1.5 text-[11px] text-fg-3" suppressHydrationWarning>
                 {time(m.createdAt)}
                 {m.role === "user" && m.status === "pending" && " · waiting for Claude"}
@@ -122,11 +137,11 @@ export function ChatView({
         ))}
 
         {waiting && (
-          <div className="flex items-center gap-2 text-sm text-fg-2" role="status">
+          <div className="flex items-center gap-2 text-sm text-fg-2" role="status" aria-live="polite">
             <Icon name="loader-circle" size={16} className="mp-spinner" />
-            Claude is looking into it…
-            {sessionUrl && (
-              <a href={sessionUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-accent-text hover:underline">
+            <span className="min-w-0 truncate">{live.activity || (streaming ? "Claude is writing…" : "Claude is looking into it…")}</span>
+            {watchUrl && (
+              <a href={watchUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-accent-text hover:underline">
                 watch the session <Icon name="external-link" size={12} />
               </a>
             )}
@@ -172,4 +187,9 @@ export function ChatView({
       </form>
     </div>
   );
+}
+
+function lastUserId(messages: AdvisorMessageDto[]): number {
+  for (let i = messages.length - 1; i >= 0; i--) if (messages[i].role === "user") return messages[i].id;
+  return 0;
 }

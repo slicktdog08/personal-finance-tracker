@@ -3,7 +3,7 @@ import { SetupNotice } from "@/components/SetupNotice";
 import { Card, Icon, Notice, PageHeader, buttonClass, cx } from "@/components/ds";
 import { ChatView } from "@/components/advisor/ChatView";
 import { LiveRefresh } from "@/components/advisor/LiveRefresh";
-import { isActive } from "@/lib/advisor";
+import { CATEGORIZE_PROMPT, isActive } from "@/lib/advisor";
 import { routineConfigured } from "@/server/lib/advisor/routine";
 import { DEMO_ADVISOR_DISABLED, isDemoMode } from "@/server/lib/demo/mode";
 import { countNewInsights, getInsight, getThread, listMessages, listRuns, listThreads, sweepStale } from "@/server/lib/advisor/store";
@@ -32,6 +32,9 @@ export default async function AdvisorPage({ searchParams }: { searchParams: Prom
   const sp = await searchParams;
   const threadId = positiveInt(one(sp.t));
   const askId = positiveInt(one(sp.ask));
+  // `?start=categorize` (Settings → Categories, the categorize page) opens a new chat with the
+  // backlog request ready to send.
+  const startCategorize = !threadId && one(sp.start) === "categorize";
 
   let threads, thread, messages, runs, draft, openCount;
   try {
@@ -41,7 +44,7 @@ export default async function AdvisorPage({ searchParams }: { searchParams: Prom
       threadId ? getThread(threadId) : Promise.resolve(null),
       threadId ? listMessages(threadId) : Promise.resolve([]),
       threadId ? listRuns({ kind: "chat", threadId, limit: 5 }) : Promise.resolve([]),
-      threadId ? Promise.resolve("") : draftFromInsight(askId),
+      threadId ? Promise.resolve("") : startCategorize ? Promise.resolve(CATEGORIZE_PROMPT) : draftFromInsight(askId),
       countNewInsights(),
     ]);
   } catch (e) {
@@ -118,7 +121,7 @@ export default async function AdvisorPage({ searchParams }: { searchParams: Prom
             <p className="text-sm text-fg-2">That conversation no longer exists. Start a new one.</p>
           ) : (
             <ChatView
-              key={thread?.id ?? `new-${askId ?? ""}`}
+              key={thread?.id ?? `new-${askId ?? ""}${startCategorize ? "-categorize" : ""}`}
               threadId={thread?.id ?? null}
               messages={messages}
               sessionUrl={activeRun?.sessionUrl ?? null}
